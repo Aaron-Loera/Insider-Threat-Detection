@@ -1,2 +1,5 @@
 # Files
 *.csv
+*.pkl
+*.npy
+*.keras
