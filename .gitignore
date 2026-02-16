@@ -1,5 +1,11 @@
-# Files
+# Data files
 *.csv
+*.parquet
 *.pkl
 *.npy
 *.keras
+
+# Python
+__pycache__/
+*.pyc
+.venv/
