@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -27,20 +28,281 @@ st.markdown("""
         color: #d4d4d4;
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    .block-container { padding-top: 1.2rem; padding-bottom: 1rem; }
+    .block-container { padding-top: 0rem; padding-bottom: 1rem; }
+
+    /* ── Sidebar ── */
     [data-testid="stSidebar"] {
         background-color: #0a0a0a !important;
         border-right: 1px solid #1a1a1a;
     }
     [data-testid="stSidebar"] * { border-radius: 0 !important; }
 
+    /* On desktop: always force sidebar visible regardless of Streamlit's stored state */
+    @media (min-width: 769px) {
+        [data-testid="stSidebar"] {
+            transform: none !important;
+            margin-left: 0 !important;
+            visibility: visible !important;
+            width: 280px !important;
+            min-width: 280px !important;
+        }
+        /* Collapse button stays hidden on desktop */
+        [data-testid="stSidebarCollapseButton"],
+        [data-testid="stExpandSidebarButton"] {
+            display: none !important;
+        }
+    }
+
+    /* On mobile: both buttons visible for toggle */
+    @media (max-width: 768px) {
+        [data-testid="stSidebarCollapseButton"],
+        [data-testid="stExpandSidebarButton"] {
+            display: none !important; /* hidden — our custom hamburger handles this */
+        }
+    }
+    /* Zero out Streamlit's injected top padding on sidebar wrappers */
+    [data-testid="stSidebar"],
+    [data-testid="stSidebarContent"],
+    [data-testid="stSidebarUserContent"],
+    section[data-testid="stSidebar"] > div,
+    section[data-testid="stSidebar"] > div > div {
+        padding-top: 0 !important;
+        margin-top: 0 !important;
+    }
+    /* Logo branding block: negative margin pulls it past any remaining offset */
+    .sidebar-branding {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 10px 14px;
+        border-bottom: 1px solid #1a1a1a;
+        margin-top: -4.5rem !important;
+        padding: 14px 16px;
+        gap: 10px;
+    }
+
+    [data-testid="stSidebar"] .stRadio > label {
+        display: none !important;
+    }
+    [data-testid="stSidebar"] .stRadio > div {
+        display: flex; flex-direction: column; gap: 0;
+    }
+    [data-testid="stSidebar"] .stRadio > div > label {
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 11px !important;
+        text-transform: uppercase !important;
+        letter-spacing: 2px !important;
+        padding: 12px 16px !important;
+        margin: 0 !important;
+        border-left: 3px solid transparent;
+        color: #666 !important;
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+    [data-testid="stSidebar"] .stRadio > div > label:hover {
+        color: #ccc !important;
+        background: #111 !important;
+        border-left-color: #333 !important;
+    }
+    [data-testid="stSidebar"] .stRadio > div > label[data-checked="true"] {
+        color: #fff !important;
+        border-left-color: #e84545 !important;
+        background: #111 !important;
+    }
+
+    /* ── Sidebar section labels ── */
+    .sidebar-section-label {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 9px;
+        color: #444;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        padding: 16px 16px 6px 16px;
+        margin: 0;
+    }
+
+    /* ── Page Title ── */
+    .page-header-block {
+        border-bottom: 1px solid #1a1a1a;
+        padding-bottom: 14px;
+        margin-bottom: 24px;
+    }
+    .page-title {
+        font-family: 'Inter', sans-serif;
+        font-size: 26px;
+        font-weight: 700;
+        color: #ffffff;
+        letter-spacing: -0.5px;
+        margin: 0 !important;
+        padding: 0 !important;
+        line-height: 1.1;
+    }
+    .page-subtitle {
+        font-family: 'Inter', sans-serif;
+        font-size: 13px;
+        color: #555;
+        margin: 3px 0 0 0 !important;
+        padding: 0 !important;
+    }
+
+    /* ── Project title badge (top-right, scrolls with page) ── */
+    .project-title-badge {
+        display: block;
+        text-align: right;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        color: #555;
+        margin-bottom: 8px;
+    }
+
+    /* ── Critical Alert Notice Banner ── */
+    @keyframes alertGlow {
+        0%   {
+            box-shadow:
+                0 0  4px #e8454500,
+                0 0 12px #e8454500,
+                0 0 30px #e8454500,
+                inset 0 0  0px #e8454500;
+            border-color: #e8454588;
+            background: #0d0000;
+        }
+        50%  {
+            box-shadow:
+                0 0  8px #e84545cc,
+                0 0 24px #e8454599,
+                0 0 55px #e8454544,
+                inset 0 0 18px #e8454518;
+            border-color: #e84545ff;
+            background: #180000;
+        }
+        100% {
+            box-shadow:
+                0 0  4px #e8454500,
+                0 0 12px #e8454500,
+                0 0 30px #e8454500,
+                inset 0 0  0px #e8454500;
+            border-color: #e8454588;
+            background: #0d0000;
+        }
+    }
+    @keyframes alertTitleGlow {
+        0%   { text-shadow: 0 0 0px #e8454500; color: #e84545cc; }
+        50%  { text-shadow: 0 0 10px #e84545cc, 0 0 22px #e8454566; color: #ff6b6b; }
+        100% { text-shadow: 0 0 0px #e8454500; color: #e84545cc; }
+    }
+    @keyframes alertIconPulse {
+        0%   { text-shadow: none; opacity: 0.6; }
+        50%  { text-shadow: 0 0 8px #e84545ff, 0 0 16px #e8454599; opacity: 1; }
+        100% { text-shadow: none; opacity: 0.6; }
+    }
+    .alert-notice-banner {
+        background: #0d0000;
+        border: 1px solid #e8454588;
+        border-left: 4px solid #e84545;
+        border-radius: 0;
+        padding: 16px 20px;
+        margin: 12px 0 16px 0;
+        animation: alertGlow 2.2s ease-in-out infinite;
+        transition: background 0.1s;
+    }
+    .alert-notice-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 10px;
+    }
+    .alert-notice-title {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 2.5px;
+        text-transform: uppercase;
+        color: #e84545cc;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        animation: alertTitleGlow 2.2s ease-in-out infinite;
+    }
+    .alert-notice-title::before {
+        content: '▲';
+        font-size: 11px;
+        animation: alertIconPulse 1.1s ease-in-out infinite;
+    }
+    .alert-notice-count {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+        color: #999;
+        letter-spacing: 1px;
+    }
+    .alert-notice-rows {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 4px;
+    }
+    .alert-notice-row-item {
+        background: #160000;
+        border: 1px solid #3a0000;
+        padding: 6px 12px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+        color: #cccccc;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .alert-notice-row-item .u-id  { color: #ffffff; font-weight: 600; }
+    .alert-notice-row-item .u-pct { color: #e84545; }
+    .alert-notice-row-item .u-days { color: #888; font-size: 10px; }
+
     /* ── KPI Cards ── */
+    .kpi-scroll-wrapper {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 0;
+        margin-bottom: 16px;
+    }
+    .kpi-scroll-arrow {
+        flex-shrink: 0;
+        background: #0a0a0a;
+        border: 1px solid #1a1a1a;
+        color: #888;
+        font-size: 16px;
+        width: 32px;
+        height: 100%;
+        min-height: 90px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        user-select: none;
+        transition: color 0.15s, border-color 0.15s;
+    }
+    .kpi-scroll-arrow:hover { color: #fff; border-color: #444; }
+    .kpi-scroll-row {
+        display: flex;
+        flex-direction: row;
+        gap: 12px;
+        overflow-x: auto;
+        padding-bottom: 4px;
+        scroll-behavior: smooth;
+        scrollbar-width: none;
+    }
+    .kpi-scroll-row::-webkit-scrollbar { display: none; }
     .kpi-card {
         background: #0a0a0a;
         border-radius: 0;
         padding: 20px 24px;
         border-left: 3px solid;
         border-top: 1px solid #1a1a1a;
+        min-width: 180px;
+        flex-shrink: 0;
         border-right: 1px solid #1a1a1a;
         border-bottom: 1px solid #1a1a1a;
         min-height: 120px;
@@ -82,31 +344,6 @@ st.markdown("""
     .risk-high   { color: #e84545; font-weight: 600; }
     .risk-medium { color: #d4a017; font-weight: 600; }
     .risk-low    { color: #3a86a8; font-weight: 600; }
-
-    /* ── Tabs ── */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 0; border-bottom: 1px solid #1a1a1a; background: transparent;
-    }
-    .stTabs [data-baseweb="tab"] {
-        padding: 12px 28px;
-        border-radius: 0 !important;
-        font-weight: 500;
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 1.5px;
-        font-family: 'JetBrains Mono', monospace;
-        color: #666666;
-        border-bottom: 2px solid transparent;
-    }
-    .stTabs [data-baseweb="tab"][aria-selected="true"] {
-        color: #ffffff !important;
-        border-bottom: 2px solid #ffffff !important;
-        background: transparent !important;
-    }
-    .stTabs [data-baseweb="tab"]:hover {
-        color: #cccccc;
-        background: #0a0a0a !important;
-    }
 
     /* ── Metric tweaks ── */
     [data-testid="stMetricValue"] {
@@ -158,52 +395,45 @@ st.markdown("""
         border-radius: 0 !important;
     }
 
-    /* ── Hide Streamlit branding (keep sidebar toggle visible) ── */
+    /* ── Hide Streamlit branding ── */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     [data-testid="stToolbar"] {visibility: hidden;}
     [data-testid="stDecoration"] { display: none !important; }
-
-    /* Header: keep visible for sidebar toggle */
     [data-testid="stHeader"] {
         background-color: #000000 !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
     }
 
-    /* ── Sidebar toggle buttons (Streamlit 1.54+) ── */
-    /* Expand button (visible when sidebar is collapsed) */
-    [data-testid="stExpandSidebarButton"] {
-        display: flex !important;
-        visibility: visible !important;
-        opacity: 1 !important;
-        z-index: 999999 !important;
-        background-color: #0a0a0a !important;
-        border: 1px solid #333 !important;
+    /* ── Remove ALL border-radius globally ── */
+    div[data-testid], .element-container,
+    /* buttons */
+    button, .stButton > button, [data-testid="baseButton-primary"],
+    [data-testid="baseButton-secondary"], [data-testid="baseButton-minimal"],
+    /* inputs & textareas */
+    input, textarea, select,
+    [data-testid="stTextInput"] > div, [data-testid="stTextInput"] input,
+    [data-testid="stDateInput"] > div, [data-testid="stDateInput"] input,
+    [data-testid="stNumberInput"] > div, [data-testid="stNumberInput"] input,
+    /* multiselect */
+    [data-testid="stMultiSelect"] > div,
+    [data-testid="stMultiSelect"] span[data-baseweb="tag"],
+    [data-baseweb="tag"], [data-baseweb="input"], [data-baseweb="select"],
+    [data-baseweb="popover"], [data-baseweb="menu"],
+    /* modal / dialog */
+    [data-testid="stModal"], [data-testid="stModal"] > div,
+    [data-testid="stModalContent"], [role="dialog"],
+    [role="dialog"] > div, [role="dialog"] section,
+    /* misc */
+    .stAlert, [data-testid="stNotificationContentSuccess"],
+    [data-testid="stNotificationContentError"],
+    [data-testid="stExpander"], [data-testid="stExpanderDetails"],
+    [data-baseweb="card"], [data-baseweb="notification"] {
         border-radius: 0 !important;
-        color: #ffffff !important;
     }
-    [data-testid="stExpandSidebarButton"]:hover {
-        background-color: #1a1a1a !important;
-    }
-    [data-testid="stExpandSidebarButton"] svg {
-        fill: #ffffff !important;
-        stroke: #ffffff !important;
-        color: #ffffff !important;
-    }
-    /* Collapse button (inside sidebar) */
-    [data-testid="stSidebarCollapseButton"] {
-        visibility: visible !important;
-        opacity: 1 !important;
-        color: #ffffff !important;
-    }
-    [data-testid="stSidebarCollapseButton"] svg {
-        fill: #ffffff !important;
-        stroke: #ffffff !important;
-        color: #ffffff !important;
-    }
-
-    /* ── Remove all border-radius globally ── */
-    div[data-testid] { border-radius: 0 !important; }
-    .element-container { border-radius: 0 !important; }
 
     /* ── Responsive: Large screens (>1400px) ── */
     @media (min-width: 1401px) {
@@ -219,11 +449,6 @@ st.markdown("""
         .kpi-card h3 { font-size: 10px; letter-spacing: 1px; }
         .kpi-card p  { font-size: 10px; }
         .section-header { font-size: 12px; letter-spacing: 1.5px; }
-        .stTabs [data-baseweb="tab"] {
-            padding: 10px 16px;
-            font-size: 11px;
-            letter-spacing: 1px;
-        }
     }
 
     /* ── Responsive: Small screens (768–1023px) ── */
@@ -234,11 +459,6 @@ st.markdown("""
         .kpi-card h3 { font-size: 9px; letter-spacing: 0.8px; }
         .kpi-card p  { font-size: 9px; }
         .section-header { font-size: 11px; margin: 20px 0 10px 0; }
-        .stTabs [data-baseweb="tab"] {
-            padding: 8px 12px;
-            font-size: 10px;
-            letter-spacing: 0.8px;
-        }
         [data-testid="stMetricValue"] { font-size: 20px; }
         [data-testid="stMetricLabel"] { font-size: 10px !important; }
     }
@@ -251,11 +471,6 @@ st.markdown("""
         .kpi-card h3 { font-size: 8px; }
         .kpi-card p  { font-size: 8px; }
         .section-header { font-size: 10px; letter-spacing: 1px; }
-        .stTabs [data-baseweb="tab"] {
-            padding: 8px 8px;
-            font-size: 9px;
-            letter-spacing: 0.5px;
-        }
         [data-testid="stMetricValue"] { font-size: 18px; }
         [data-testid="stMetricLabel"] { font-size: 9px !important; }
     }
@@ -428,13 +643,27 @@ RISK_COLORS = {"HIGH": "#e84545", "MEDIUM": "#d4a017", "LOW": "#3a86a8"}
 # Sidebar — Global Filters
 # ──────────────────────────────────────────────────────────────
 
+# ──────────────────────────────────────────────────────────────
+# Navigation pages
+# ──────────────────────────────────────────────────────────────
+
+NAV_PAGES = [
+    "Overview",
+    "Investigation",
+    "Alerts",
+    "Channels",
+]
+
+# Consume any programmatic navigation request NOW — before any widget is
+# instantiated — so we can write session_state.nav_page freely.
+if st.session_state.get("_nav_request"):
+    st.session_state.nav_page = st.session_state.pop("_nav_request")
+
 with st.sidebar:
     # ── DSK Team Logo ──
     st.markdown(
-        "<div style='padding:4px 0 16px 0; border-bottom:1px solid #1a1a1a; margin-bottom:20px; text-align:center;'>"
-        # Cat silhouette icon (SVG)
-        "<div style='margin-bottom:10px;'>"
-        "<svg width='80' height='80' viewBox='0 0 100 100' fill='none' xmlns='http://www.w3.org/2000/svg'>"
+        "<div class='sidebar-branding'>"
+        "<svg width='44' height='44' viewBox='0 0 100 100' fill='none' xmlns='http://www.w3.org/2000/svg' style='flex-shrink:0;'>"
         "<path d='M25 85 L25 40 L15 15 L30 30 L50 25 L70 30 L85 15 L75 40 L75 85 Z' "
         "fill='#e84545' opacity='0.9'/>"
         "<circle cx='38' cy='50' r='5' fill='#000'/>"
@@ -445,50 +674,29 @@ with st.sidebar:
         "<line x1='62' y1='52' x2='80' y2='55' stroke='#000' stroke-width='1.5'/>"
         "<line x1='62' y1='58' x2='80' y2='60' stroke='#000' stroke-width='1.5'/>"
         "</svg>"
-        "</div>"
-        # Team name
-        "<div style='font-family:JetBrains Mono,monospace; font-size:18px; letter-spacing:6px; "
+        "<div style='line-height:1;'>"
+        "<div style='font-family:JetBrains Mono,monospace; font-size:18px; letter-spacing:4px; "
         "color:#ffffff; font-weight:700;'>DSK</div>"
-        "<div style='font-family:JetBrains Mono,monospace; font-size:10px; letter-spacing:2px; "
-        "color:#555555; text-transform:uppercase; margin-top:4px;'>Data Structure Kittens</div>"
-        "<div style='margin-top:12px; font-family:JetBrains Mono,monospace; font-size:10px; "
-        "letter-spacing:1.5px; color:#666; text-transform:uppercase;'>UEBA Threat Detection</div>"
+        "<div style='font-family:JetBrains Mono,monospace; font-size:9px; letter-spacing:1.5px; "
+        "color:#555555; text-transform:uppercase; margin-top:3px;'>Data Structure Kittens</div>"
+        "</div>"
         "</div>",
         unsafe_allow_html=True,
     )
 
-    st.markdown("<p style='font-family:JetBrains Mono,monospace; font-size:10px; color:#555; "
-                "text-transform:uppercase; letter-spacing:2px; margin-bottom:4px;'>Date Range</p>",
-                unsafe_allow_html=True)
-    min_date = merged_df["day"].min().date()
-    max_date = merged_df["day"].max().date()
-    date_range = st.date_input(
-        "Date Range",
-        value=(min_date, max_date),
-        min_value=min_date,
-        max_value=max_date,
+    # ── Navigation ──
+    st.markdown("<p class='sidebar-section-label'>Navigation</p>", unsafe_allow_html=True)
+    active_page = st.radio(
+        "Nav",
+        NAV_PAGES,
+        index=0,
         label_visibility="collapsed",
+        key="nav_page",
     )
 
-    st.markdown("<p style='font-family:JetBrains Mono,monospace; font-size:10px; color:#555; "
-                "text-transform:uppercase; letter-spacing:2px; margin:16px 0 4px 0;'>Risk Levels</p>",
-                unsafe_allow_html=True)
-    risk_filter = st.multiselect(
-        "Risk Levels",
-        options=["HIGH", "MEDIUM", "LOW"],
-        default=["HIGH", "MEDIUM", "LOW"],
-        label_visibility="collapsed",
-    )
+    st.markdown("<div style='border-top:1px solid #1a1a1a; margin:8px 0 0 0;'></div>", unsafe_allow_html=True)
 
-    st.markdown("<div style='border-top:1px solid #1a1a1a; margin:20px 0;'></div>", unsafe_allow_html=True)
-
-    st.markdown("<p style='font-family:JetBrains Mono,monospace; font-size:10px; color:#555; "
-                "text-transform:uppercase; letter-spacing:2px; margin-bottom:4px;'>Search User</p>",
-                unsafe_allow_html=True)
-    all_users = sorted(merged_df["user"].unique())
-    user_search = st.text_input("Search User ID", placeholder="e.g. acm2278", label_visibility="collapsed")
-
-    st.markdown("<div style='border-top:1px solid #1a1a1a; margin:20px 0;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='border-top:1px solid #1a1a1a; margin:16px 0;'></div>", unsafe_allow_html=True)
     st.markdown(
         "<div style='font-family:JetBrains Mono,monospace; font-size:9px; color:#333; "
         "text-transform:uppercase; letter-spacing:1.5px; line-height:1.8;'>"
@@ -496,50 +704,182 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-# Apply global filters
-mask = merged_df["risk_levels"].isin(risk_filter)
-
-if isinstance(date_range, tuple) and len(date_range) == 2:
-    mask &= (merged_df["day"].dt.date >= date_range[0]) & (merged_df["day"].dt.date <= date_range[1])
-
-filtered_df = merged_df[mask]
-
-
-# ──────────────────────────────────────────────────────────────
-# Header
-# ──────────────────────────────────────────────────────────────
-
-st.markdown(
-    "<div style='margin-bottom:4px;'>"
-    "<h1 style='margin:0; font-family:Inter,sans-serif; font-weight:700; font-size:28px; "
-    "color:#ffffff; letter-spacing:-0.5px;'>INSIDER THREAT DETECTION</h1>"
-    "<p style='color:#444444; margin:4px 0 0 0; font-family:JetBrains Mono,monospace; "
-    "font-size:11px; text-transform:uppercase; letter-spacing:2px;'>"
-    "User &amp; Entity Behavior Analytics</p>"
-    "</div>",
-    unsafe_allow_html=True,
-)
+# Users list (used across pages for search)
+all_users = sorted(merged_df["user"].unique())
 
 # Cap data points sent to Plotly — browser rendering is the main bottleneck
 MAX_PLOT_POINTS = 50_000
 
-
 # ──────────────────────────────────────────────────────────────
-# Tabs
+# Global filter state (persists across page navigations)
 # ──────────────────────────────────────────────────────────────
+_DS_MIN = merged_df["day"].min().date()
+_DS_MAX = merged_df["day"].max().date()
+if "flt_date_start" not in st.session_state:
+    st.session_state.flt_date_start = _DS_MIN
+if "flt_date_end" not in st.session_state:
+    st.session_state.flt_date_end = _DS_MAX
+if "flt_risk" not in st.session_state:
+    st.session_state.flt_risk = ["HIGH", "MEDIUM", "LOW"]
 
-tab_overview, tab_investigate, tab_alerts, tab_channels = st.tabs([
-    "OVERVIEW", "INVESTIGATION", "ALERTS", "CHANNELS"
-])
+
+@st.dialog("Filters")
+def show_filters():
+    st.markdown("**Date Range**")
+    dr = st.date_input(
+        "Date Range",
+        value=(st.session_state.flt_date_start, st.session_state.flt_date_end),
+        min_value=_DS_MIN,
+        max_value=_DS_MAX,
+        label_visibility="collapsed",
+        key="dlg_date",
+    )
+    st.markdown("**Risk Levels**")
+    rl = st.multiselect(
+        "Risk Levels",
+        ["HIGH", "MEDIUM", "LOW"],
+        default=st.session_state.flt_risk,
+        label_visibility="collapsed",
+        key="dlg_risk",
+    )
+    st.markdown("")
+    apply_col, reset_col = st.columns(2)
+    with apply_col:
+        if st.button("Apply", use_container_width=True, type="primary"):
+            if isinstance(dr, tuple) and len(dr) == 2:
+                st.session_state.flt_date_start = dr[0]
+                st.session_state.flt_date_end = dr[1]
+            st.session_state.flt_risk = rl if rl else ["HIGH", "MEDIUM", "LOW"]
+            st.rerun()
+    with reset_col:
+        if st.button("Reset", use_container_width=True):
+            st.session_state.flt_date_start = _DS_MIN
+            st.session_state.flt_date_end = _DS_MAX
+            st.session_state.flt_risk = ["HIGH", "MEDIUM", "LOW"]
+            st.rerun()
 
 
+def _get_filtered_df():
+    """Return merged_df sliced by current session_state filter values."""
+    mask = merged_df["risk_levels"].isin(st.session_state.flt_risk)
+    mask &= merged_df["day"].dt.date >= st.session_state.flt_date_start
+    mask &= merged_df["day"].dt.date <= st.session_state.flt_date_end
+    return merged_df[mask]
+
+
+def _filter_bar(key: str):
+    """Render filter button + active-filter summary. Opens modal on click."""
+    _fb_left, _fb_right = st.columns([7, 1])
+    with _fb_right:
+        if st.button("Filter", key=key, use_container_width=True):
+            show_filters()
+    active_risks = ", ".join(st.session_state.flt_risk) if len(st.session_state.flt_risk) < 3 else "All risk levels"
+    _fb_left.caption(
+        f"Date: {st.session_state.flt_date_start} to {st.session_state.flt_date_end}   |   "
+        f"Risk: {active_risks}"
+    )
+
+st.markdown("<div class='project-title-badge'>Insider Threat Detection</div>", unsafe_allow_html=True)
+
+# ── Mobile sidebar toggle (injected once into parent document) ──
+components.html(
+    """
+    <script>
+    (function(){
+        var p = window.parent.document;
+        if (p.getElementById('mob-sidebar-btn')) return;
+        var btn = p.createElement('button');
+        btn.id = 'mob-sidebar-btn';
+        btn.innerHTML = '&#9776;';
+        btn.style.cssText = [
+            'position:fixed','top:12px','left:12px','z-index:99999',
+            'background:#0a0a0a','border:1px solid #1a1a1a','color:#aaa',
+            'width:38px','height:38px','font-size:18px','cursor:pointer',
+            'display:none','align-items:center','justify-content:center',
+            'padding:0'
+        ].join(';');
+        p.body.appendChild(btn);
+        function show(){
+            btn.style.display = window.parent.innerWidth <= 768 ? 'flex' : 'none';
+        }
+        window.parent.addEventListener('resize', show);
+        show();
+        btn.addEventListener('click', function(){
+            var sidebar = p.querySelector('[data-testid="stSidebar"]');
+            var collapse = p.querySelector('[data-testid="stSidebarCollapseButton"]');
+            var expand   = p.querySelector('[data-testid="stExpandSidebarButton"]');
+            if (sidebar) {
+                var rect = sidebar.getBoundingClientRect();
+                if (rect.width > 50) {
+                    if (collapse) collapse.click();
+                } else {
+                    if (expand) expand.click();
+                }
+            } else if (expand) { expand.click(); }
+        });
+    })();
+    </script>
+    """,
+    height=0,
+)
 # ══════════════════════════════════════════════════════════════
-# TAB 1 — Overview
-# ══════════════════════════════════════════════════════════════
 
-with tab_overview:
+if active_page == "Overview":
+    st.markdown(
+        "<div class='page-header-block'>"
+        "<h1 class='page-title'>Overview</h1>"
+        "<p class='page-subtitle'>High-level summary of monitored users, risk levels, anomaly scores, and cross-channel threat indicators.</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    _filter_bar("ov_flt")
+    filtered_df = _get_filtered_df()
 
-    # ── KPI Row ──
+    # ── Critical Alert Notice ──────────────────────────────────
+    _high_df = filtered_df[filtered_df["risk_levels"] == "HIGH"]
+    _high_user_count = _high_df["user"].nunique()
+    _high_record_count = len(_high_df)
+
+    if _high_user_count > 0:
+        # Top 5 users by peak percentile (or anomaly score fallback)
+        _top_alert_users = (
+            _high_df.groupby("user", observed=True)
+            .agg(
+                peak_pct=("percentile_rank", "max") if "percentile_rank" in _high_df.columns else ("anomaly_scores", "max"),
+                high_days=("risk_levels", "count"),
+            )
+            .sort_values("peak_pct", ascending=False)
+            .head(5)
+            .reset_index()
+        )
+
+        _user_pills = ""
+        for _, _row in _top_alert_users.iterrows():
+            _user_pills += (
+                f"<div class='alert-notice-row-item'>"
+                f"<span class='u-id'>{_row['user']}</span>"
+                f"<span class='u-pct'>P{_row['peak_pct']:.0f}</span>"
+                f"<span class='u-days'>{int(_row['high_days'])} high-risk day{'s' if _row['high_days'] != 1 else ''}</span>"
+                f"</div>"
+            )
+
+        _notice_html = (
+            "<div class='alert-notice-banner'>"
+            "<div class='alert-notice-header'>"
+            f"<span class='alert-notice-title'>Active Alerts Requiring Immediate Attention</span>"
+            f"<span class='alert-notice-count'>{_high_user_count:,} high-risk user{'s' if _high_user_count != 1 else ''} &nbsp;&middot;&nbsp; {_high_record_count:,} flagged record{'s' if _high_record_count != 1 else ''}</span>"
+            "</div>"
+            f"<div class='alert-notice-rows'>{_user_pills}</div>"
+            "</div>"
+        )
+        st.markdown(_notice_html, unsafe_allow_html=True)
+
+        if st.button("View All Alerts \u2192", key="ov_goto_alerts", type="primary"):
+            st.session_state._nav_request = "Alerts"
+            st.rerun()
+
+        st.markdown("<div style='margin-bottom:4px;'></div>", unsafe_allow_html=True)
+
     total_users = filtered_df["user"].nunique()
     total_records = len(filtered_df)
     high_risk_users = filtered_df[filtered_df["risk_levels"] == "HIGH"]["user"].nunique()
@@ -547,38 +887,38 @@ with tab_overview:
     avg_anomaly = filtered_df["anomaly_scores"].mean()
     detection_rate = (filtered_df["risk_levels"].isin(["HIGH", "MEDIUM"]).sum() / max(len(filtered_df), 1)) * 100
 
-    k1, k2, k3, k4, k5, k6 = st.columns(6)
-
-    with k1:
-        st.markdown(
-            f"""<div class='kpi-card' style='border-color:#ffffff'>
-            <h3>Users Monitored</h3><h1 style='color:#ffffff'>{total_users:,}</h1>
-            <p>Active in period</p></div>""", unsafe_allow_html=True)
-    with k2:
-        st.markdown(
-            f"""<div class='kpi-card' style='border-color:#e84545'>
-            <h3>High Risk</h3><h1 style='color:#e84545'>{high_risk_users}</h1>
-            <p>&ge; 95th percentile</p></div>""", unsafe_allow_html=True)
-    with k3:
-        st.markdown(
-            f"""<div class='kpi-card' style='border-color:#d4a017'>
-            <h3>Medium Risk</h3><h1 style='color:#d4a017'>{medium_risk_users}</h1>
-            <p>&ge; 80th percentile</p></div>""", unsafe_allow_html=True)
-    with k4:
-        st.markdown(
-            f"""<div class='kpi-card' style='border-color:#666666'>
-            <h3>Total Records</h3><h1 style='color:#cccccc'>{total_records:,}</h1>
-            <p>User-day observations</p></div>""", unsafe_allow_html=True)
-    with k5:
-        st.markdown(
-            f"""<div class='kpi-card' style='border-color:#666666'>
-            <h3>Avg Anomaly Score</h3><h1 style='color:#cccccc'>{avg_anomaly:.4f}</h1>
-            <p>Across all records</p></div>""", unsafe_allow_html=True)
-    with k6:
-        st.markdown(
-            f"""<div class='kpi-card' style='border-color:#666666'>
-            <h3>Detection Rate</h3><h1 style='color:#cccccc'>{detection_rate:.1f}%</h1>
-            <p>Medium + High alerts</p></div>""", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='kpi-scroll-wrapper'>"
+        "<div class='kpi-scroll-arrow' id='kpi-arrow-left'>&#8592;</div>"
+        f"<div class='kpi-scroll-row' id='kpi-row'>"
+        f"<div class='kpi-card' style='border-color:#ffffff'><h3>Users Monitored</h3><h1 style='color:#ffffff'>{total_users:,}</h1><p>Active in period</p></div>"
+        f"<div class='kpi-card' style='border-color:#e84545'><h3>High Risk</h3><h1 style='color:#e84545'>{high_risk_users}</h1><p>&ge; 95th percentile</p></div>"
+        f"<div class='kpi-card' style='border-color:#d4a017'><h3>Medium Risk</h3><h1 style='color:#d4a017'>{medium_risk_users}</h1><p>&ge; 80th percentile</p></div>"
+        f"<div class='kpi-card' style='border-color:#666666'><h3>Total Records</h3><h1 style='color:#cccccc'>{total_records:,}</h1><p>User-day observations</p></div>"
+        f"<div class='kpi-card' style='border-color:#666666'><h3>Avg Anomaly Score</h3><h1 style='color:#cccccc'>{avg_anomaly:.4f}</h1><p>Across all records</p></div>"
+        f"<div class='kpi-card' style='border-color:#666666'><h3>Detection Rate</h3><h1 style='color:#cccccc'>{detection_rate:.1f}%</h1><p>Medium + High alerts</p></div>"
+        "</div>"
+        "<div class='kpi-scroll-arrow' id='kpi-arrow-right'>&#8594;</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    components.html(
+        "<script>"
+        "(function(){"
+        "  var p = window.parent.document;"
+        "  function wire(){"
+        "    var row = p.getElementById('kpi-row');"
+        "    var lft = p.getElementById('kpi-arrow-left');"
+        "    var rgt = p.getElementById('kpi-arrow-right');"
+        "    if(!row||!lft||!rgt){setTimeout(wire,100);return;}"
+        "    lft.addEventListener('click',function(){row.scrollBy({left:-200,behavior:'smooth'});});"
+        "    rgt.addEventListener('click',function(){row.scrollBy({left:200,behavior:'smooth'});});"
+        "  }"
+        "  wire();"
+        "})();"
+        "</script>",
+        height=0,
+    )
 
     st.markdown("")
 
@@ -666,18 +1006,25 @@ with tab_overview:
 
 
 # ══════════════════════════════════════════════════════════════
-# TAB 2 — User Investigation
+# PAGE: Investigation
 # ══════════════════════════════════════════════════════════════
 
-with tab_investigate:
-    st.markdown("<div class='section-header'>User Investigation</div>", unsafe_allow_html=True)
+if active_page == "Investigation":
+    st.markdown(
+        "<div class='page-header-block'>"
+        "<h1 class='page-title'>Investigation</h1>"
+        "<p class='page-subtitle'>Deep-dive into a single user&#39;s behavioral timeline, radar profile, and raw activity records.</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    _filter_bar("inv_flt")
+    filtered_df = _get_filtered_df()
 
-    # User search — admin can type any user ID directly
     inv_col1, inv_col2 = st.columns([2, 4])
     with inv_col1:
         user_input = st.text_input(
             "Search User ID",
-            value=user_search.strip() if user_search else "",
+            value="",
             placeholder="Type a user ID, e.g. acm2278",
             key="inv_user_search",
         )
@@ -837,12 +1184,19 @@ with tab_investigate:
 
 
 # ══════════════════════════════════════════════════════════════
-# TAB 3 — Alert Feed
+# PAGE: Alerts
 # ══════════════════════════════════════════════════════════════
 
-with tab_alerts:
-    st.markdown("<div class='section-header'>Alert Feed</div>", unsafe_allow_html=True)
-    st.caption("Sortable, filterable table of all anomaly detection alerts. Click column headers to sort.")
+if active_page == "Alerts":
+    st.markdown(
+        "<div class='page-header-block'>"
+        "<h1 class='page-title'>Alerts</h1>"
+        "<p class='page-subtitle'>Sortable, filterable table of all anomaly detection alerts. Click column headers to sort.</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    _filter_bar("al_flt")
+    filtered_df = _get_filtered_df()
 
     # Alert severity filter within this tab
     alert_cols = st.columns([2, 2, 2, 6])
@@ -882,12 +1236,19 @@ with tab_alerts:
 
 
 # ══════════════════════════════════════════════════════════════
-# TAB 4 — Channel Breakdown
+# PAGE: Channels
 # ══════════════════════════════════════════════════════════════
 
-with tab_channels:
-    st.markdown("<div class='section-header'>Activity Channel Breakdown</div>", unsafe_allow_html=True)
-    st.caption("Compare behavioral feature distributions across activity channels for the filtered population.")
+if active_page == "Channels":
+    st.markdown(
+        "<div class='page-header-block'>"
+        "<h1 class='page-title'>Channels</h1>"
+        "<p class='page-subtitle'>Compare behavioral feature distributions across activity channels for the filtered population.</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    _filter_bar("ch_flt")
+    filtered_df = _get_filtered_df()
 
     # ── Channel volume over time ──
     ch1, ch2 = st.columns(2)
