@@ -474,6 +474,43 @@ st.markdown("""
         [data-testid="stMetricValue"] { font-size: 18px; }
         [data-testid="stMetricLabel"] { font-size: 9px !important; }
     }
+
+    /* ── Info popover button ── */
+    [data-testid="stPopover"] button,
+    [data-testid="stBasePopoverButton"] {
+        background-color: transparent !important;
+        border: none !important;
+        color: #444 !important;
+        font-size: 14px !important;
+        padding: 0 4px !important;
+        min-height: unset !important;
+        line-height: 1 !important;
+        white-space: nowrap !important;
+    }
+    [data-testid="stPopover"] button:hover,
+    [data-testid="stBasePopoverButton"]:hover {
+        color: #4a9eff !important;
+        background-color: transparent !important;
+        border: none !important;
+    }
+
+    /* ── Investigate list buttons ── */
+    [data-testid="stButton"] button {
+        background-color: #0e0e0e !important;
+        border: 1px solid #2a2a2a !important;
+        color: #888 !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 10px !important;
+        letter-spacing: 0.5px !important;
+        padding: 4px 8px !important;
+        white-space: nowrap !important;
+        transition: border-color 0.15s, color 0.15s !important;
+    }
+    [data-testid="stButton"] button:hover {
+        border-color: #4a9eff !important;
+        color: #4a9eff !important;
+        background-color: #0e1a2e !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -767,6 +804,133 @@ def _get_filtered_df():
     return merged_df[mask]
 
 
+_SECTION_INFO = {
+    "Risk Distribution": (
+        "**Risk Distribution**\n\n"
+        "A donut chart showing what proportion of activity records fall into each risk tier:\n\n"
+        "- **HIGH** — anomaly score in the top percentile; warrants immediate review\n"
+        "- **MEDIUM** — elevated but not critical; worth monitoring\n"
+        "- **LOW** — behaviour consistent with typical baseline activity\n\n"
+        "Risk level is assigned per record based on the anomaly score percentile "
+        "produced by the Isolation Forest model."
+    ),
+    "Alert Trend Over Time": (
+        "**Alert Trend Over Time**\n\n"
+        "An area chart showing how many alerts were generated each day, stacked by risk level.\n\n"
+        "Use this to identify **spikes** or **sustained elevations** in suspicious activity "
+        "within the selected date range. A sudden spike often correlates with a specific "
+        "incident (e.g. large file exfiltration, off-hours access)."
+    ),
+    "Top 10 Riskiest Users": (
+        "**Top 10 Riskiest Users**\n\n"
+        "A ranked list of the users with the highest overall risk score.\n\n"
+        "Each entry shows:\n"
+        "- **Percentile** — how the user ranks relative to all users (100 = most anomalous)\n"
+        "- **High-risk days** — number of days flagged HIGH by the model\n"
+        "- **Badge** — CRITICAL (≥80th pct), HIGH (≥60th), or ELEVATED (below 60th)\n\n"
+        "Click **Investigate →** to jump directly to that user's full behavioural profile."
+    ),
+    "Anomaly Score Distribution": (
+        "**Anomaly Score Distribution**\n\n"
+        "A histogram of raw anomaly scores across all records, coloured by risk level.\n\n"
+        "- Scores **near 0** indicate behaviour very close to the normal baseline\n"
+        "- Scores **toward 1** represent increasingly anomalous activity\n\n"
+        "The Isolation Forest model assigns each record a score based on how easily it "
+        "can be isolated from the rest of the dataset. Outliers require fewer splits and "
+        "therefore receive higher scores."
+    ),
+    "Cross-Channel Risk Flags (Global)": (
+        "**Cross-Channel Risk Flags**\n\n"
+        "Counts of records where suspicious activity co-occurred across multiple data channels:\n\n"
+        "- **USB + File Write** — removable device use paired with large file write activity\n"
+        "- **Off-Hours Activity** — logins or actions recorded outside normal working hours\n"
+        "- **External Communication** — significant outbound traffic to external endpoints\n\n"
+        "These compound flags are stronger indicators of insider threat than any single "
+        "channel signal alone."
+    ),
+    "Anomaly Score Timeline": (
+        "**Anomaly Score Timeline**\n\n"
+        "A day-by-day line chart of the selected user's anomaly score.\n\n"
+        "- A **persistent elevation** suggests consistently unusual behaviour\n"
+        "- A **sudden spike** may point to a discrete incident on that date\n\n"
+        "Use the date filter to narrow the window and correlate peaks with raw activity records below."
+    ),
+    "Behavioral Profile (Avg Activity)": (
+        "**Behavioral Profile**\n\n"
+        "A radar chart comparing the selected user's **average feature values** (solid line) "
+        "against the **global population average** (dashed line).\n\n"
+        "Each axis represents a behavioural feature (e.g. email volume, logon count, file writes). "
+        "Axes where the user extends significantly beyond the population average indicate "
+        "dimensions of behaviour worth investigating."
+    ),
+    "Daily Feature Activity": (
+        "**Daily Feature Activity**\n\n"
+        "A heatmap of the user's raw feature values over time.\n\n"
+        "- Each **row** is one behavioural feature\n"
+        "- Each **column** is one day\n"
+        "- **Darker cells** = higher-than-usual activity on that day and feature\n\n"
+        "This lets you pinpoint exactly which features drove an anomaly spike on a given date."
+    ),
+    "Cross-Channel Risk Indicators": (
+        "**Cross-Channel Risk Indicators**\n\n"
+        "A summary of whether this user triggered any multi-channel co-occurrence flags:\n\n"
+        "- **USB + File Write** — device use coincided with large file write events\n"
+        "- **Off-Hours Activity** — actions occurred outside normal business hours\n"
+        "- **External Communication** — outbound connections to external hosts were detected\n\n"
+        "Combinations of multiple flags substantially increase the likelihood of an insider threat."
+    ),
+    "Raw Activity Records": (
+        "**Raw Activity Records**\n\n"
+        "A full table of every aggregated daily record for the selected user within the "
+        "current filter window.\n\n"
+        "Each row represents one day and includes all behavioural features (email, file, "
+        "HTTP, logon, device activity), the computed anomaly score, and the assigned risk level. "
+        "Use this to audit exactly what the model saw on any particular date."
+    ),
+    "Channel Activity Volume": (
+        "**Channel Activity Volume**\n\n"
+        "A bar chart showing the total number of events recorded across each data channel "
+        "(email, file, HTTP, logon, device) within the selected filters.\n\n"
+        "Channels with disproportionately high volumes relative to peers can indicate "
+        "a data exfiltration path that warrants deeper investigation."
+    ),
+    "Channel Volume Share": (
+        "**Channel Volume Share**\n\n"
+        "A pie chart showing each channel's **percentage share** of all recorded events.\n\n"
+        "This gives a quick sense of which channels dominate activity organisationally. "
+        "A sudden shift in these proportions between time periods may indicate an attack campaign."
+    ),
+    "Feature Distributions by Risk Level": (
+        "**Feature Distributions by Risk Level**\n\n"
+        "Box plots for each numeric feature, grouped by risk level (HIGH / MEDIUM / LOW).\n\n"
+        "The box shows the interquartile range (25th–75th percentile); the line inside is the median. "
+        "Features where the HIGH box sits far above LOW are the **strongest predictors** "
+        "of anomalous behaviour in this dataset."
+    ),
+    "Feature Correlation Matrix": (
+        "**Feature Correlation Matrix**\n\n"
+        "A heatmap of Pearson correlations between all numeric features.\n\n"
+        "- **+1 (dark red)** — features rise and fall together\n"
+        "- **−1 (dark blue)** — features move in opposite directions\n"
+        "- **~0** — no linear relationship\n\n"
+        "Highly correlated features may be redundant for modelling, while unexpected "
+        "correlations can reveal undocumented behavioural patterns."
+    ),
+}
+
+
+def section_header(title: str, key: str) -> None:
+    """Render a section header with a right-aligned ⓘ info popover."""
+    c_title, c_info = st.columns([12, 1])
+    c_title.markdown(f"<div class='section-header'>{title}</div>", unsafe_allow_html=True)
+    with c_info:
+        st.markdown("<div style='padding-top:28px;'>", unsafe_allow_html=True)
+        with st.popover("ⓘ", use_container_width=True):
+            body = _SECTION_INFO.get(title, "No description available.")
+            st.markdown(body)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
 def _filter_bar(key: str):
     """Render filter button + active-filter summary. Opens modal on click."""
     _fb_left, _fb_right = st.columns([7, 1])
@@ -926,7 +1090,7 @@ if active_page == "Overview":
     col_left, col_right = st.columns([1, 2])
 
     with col_left:
-        st.markdown("<div class='section-header'>Risk Distribution</div>", unsafe_allow_html=True)
+        section_header("Risk Distribution", "sh_risk_dist")
         risk_counts = filtered_df["risk_levels"].value_counts().reset_index()
         risk_counts.columns = ["Risk Level", "Count"]
         fig_donut = px.pie(
@@ -942,7 +1106,7 @@ if active_page == "Overview":
         st.plotly_chart(fig_donut, use_container_width=True)
 
     with col_right:
-        st.markdown("<div class='section-header'>Alert Trend Over Time</div>", unsafe_allow_html=True)
+        section_header("Alert Trend Over Time", "sh_alert_trend")
         daily_alerts = (
             filtered_df.groupby([filtered_df["day"].dt.date, "risk_levels"])
             .size()
@@ -960,19 +1124,56 @@ if active_page == "Overview":
     col_left2, col_right2 = st.columns(2)
 
     with col_left2:
-        st.markdown("<div class='section-header'>Top 15 Riskiest Users</div>", unsafe_allow_html=True)
-        top_users = user_risk.head(15).copy()
-        fig_top = px.bar(
-            top_users, x="max_percentile", y="user", orientation="h",
-            color="high_count", color_continuous_scale=[[0, "#1a1a1a"], [0.5, "#d4a017"], [1, "#e84545"]],
-            labels={"max_percentile": "Max Percentile Rank", "user": "User", "high_count": "High-Risk Days"},
+        section_header("Top 10 Riskiest Users", "sh_top_users")
+        st.markdown(
+            "<p style='font-family:Inter,sans-serif;font-size:12px;color:#555;margin:0 0 12px 0;'>"
+            "Click a user to open their investigation profile.</p>",
+            unsafe_allow_html=True,
         )
-        fig_top.update_layout(**PLOTLY_LAYOUT, height=440)
-        fig_top.update_yaxes(autorange="reversed", gridcolor="#1a1a1a")
-        st.plotly_chart(fig_top, use_container_width=True)
+        top_users = user_risk.head(10).copy()
+        for rank, row in enumerate(top_users.itertuples(), start=1):
+            uid = row.user
+            score = row.max_percentile
+            days = row.high_count
+            # Color badge based on score
+            if score >= 80:
+                badge_color = "#e84545"
+                badge_label = "CRITICAL"
+            elif score >= 60:
+                badge_color = "#d4a017"
+                badge_label = "HIGH"
+            else:
+                badge_color = "#4a9eff"
+                badge_label = "ELEVATED"
+
+            col_rank, col_info, col_btn = st.columns([1, 5, 3])
+            with col_rank:
+                st.markdown(
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                    f"color:#444;font-weight:600;padding-top:4px;text-align:center;'>#{rank}</div>",
+                    unsafe_allow_html=True,
+                )
+            with col_info:
+                st.markdown(
+                    f"<div style='padding:2px 0 1px 0;'>"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;color:#e0e0e0;font-weight:600;'>{uid}</span>"
+                    f"&nbsp;&nbsp;<span style='background:{badge_color}22;color:{badge_color};font-size:9px;"
+                    f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 5px;"
+                    f"border:1px solid {badge_color}55;'>{badge_label}</span>"
+                    f"<br><span style='font-family:Inter,sans-serif;font-size:10px;color:#555;'>"
+                    f"Percentile {score:.1f} &middot; {days} high-risk day{'s' if days != 1 else ''}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            with col_btn:
+                if st.button("Investigate →", key=f"inv_btn_{uid}", use_container_width=True):
+                    st.session_state["inv_user_search"] = uid
+                    st.session_state["_nav_request"] = "Investigation"
+                    st.rerun()
+            st.markdown("<div style='border-bottom:1px solid #111;margin:0;'></div>", unsafe_allow_html=True)
 
     with col_right2:
-        st.markdown("<div class='section-header'>Anomaly Score Distribution</div>", unsafe_allow_html=True)
+        section_header("Anomaly Score Distribution", "sh_score_dist")
         # Sample for histogram to avoid sending 2M+ points to Plotly
         hist_df = filtered_df if len(filtered_df) <= MAX_PLOT_POINTS else filtered_df.sample(MAX_PLOT_POINTS, random_state=42)
         fig_hist = px.histogram(
@@ -986,7 +1187,7 @@ if active_page == "Overview":
 
     # ── Row 4: Cross-Channel Risk Flags Summary ──
     if CROSS_FLAGS:
-        st.markdown("<div class='section-header'>Cross-Channel Risk Flags (Global)</div>", unsafe_allow_html=True)
+        section_header("Cross-Channel Risk Flags (Global)", "sh_cross_flags")
         flag_labels = {
             "usb_file_activity_flag": "USB + File Write",
             "off_hours_activity_flag": "Off-Hours Activity",
@@ -1080,7 +1281,7 @@ if active_page == "Investigation":
     u5.metric("Days Observed", u_total_days)
 
     # ── Anomaly Timeline ──
-    st.markdown("<div class='section-header'>Anomaly Score Timeline</div>", unsafe_allow_html=True)
+    section_header("Anomaly Score Timeline", "sh_score_timeline")
     fig_timeline = go.Figure()
     fig_timeline.add_trace(go.Scatter(
         x=user_data["day"], y=user_data["anomaly_scores"],
@@ -1105,7 +1306,7 @@ if active_page == "Investigation":
     col_radar, col_heat = st.columns(2)
 
     with col_radar:
-        st.markdown("<div class='section-header'>Behavioral Profile (Avg Activity)</div>", unsafe_allow_html=True)
+        section_header("Behavioral Profile (Avg Activity)", "sh_beh_profile")
         # Compute average of each channel for this user vs population
         radar_categories = []
         user_vals = []
@@ -1137,7 +1338,7 @@ if active_page == "Investigation":
             st.plotly_chart(fig_radar, use_container_width=True)
 
     with col_heat:
-        st.markdown("<div class='section-header'>Daily Feature Activity</div>", unsafe_allow_html=True)
+        section_header("Daily Feature Activity", "sh_daily_feat")
         # Show heatmap of raw feature values over time for this user
         heat_feats = [f for f in RAW_FEATURES if f in user_data.columns]
         if heat_feats and len(user_data) > 1:
@@ -1159,7 +1360,7 @@ if active_page == "Investigation":
 
     # ── Cross-Channel Flags for This User ──
     if CROSS_FLAGS:
-        st.markdown("<div class='section-header'>Cross-Channel Risk Indicators</div>", unsafe_allow_html=True)
+        section_header("Cross-Channel Risk Indicators", "sh_cross_ind")
         fc1, fc2, fc3 = st.columns(3)
         flag_details = [
             ("usb_file_activity_flag",        "USB + FILE WRITE",    "USB inserted AND files written on same day"),
@@ -1174,7 +1375,7 @@ if active_page == "Investigation":
                 col_w.caption(desc)
 
     # ── Raw Activity Table ──
-    st.markdown("<div class='section-header'>Raw Activity Records</div>", unsafe_allow_html=True)
+    section_header("Raw Activity Records", "sh_raw_records")
     display_cols = ["day", "risk_levels", "anomaly_scores", "percentile_rank"] + RAW_FEATURES + CROSS_FLAGS
     display_cols = [c for c in display_cols if c in user_data.columns]
     st.dataframe(
@@ -1254,7 +1455,7 @@ if active_page == "Channels":
     ch1, ch2 = st.columns(2)
 
     with ch1:
-        st.markdown("<div class='section-header'>Channel Activity Volume</div>", unsafe_allow_html=True)
+        section_header("Channel Activity Volume", "sh_chan_vol")
         channel_ts = []
         for channel, feats in CHANNELS.items():
             valid = [f for f in feats if f in filtered_df.columns]
@@ -1271,7 +1472,7 @@ if active_page == "Channels":
             st.plotly_chart(fig_ch_ts, use_container_width=True)
 
     with ch2:
-        st.markdown("<div class='section-header'>Channel Volume Share</div>", unsafe_allow_html=True)
+        section_header("Channel Volume Share", "sh_chan_share")
         ch_totals = {}
         for channel, feats in CHANNELS.items():
             valid = [f for f in feats if f in filtered_df.columns]
@@ -1286,7 +1487,7 @@ if active_page == "Channels":
             st.plotly_chart(fig_ch_pie, use_container_width=True)
 
     # ── Feature-level box plots ──
-    st.markdown("<div class='section-header'>Feature Distributions by Risk Level</div>", unsafe_allow_html=True)
+    section_header("Feature Distributions by Risk Level", "sh_feat_dist")
     selected_feature = st.selectbox("Select Feature", RAW_FEATURES, key="feat_box")
     if selected_feature in filtered_df.columns:
         # Downsample for box plot — browser can't handle 2M+ points
@@ -1300,7 +1501,7 @@ if active_page == "Channels":
         st.plotly_chart(fig_box, use_container_width=True)
 
     # ── Correlation heatmap ──
-    st.markdown("<div class='section-header'>Feature Correlation Matrix</div>", unsafe_allow_html=True)
+    section_header("Feature Correlation Matrix", "sh_feat_corr")
     corr_feats = [f for f in RAW_FEATURES if f in filtered_df.columns]
     if len(corr_feats) >= 2:
         # Correlation converges fast — 50k rows is more than enough
