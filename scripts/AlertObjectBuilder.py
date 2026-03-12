@@ -5,8 +5,9 @@ import pandas as pd
 
 class AlertObjectBuilder:
     """
-    Converts raw reconstruction error outputs into contextual, SOC-ready alert objects. Can operat on Autoencoder errors,
-    Isolation Forest scores, or hybridd risk metrics.
+    Converts raw reconstruction error outputs into contextual, SOC-ready alert objects.
+    Operates on both Autoencoder reconstruction errors and Isolation Forest anomaly scores,
+    producing a unified alert with per-signal percentile ranks and risk bands.
     """
     
     def __init__(self, percentile_thresholds: dict | None=None, top_k: int=3) -> None:
@@ -14,7 +15,7 @@ class AlertObjectBuilder:
         Initializing the alert object builder.
         
         Args:
-            percentile_thresholds: The risk band thresholds
+            percentile_thresholds: The risk band thresholds (shared by both AE and IF signals)
             top_k: Number of top contributing features to extract
             
         Returns:
@@ -30,12 +31,13 @@ class AlertObjectBuilder:
         
         self.percentile_thresholds = percentile_thresholds
         self.top_k = top_k
-        self.baseline_errors = None
+        self.ae_baseline = None
+        self.if_baseline = None
         
     
-    def fit_baseline(self, reconstruction_errors: np.ndarray) -> None:
+    def fit_ae_baseline(self, reconstruction_errors: np.ndarray) -> None:
         """
-        Stores the baseline reconstruction error distribution.
+        Stores the baseline Autoencoder reconstruction error distribution.
         
         Args:
             reconstruction_errors: Array of baseline reconstruction errors.
@@ -43,33 +45,62 @@ class AlertObjectBuilder:
         Returns:
             None:
         """
-        self.baseline_errors = np.sort(reconstruction_errors)
-        
-    
-    def compute_percentile(self, error: float) -> float:
+        self.ae_baseline = np.sort(reconstruction_errors)
+
+
+    def fit_if_baseline(self, anomaly_scores: np.ndarray) -> None:
         """
-        Computes the percentile rank of an error value.
+        Stores the baseline Isolation Forest anomaly score distribution.
         
         Args:
-            error: The error value to rank
+            anomaly_scores: Array of baseline Isolation Forest anomaly scores.
+            
+        Returns:
+            None:
+        """
+        self.if_baseline = np.sort(anomaly_scores)
+
+    
+    def compute_ae_percentile(self, error: float) -> float:
+        """
+        Computes the percentile rank of an Autoencoder reconstruction error value.
+        
+        Args:
+            error: The reconstruction error value to rank
             
         Returns:
             float: The percentile the error value falls within (0-100)
         """
-        if self.baseline_errors is None:
-            raise ValueError("Baseline distribution not fitted.")
+        if self.ae_baseline is None:
+            raise ValueError("AE baseline distribution not fitted. Call fit_ae_baseline() first.")
         
-        # Calculating the percentile
-        percentile = (np.searchsorted(self.baseline_errors, error)) / len(self.baseline_errors) * 100
+        percentile = np.searchsorted(self.ae_baseline, error) / len(self.ae_baseline) * 100
+        return percentile
+
+
+    def compute_if_percentile(self, score: float) -> float:
+        """
+        Computes the percentile rank of an Isolation Forest anomaly score.
+        
+        Args:
+            score: The anomaly score value to rank
+            
+        Returns:
+            float: The percentile the score falls within (0-100)
+        """
+        if self.if_baseline is None:
+            raise ValueError("IF baseline distribution not fitted. Call fit_if_baseline() first.")
+        
+        percentile = np.searchsorted(self.if_baseline, score) / len(self.if_baseline) * 100
         return percentile
     
     
     def assign_risk_band(self, percentile: float) -> str:
         """
-        Assigns risk bands based on the provided percentile.
+        Assigns a risk band based on the provided percentile. Shared by both AE and IF signals.
         
         Args:
-            percentile: The assigned percentile of an error value
+            percentile: The assigned percentile of an error or score value
             
         Returns:
             str: The risk band level 
@@ -104,24 +135,30 @@ class AlertObjectBuilder:
         
     def build_alert_from_row(self, row: pd.Series) -> dict:
         """
-        Builds an alert dictionary for a single sample.
+        Builds an alert dictionary for a single sample using both AE and IF signals.
         
         Args:
-            row: A row consisting of metadata and recontruction error data
+            row: A row consisting of metadata, reconstruction error data, and IF anomaly score
             
         Returns:
             dict: A structured alert object
         """
-        # Creating percential assignment and risk band
-        error = row["total_reconstruction_error"]
-        percentile = self.compute_percentile(error)
-        risk_band = self.assign_risk_band(percentile)
+        # Computing AE percentile and risk band
+        ae_error = row["total_reconstruction_error"]
+        ae_percentile = self.compute_ae_percentile(ae_error)
+        ae_risk_band = self.assign_risk_band(ae_percentile)
         top_features = self.extract_top_contributors(row)
+        
+        # Computing IF percentile and risk band
+        if_score = row["if_anomaly_score"]
+        if_percentile = self.compute_if_percentile(if_score)
+        if_risk_band = self.assign_risk_band(if_percentile)
         
         # Creating explanation statement
         explanation = (
-            f"Behavior falls in the {percentile:.2f}th percentile of reconstruction deviation. Primary contributors: "\
-            + ", ".join([f"{feat} ({val:.2f})" for feat, val in top_features])
+            f"AE deviation at {ae_percentile:.2f}th percentile ({ae_risk_band}); "
+            f"IF anomaly at {if_percentile:.2f}th percentile ({if_risk_band}). "
+            f"Top features: " + ", ".join([f"{feat} ({val:.2f})" for feat, val in top_features])
         )
         
         # Creating alert dictionary
@@ -129,9 +166,12 @@ class AlertObjectBuilder:
             "user": row["user"],
             "pc": row["pc"],
             "day": row["day"],
-            "percentile_rank": percentile,
-            "risk_band": risk_band,
+            "ae_percentile_rank": ae_percentile,
+            "ae_risk_band": ae_risk_band,
             "top_contributors": top_features,
+            "if_anomaly_score": if_score,
+            "if_percentile_rank": if_percentile,
+            "if_risk_band": if_risk_band,
             "explanation": explanation
         }
         
@@ -140,10 +180,11 @@ class AlertObjectBuilder:
         
     def build_alert_df(self, explanation_df: pd.DataFrame) -> pd.DataFrame:
         """
-        Generates an alert DataFrame from a reconstruction error explanation DataFrame.
+        Generates an alert DataFrame from an aggregated table consisting of reconstruction errors
+        and anomaly scores.
         
         Args:
-            explanation_df: The reconstuction error explanation DataFrame
+            explanation_df: The enriched DataFrame containing AE reconstruction errors and IF anomaly scores
             
         Returns:
             pd.DataFrame: An alert-ready structured DataFrame

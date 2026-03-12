@@ -8,7 +8,7 @@ class Autoencoder:
     Autoencoder for learning latent representation of UEBA behavioral features.
     """
     
-    def __init__(self, input_dim: int, latent_dim: int=16, hidden_dim: int=32, learning_rate: float=1e-3) -> None:
+    def __init__(self, input_dim: int, latent_dim: int=16, hidden_dim: int=64, learning_rate: float=1e-3) -> None:
         """
         Initializes the autoencoder architecture.
         
