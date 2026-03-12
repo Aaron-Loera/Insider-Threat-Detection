@@ -1,0 +1,13 @@
+- Isolation Forest Model 1 (isolation_forests\iforest_model_1):
+    * This model was trained on Autoencoder Model 1's latent embeddings
+    * Hyperparameters:
+        - N-Estimators: 200
+        - Contamination: 0.05
+        - Random State: 42
+
+- Isolation Forest Model 2 (isolation_forests\iforest_model_2):
+    * This model was trained on Autoencoder Model 2's latent embeddings
+    * Hyperparameters:
+        - N-Estimators: 200
+        - Contamination: 0.05
+        - Random State: 42

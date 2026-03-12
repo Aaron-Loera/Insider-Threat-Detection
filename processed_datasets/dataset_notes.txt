@@ -1,0 +1,8 @@
+- UEBA Dataset (ueba_dataset.csv):
+    * This is the baseline UEBA dataset 
+    * Number of Features (exluding user, PC, and day): 54
+
+- UEBA Dataset v2 (ueba_dataset_2.csv):
+    * Version 2 introduces PC-related features and flags:
+    * Number of Features (excluding user, PC, and day): 78
+

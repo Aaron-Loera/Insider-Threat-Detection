@@ -1,0 +1,19 @@
+- Autoencoder Model 1 (encoders\encoder_model_1):
+    * This model was trained on "ueba_dataset"
+    * Hyperparameters:
+        - Latent Dimension: 16
+        - Hidden Dimension: 64
+        - Epochs: 40
+    * Loss:
+        - Training Loss: 2.82%
+        - Validation Loss: 3.29%
+
+- Autoencoder Model 2 (encoders\encoder_model_2):
+    * This model was trained on "ueba_dataset_2"
+    * Hyperparameters:
+        - Latent Dimension: 16
+        - Hidden Dimension: 64
+        - Epochs: 40
+    * Loss:
+        - Training Loss: 4.16%
+        - Validation Loss: 4.77%

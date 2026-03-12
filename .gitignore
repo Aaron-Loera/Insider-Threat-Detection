@@ -1,9 +1,13 @@
 # Data files
+*.png
 *.csv
 *.parquet
 *.pkl
 *.npy
 *.keras
+settings.json
+Preprocessing.py
+
 
 # Python
 __pycache__/
