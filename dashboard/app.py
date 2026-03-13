@@ -523,8 +523,8 @@ st.markdown("""
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Prefer Parquet (5-10x faster I/O); fall back to CSV
-ANALYST_TABLE_PARQUET = os.path.join(BASE_DIR, "static_dashboards", "table_1.parquet")
-ANALYST_TABLE_CSV = os.path.join(BASE_DIR, "static_dashboards", "table_1.csv")
+ANALYST_TABLE_PARQUET = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_2.parquet")
+ANALYST_TABLE_CSV = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_2.csv")
 UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset.parquet")
 UEBA_CSV = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset.csv")
 
@@ -551,6 +551,13 @@ def load_data():
         analyst = pd.read_parquet(ANALYST_TABLE_PARQUET)
     else:
         analyst = pd.read_csv(ANALYST_TABLE_CSV)
+
+    # This will be removed once dashboard is adapted to new alert table layout
+    analyst = analyst.rename(columns={
+        "if_anomaly_score":   "anomaly_scores",
+        "ae_percentile_rank": "percentile_rank",
+        "ae_risk_band":       "risk_levels",
+    })
 
     # ── Load UEBA dataset ──
     if os.path.exists(UEBA_PARQUET):
@@ -619,7 +626,7 @@ if not DATA_LOADED:
         "1. `CERT_Preprocessing.ipynb` → generates `processed_datasets/ueba_dataset.csv`\n"
         "2. `Autoencoder.ipynb` → trains the encoder model\n"
         "3. `Isolation_Forest.ipynb` → generates anomaly scores\n"
-        "4. `Static_Dashboard.ipynb` → generates `static_dashboards/table_1.csv`"
+        "4. `Alert_Object_Builder.ipynb` → generates `explainability/alert_table/alert_table_2.csv`"
     )
     st.stop()
 
