@@ -1,1 +1,0 @@
-* This encoder was trained with a hidden dimension of 32
