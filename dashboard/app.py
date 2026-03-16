@@ -5,11 +5,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import json
 import os
-import subprocess
-import sys
-import time
 
 # ──────────────────────────────────────────────────────────────
 # Page Config & Custom CSS
@@ -527,37 +523,21 @@ st.markdown("""
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Prefer Parquet (5-10x faster I/O); fall back to CSV
-ANALYST_TABLE_PARQUET = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_3.parquet")
-ANALYST_TABLE_CSV = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_3.csv")
-UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.parquet")
-UEBA_CSV = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.csv")
-LIVE_OUTPUT = os.path.join(BASE_DIR, "processed_datasets", "live_results.jsonl")
-LIVE_SIM_SCRIPT = os.path.join(BASE_DIR, "live_simulation.py")
+ANALYST_TABLE_PARQUET = os.path.join(BASE_DIR, "static_dashboards", "table_1.parquet")
+ANALYST_TABLE_CSV = os.path.join(BASE_DIR, "static_dashboards", "table_1.csv")
+UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset.parquet")
+UEBA_CSV = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset.csv")
 
 # Only load columns the dashboard actually uses
 UEBA_COLS = [
     "user", "pc", "day",
-    # Auth
     "logon_count", "logoff_count", "off_hours_logon",
-    # File
     "file_open_count", "file_write_count", "file_copy_count",
     "file_delete_count", "unique_files_accessed", "off_hours_files_accessed",
-    # Removable media
     "usb_insert_count", "usb_remove_count", "off_hours_usb_usage",
-    # Email
-    "emails_sent", "unique_recipients", "external_emails_sent",
-    "attachments_sent", "off_hours_emails",
-    # HTTP
-    "http_total_requests", "http_visit_count", "http_download_count", "http_upload_count",
-    "http_jobsite_visits", "http_cloud_storage_visits", "http_suspicious_site_visits",
-    "off_hours_http_requests", "http_long_url_count", "unique_domains_visited",
-    # PC / endpoint
-    "pcs_used_count", "non_primary_pc_used_flag", "non_primary_pc_http_requests_flag",
-    "non_primary_pc_usb_flag", "non_primary_pc_file_copy_flag",
-    # Cross-channel flags
+    "emails_sent", "unique_recipients", "external_emails",
+    "attachements_sent", "off_hours_emails",
     "usb_file_activity_flag", "off_hours_activity_flag", "external_comm_activity_flag",
-    "jobsite_usb_activity_flag", "suspicious_upload_flag", "cloud_upload_flag",
-    "non_primary_pc_risk_flag",
 ]
 
 
@@ -631,8 +611,12 @@ def load_data():
 try:
     merged_df, user_risk = load_data()
     DATA_LOADED = True
-except Exception:
+except FileNotFoundError:
     DATA_LOADED = False
+    _load_error = None
+except Exception as e:
+    DATA_LOADED = False
+    _load_error = e
 
 
 # ──────────────────────────────────────────────────────────────
@@ -641,13 +625,16 @@ except Exception:
 
 if not DATA_LOADED:
     st.title("INSIDER THREAT DETECTION")
-    st.error(
-        "**Data files not found.** Please run the preprocessing and model notebooks first:\n\n"
-        "1. `CERT_Preprocessing.ipynb` → generates `processed_datasets/ueba_dataset.csv`\n"
-        "2. `Autoencoder.ipynb` → trains the encoder model\n"
-        "3. `Isolation_Forest.ipynb` → generates anomaly scores\n"
-        "4. `Alert_Object_Builder.ipynb` → generates `explainability/alert_table/alert_table_2.csv`"
-    )
+    if _load_error is not None:
+        st.error(f"**Failed to load data:** `{type(_load_error).__name__}: {_load_error}`")
+    else:
+        st.error(
+            "**Data files not found.** Please run the preprocessing and model notebooks first:\n\n"
+            "1. `CERT_Preprocessing.ipynb` → generates `processed_datasets/ueba_dataset.csv`\n"
+            "2. `Autoencoder.ipynb` → trains the encoder model\n"
+            "3. `Isolation_Forest.ipynb` → generates anomaly scores\n"
+            "4. `Static_Dashboard.ipynb` → generates `static_dashboards/table_1.csv`"
+        )
     st.stop()
 
 
@@ -657,30 +644,17 @@ if not DATA_LOADED:
 
 # Base behavioral feature columns (raw counts)
 RAW_FEATURES = [
-    # Auth
     "logon_count", "logoff_count", "off_hours_logon",
-    # File
     "file_open_count", "file_write_count", "file_copy_count",
     "file_delete_count", "unique_files_accessed", "off_hours_files_accessed",
-    # Removable media
     "usb_insert_count", "usb_remove_count", "off_hours_usb_usage",
-    # Email
-    "emails_sent", "unique_recipients", "external_emails_sent",
-    "attachments_sent", "off_hours_emails",
-    # HTTP
-    "http_total_requests", "http_visit_count", "http_download_count", "http_upload_count",
-    "http_jobsite_visits", "http_cloud_storage_visits", "http_suspicious_site_visits",
-    "off_hours_http_requests", "http_long_url_count", "unique_domains_visited",
-    # PC / endpoint
-    "pcs_used_count", "non_primary_pc_used_flag", "non_primary_pc_http_requests_flag",
-    "non_primary_pc_usb_flag", "non_primary_pc_file_copy_flag",
+    "emails_sent", "unique_recipients", "external_emails",
+    "attachements_sent", "off_hours_emails",
 ]
 RAW_FEATURES = [f for f in RAW_FEATURES if f in merged_df.columns]
 
 CROSS_FLAGS = [
     "usb_file_activity_flag", "off_hours_activity_flag", "external_comm_activity_flag",
-    "jobsite_usb_activity_flag", "suspicious_upload_flag", "cloud_upload_flag",
-    "non_primary_pc_risk_flag",
 ]
 CROSS_FLAGS = [f for f in CROSS_FLAGS if f in merged_df.columns]
 
@@ -690,30 +664,11 @@ CHANNELS = {
     "File Access":    ["file_open_count", "file_write_count", "file_copy_count",
                        "file_delete_count", "unique_files_accessed", "off_hours_files_accessed"],
     "Removable Media":["usb_insert_count", "usb_remove_count", "off_hours_usb_usage"],
-    "Email":          ["emails_sent", "unique_recipients", "external_emails_sent",
-                       "attachments_sent", "off_hours_emails"],
-    "HTTP Activity":  ["http_total_requests", "http_visit_count", "http_download_count",
-                       "http_upload_count", "http_jobsite_visits", "http_cloud_storage_visits",
-                       "http_suspicious_site_visits", "off_hours_http_requests",
-                       "http_long_url_count", "unique_domains_visited"],
-    "PC Activity":    ["pcs_used_count", "non_primary_pc_used_flag",
-                       "non_primary_pc_http_requests_flag", "non_primary_pc_usb_flag",
-                       "non_primary_pc_file_copy_flag"],
+    "Email":          ["emails_sent", "unique_recipients", "external_emails",
+                       "attachements_sent", "off_hours_emails"],
 }
 # Filter to features actually present
 CHANNELS = {k: [f for f in v if f in merged_df.columns] for k, v in CHANNELS.items()}
-# Drop empty channels (dataset may not have all features)
-CHANNELS = {k: v for k, v in CHANNELS.items() if v}
-
-# Explicit channel→color mapping so each channel keeps its color regardless of which are present in filtered data
-CHANNEL_COLOR_MAP = {
-    "Authentication":  "#ffffff",
-    "File Access":     "#e84545",
-    "Removable Media": "#d4a017",
-    "Email":           "#3a86a8",
-    "HTTP Activity":   "#7a7a7a",
-    "PC Activity":     "#6b4a2d",
-}
 
 # user_risk is now pre-computed inside load_data() and cached
 
@@ -869,7 +824,7 @@ _SECTION_INFO = {
         "A donut chart showing what proportion of activity records fall into each risk tier:\n\n"
         "- **HIGH** — anomaly score in the top percentile; warrants immediate review\n"
         "- **MEDIUM** — elevated but not critical; worth monitoring\n"
-        "- **LOW** — behavior consistent with typical baseline activity\n\n"
+        "- **LOW** — behaviour consistent with typical baseline activity\n\n"
         "Risk level is assigned per record based on the anomaly score percentile "
         "produced by the Isolation Forest model."
     ),
@@ -887,12 +842,12 @@ _SECTION_INFO = {
         "- **Percentile** — how the user ranks relative to all users (100 = most anomalous)\n"
         "- **High-risk days** — number of days flagged HIGH by the model\n"
         "- **Badge** — CRITICAL (≥80th pct), HIGH (≥60th), or ELEVATED (below 60th)\n\n"
-        "Click **Investigate →** to jump directly to that user's full behavioral profile."
+        "Click **Investigate →** to jump directly to that user's full behavioural profile."
     ),
     "Anomaly Score Distribution": (
         "**Anomaly Score Distribution**\n\n"
         "A histogram of raw anomaly scores across all records, coloured by risk level.\n\n"
-        "- Scores **near 0** indicate behavior very close to the normal baseline\n"
+        "- Scores **near 0** indicate behaviour very close to the normal baseline\n"
         "- Scores **toward 1** represent increasingly anomalous activity\n\n"
         "The Isolation Forest model assigns each record a score based on how easily it "
         "can be isolated from the rest of the dataset. Outliers require fewer splits and "
@@ -903,18 +858,14 @@ _SECTION_INFO = {
         "Counts of records where suspicious activity co-occurred across multiple data channels:\n\n"
         "- **USB + File Write** — removable device use paired with large file write activity\n"
         "- **Off-Hours Activity** — logins or actions recorded outside normal working hours\n"
-        "- **External Communication** — significant outbound traffic to external endpoints\n"
-        "- **Job Site + USB** — job-site browsing paired with USB insertion on the same day\n"
-        "- **Suspicious Upload** — HTTP upload to a suspicious or uncategorized domain\n"
-        "- **Cloud Upload** — HTTP upload to a known cloud storage service\n"
-        "- **Non-Primary PC** — sensitive activity (file copy, USB, HTTP) from an atypical endpoint\n\n"
+        "- **External Communication** — significant outbound traffic to external endpoints\n\n"
         "These compound flags are stronger indicators of insider threat than any single "
         "channel signal alone."
     ),
     "Anomaly Score Timeline": (
         "**Anomaly Score Timeline**\n\n"
         "A day-by-day line chart of the selected user's anomaly score.\n\n"
-        "- A **persistent elevation** suggests consistently unusual behavior\n"
+        "- A **persistent elevation** suggests consistently unusual behaviour\n"
         "- A **sudden spike** may point to a discrete incident on that date\n\n"
         "Use the date filter to narrow the window and correlate peaks with raw activity records below."
     ),
@@ -922,15 +873,14 @@ _SECTION_INFO = {
         "**Behavioral Profile**\n\n"
         "A radar chart comparing the selected user's **average feature values** (solid line) "
         "against the **global population average** (dashed line).\n\n"
-        "Each axis represents one of six behavioral channels: Authentication, File Access, "
-        "Removable Media, Email, HTTP Activity, and PC Activity. "
+        "Each axis represents a behavioural feature (e.g. email volume, logon count, file writes). "
         "Axes where the user extends significantly beyond the population average indicate "
-        "dimensions of behavior worth investigating."
+        "dimensions of behaviour worth investigating."
     ),
     "Daily Feature Activity": (
         "**Daily Feature Activity**\n\n"
         "A heatmap of the user's raw feature values over time.\n\n"
-        "- Each **row** is one behavioral feature\n"
+        "- Each **row** is one behavioural feature\n"
         "- Each **column** is one day\n"
         "- **Darker cells** = higher-than-usual activity on that day and feature\n\n"
         "This lets you pinpoint exactly which features drove an anomaly spike on a given date."
@@ -940,34 +890,28 @@ _SECTION_INFO = {
         "A summary of whether this user triggered any multi-channel co-occurrence flags:\n\n"
         "- **USB + File Write** — device use coincided with large file write events\n"
         "- **Off-Hours Activity** — actions occurred outside normal business hours\n"
-        "- **External Communication** — outbound connections to external hosts were detected\n"
-        "- **Job Site + USB** — job-site browsing paired with USB insertion on the same day\n"
-        "- **Suspicious Upload** — HTTP upload to a suspicious or uncategorized domain\n"
-        "- **Cloud Upload** — HTTP upload to a known cloud storage service\n"
-        "- **Non-Primary PC** — sensitive activity from an atypical endpoint\n\n"
+        "- **External Communication** — outbound connections to external hosts were detected\n\n"
         "Combinations of multiple flags substantially increase the likelihood of an insider threat."
     ),
     "Raw Activity Records": (
         "**Raw Activity Records**\n\n"
         "A full table of every aggregated daily record for the selected user within the "
         "current filter window.\n\n"
-        "Each row represents one day and includes all behavioral features (email, file, "
+        "Each row represents one day and includes all behavioural features (email, file, "
         "HTTP, logon, device activity), the computed anomaly score, and the assigned risk level. "
         "Use this to audit exactly what the model saw on any particular date."
     ),
     "Channel Activity Volume": (
         "**Channel Activity Volume**\n\n"
-        "A line chart showing the total number of events recorded per day across each data channel "
-        "(Authentication, File Access, Removable Media, Email, HTTP Activity, PC Activity) "
-        "within the selected filters.\n\n"
+        "A bar chart showing the total number of events recorded across each data channel "
+        "(email, file, HTTP, logon, device) within the selected filters.\n\n"
         "Channels with disproportionately high volumes relative to peers can indicate "
         "a data exfiltration path that warrants deeper investigation."
     ),
     "Channel Volume Share": (
         "**Channel Volume Share**\n\n"
-        "A donut chart showing each channel's **percentage share** of all recorded events "
-        "across Authentication, File Access, Removable Media, Email, HTTP Activity, and PC Activity.\n\n"
-        "This gives a quick sense of which channels dominate activity organizationally. "
+        "A pie chart showing each channel's **percentage share** of all recorded events.\n\n"
+        "This gives a quick sense of which channels dominate activity organisationally. "
         "A sudden shift in these proportions between time periods may indicate an attack campaign."
     ),
     "Feature Distributions by Risk Level": (
@@ -975,7 +919,7 @@ _SECTION_INFO = {
         "Box plots for each numeric feature, grouped by risk level (HIGH / MEDIUM / LOW).\n\n"
         "The box shows the interquartile range (25th–75th percentile); the line inside is the median. "
         "Features where the HIGH box sits far above LOW are the **strongest predictors** "
-        "of anomalous behavioral in this dataset."
+        "of anomalous behaviour in this dataset."
     ),
     "Feature Correlation Matrix": (
         "**Feature Correlation Matrix**\n\n"
@@ -984,7 +928,7 @@ _SECTION_INFO = {
         "- **−1 (dark blue)** — features move in opposite directions\n"
         "- **~0** — no linear relationship\n\n"
         "Highly correlated features may be redundant for modelling, while unexpected "
-        "correlations can reveal undocumented behavioral patterns."
+        "correlations can reveal undocumented behavioural patterns."
     ),
 }
 
@@ -1259,21 +1203,18 @@ if active_page == "Overview":
     if CROSS_FLAGS:
         section_header("Cross-Channel Risk Flags (Global)", "sh_cross_flags")
         flag_labels = {
-            "usb_file_activity_flag":             "USB + File Write",
-            "off_hours_activity_flag":             "Off-Hours Activity",
-            "external_comm_activity_flag":         "External Communication",
-            "jobsite_usb_activity_flag":           "Job Site + USB",
-            "suspicious_upload_flag":              "Suspicious Upload",
-            "cloud_upload_flag":                   "Cloud Upload",
-            "non_primary_pc_risk_flag":            "Non-Primary PC",
+            "usb_file_activity_flag": "USB + File Write",
+            "off_hours_activity_flag": "Off-Hours Activity",
+            "external_comm_activity_flag": "External Communication",
         }
         flag_data = []
         for flag in CROSS_FLAGS:
             count = int(filtered_df[flag].sum()) if flag in filtered_df.columns else 0
             flag_data.append({"Flag": flag_labels.get(flag, flag), "Triggered": count})
+        flag_df = pd.DataFrame(flag_data)
 
-        flag_cols = st.columns(len(flag_data))
-        for col, row in zip(flag_cols, flag_data):
+        fc1, fc2, fc3 = st.columns(3)
+        for i, (col, row) in enumerate(zip([fc1, fc2, fc3], flag_data)):
             with col:
                 pct = (row["Triggered"] / max(len(filtered_df), 1)) * 100
                 col.metric(row["Flag"], f'{row["Triggered"]:,}', f"{pct:.1f}% of records")
@@ -1434,22 +1375,18 @@ if active_page == "Investigation":
     # ── Cross-Channel Flags for This User ──
     if CROSS_FLAGS:
         section_header("Cross-Channel Risk Indicators", "sh_cross_ind")
+        fc1, fc2, fc3 = st.columns(3)
         flag_details = [
-            ("usb_file_activity_flag",             "USB + FILE WRITE",       "USB inserted AND files written on same day"),
-            ("off_hours_activity_flag",             "OFF-HOURS ACTIVITY",     "Activity detected outside 9 AM - 5 PM"),
-            ("external_comm_activity_flag",         "EXTERNAL COMMS",         "Emails sent to external domains"),
-            ("jobsite_usb_activity_flag",           "JOB SITE + USB",         "Job-site browsing paired with USB activity"),
-            ("suspicious_upload_flag",              "SUSPICIOUS UPLOAD",      "Upload to suspicious or uncategorized domain"),
-            ("cloud_upload_flag",                   "CLOUD UPLOAD",           "Upload to known cloud storage service"),
-            ("non_primary_pc_risk_flag",            "NON-PRIMARY PC",         "Sensitive activity from an unusual endpoint"),
+            ("usb_file_activity_flag",        "USB + FILE WRITE",    "USB inserted AND files written on same day"),
+            ("off_hours_activity_flag",        "OFF-HOURS ACTIVITY",  "Activity detected outside 9 AM - 5 PM"),
+            ("external_comm_activity_flag",    "EXTERNAL COMMS",      "Emails sent to external domains"),
         ]
-        present_flags = [(flag, label, desc) for flag, label, desc in flag_details if flag in user_data.columns]
-        flag_cols = st.columns(max(len(present_flags), 1))
-        for col_w, (flag, label, desc) in zip(flag_cols, present_flags):
-            triggered = int(user_data[flag].sum())
-            total = len(user_data)
-            col_w.metric(label, f"{triggered} / {total} days")
-            col_w.caption(desc)
+        for col_w, (flag, label, desc) in zip([fc1, fc2, fc3], flag_details):
+            if flag in user_data.columns:
+                triggered = int(user_data[flag].sum())
+                total = len(user_data)
+                col_w.metric(label, f"{triggered} / {total} days")
+                col_w.caption(desc)
 
     # ── Raw Activity Table ──
     section_header("Raw Activity Records", "sh_raw_records")
@@ -1465,12 +1402,6 @@ if active_page == "Investigation":
 # PAGE: Alerts
 # ══════════════════════════════════════════════════════════════
 
-# ── Initialise live-mode session state ────────────────────────
-if "live_mode" not in st.session_state:
-    st.session_state.live_mode = False
-if "live_proc" not in st.session_state:
-    st.session_state.live_proc = None  # subprocess.Popen or None
-
 if active_page == "Alerts":
     st.markdown(
         "<div class='page-header-block'>"
@@ -1479,147 +1410,44 @@ if active_page == "Alerts":
         "</div>",
         unsafe_allow_html=True,
     )
+    _filter_bar("al_flt")
+    filtered_df = _get_filtered_df()
 
-    # ── Live-simulation control row ────────────────────────────
-    ctrl_left, ctrl_right = st.columns([3, 9])
-    with ctrl_left:
-        if not st.session_state.live_mode:
-            if st.button("▶ START LIVE SIMULATION", key="start_live", use_container_width=True):
-                # Clear any previous output
-                if os.path.exists(LIVE_OUTPUT):
-                    os.remove(LIVE_OUTPUT)
-                # Launch the unified simulation script as a subprocess
-                proc = subprocess.Popen(
-                    [sys.executable, LIVE_SIM_SCRIPT, "--interval", "0.5"],
-                    cwd=BASE_DIR,
-                )
-                st.session_state.live_proc = proc
-                st.session_state.live_mode = True
-                st.rerun()
-        else:
-            if st.button("⏹ STOP LIVE SIMULATION", key="stop_live", use_container_width=True):
-                proc = st.session_state.live_proc
-                if proc is not None:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                st.session_state.live_proc = None
-                st.session_state.live_mode = False
-                st.rerun()
+    # Alert severity filter within this tab
+    alert_cols = st.columns([2, 2, 2, 6])
+    with alert_cols[0]:
+        alert_risk = st.multiselect("Severity", ["HIGH", "MEDIUM", "LOW"], default=["HIGH", "MEDIUM"], key="alert_sev")
+    with alert_cols[1]:
+        min_pctl = st.slider("Min Percentile", 0.0, 100.0, 0.0, key="min_pctl")
+    with alert_cols[2]:
+        max_results = st.number_input("Max Rows", min_value=10, max_value=10000, value=500, step=50, key="max_rows")
 
-    # ── LIVE mode ─────────────────────────────────────────────
-    if st.session_state.live_mode:
-        # Check whether the subprocess is still running
-        proc = st.session_state.live_proc
-        proc_running = proc is not None and proc.poll() is None
-        stream_done  = False
+    alert_data = filtered_df[
+        (filtered_df["risk_levels"].isin(alert_risk)) &
+        (filtered_df["percentile_rank"] >= min_pctl)
+    ].sort_values("percentile_rank", ascending=False).head(max_results)
 
-        # Read all scored rows emitted so far
-        live_rows = []
-        if os.path.exists(LIVE_OUTPUT):
-            with open(LIVE_OUTPUT, "r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if obj.get("_eos"):
-                        stream_done = True
-                    else:
-                        live_rows.append(obj)
+    alert_display_cols = ["user", "day", "risk_levels", "anomaly_scores", "percentile_rank"]
+    # Add cross-channel flags if present
+    alert_display_cols += [c for c in CROSS_FLAGS if c in alert_data.columns]
 
-        # Status strip
-        _status_color = "#3c9" if proc_running else "#e84545"
-        _status_label = "RUNNING" if proc_running else ("COMPLETE" if stream_done else "STOPPED")
-        with ctrl_right:
-            st.markdown(
-                f"<span style='font-family:JetBrains Mono,monospace; font-size:11px; "
-                f"color:{_status_color}; letter-spacing:1.5px;'>● {_status_label}</span>"
-                f"<span style='font-family:JetBrains Mono,monospace; font-size:10px; "
-                f"color:#555; margin-left:16px;'>{len(live_rows):,} rows received</span>",
-                unsafe_allow_html=True,
-            )
+    st.dataframe(
+        alert_data[alert_display_cols],
+        use_container_width=True,
+        height=500,
+        column_config={
+            "risk_levels": st.column_config.TextColumn("Risk Level"),
+            "anomaly_scores": st.column_config.NumberColumn("Anomaly Score", format="%.6f"),
+            "percentile_rank": st.column_config.ProgressColumn("Percentile", min_value=0, max_value=100, format="%.1f"),
+        },
+    )
 
-        if live_rows:
-            live_df = pd.DataFrame(live_rows)
-            # Keep only the columns users care about; drop the diagnostic field
-            live_df = live_df.drop(columns=[c for c in ("_score_ms", "event_index") if c in live_df.columns])
-
-            # Most-recent rows first; cap at 500 to keep the table snappy
-            live_df = live_df.tail(500).iloc[::-1].reset_index(drop=True)
-
-            # Column config for the live table
-            _live_col_cfg = {
-                "risk_level":     st.column_config.TextColumn("Risk Level"),
-                "anomaly_score":  st.column_config.NumberColumn("Anomaly Score", format="%.6f"),
-                "percentile_rank":st.column_config.ProgressColumn("Percentile", min_value=0, max_value=100, format="%.1f"),
-            }
-            st.dataframe(live_df, use_container_width=True, height=500, column_config=_live_col_cfg)
-
-            st.download_button(
-                "EXPORT LIVE ALERTS",
-                data=live_df.to_csv(index=False).encode("utf-8"),
-                file_name="live_alerts.csv",
-                mime="text/csv",
-            )
-        else:
-            st.info("Waiting for first scored row… (models are loading)")
-
-        # Auto-refresh while the process is still running
-        if proc_running:
-            time.sleep(1)
-            st.rerun()
-        elif stream_done and st.session_state.live_mode:
-            # Natural end-of-stream: auto-stop
-            st.session_state.live_proc = None
-            st.session_state.live_mode = False
-            st.success("Simulation complete — all test rows processed.")
-
-    # ── STATIC mode ───────────────────────────────────────────
-    else:
-        _filter_bar("al_flt")
-        filtered_df = _get_filtered_df()
-
-        # Alert severity filter within this tab
-        alert_cols = st.columns([2, 2, 2, 6])
-        with alert_cols[0]:
-            alert_risk = st.multiselect("Severity", ["HIGH", "MEDIUM", "LOW"], default=["HIGH", "MEDIUM"], key="alert_sev")
-        with alert_cols[1]:
-            min_pctl = st.slider("Min Percentile", 0.0, 100.0, 0.0, key="min_pctl")
-        with alert_cols[2]:
-            max_results = st.number_input("Max Rows", min_value=10, max_value=10000, value=500, step=50, key="max_rows")
-
-        alert_data = filtered_df[
-            (filtered_df["risk_levels"].isin(alert_risk)) &
-            (filtered_df["percentile_rank"] >= min_pctl)
-        ].sort_values("percentile_rank", ascending=False).head(max_results)
-
-        alert_display_cols = ["user", "day", "risk_levels", "anomaly_scores", "percentile_rank"]
-        # Add cross-channel flags if present
-        alert_display_cols += [c for c in CROSS_FLAGS if c in alert_data.columns]
-
-        st.dataframe(
-            alert_data[alert_display_cols],
-            use_container_width=True,
-            height=500,
-            column_config={
-                "risk_levels":    st.column_config.TextColumn("Risk Level"),
-                "anomaly_scores": st.column_config.NumberColumn("Anomaly Score", format="%.6f"),
-                "percentile_rank":st.column_config.ProgressColumn("Percentile", min_value=0, max_value=100, format="%.1f"),
-            },
-        )
-
-        st.download_button(
-            "EXPORT ALERTS",
-            data=alert_data[alert_display_cols].to_csv(index=False).encode("utf-8"),
-            file_name="insider_threat_alerts.csv",
-            mime="text/csv",
-        )
+    st.download_button(
+        "EXPORT ALERTS",
+        data=alert_data[alert_display_cols].to_csv(index=False).encode("utf-8"),
+        file_name="insider_threat_alerts.csv",
+        mime="text/csv",
+    )
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1653,7 +1481,7 @@ if active_page == "Channels":
         if channel_ts:
             channel_ts_df = pd.concat(channel_ts)
             fig_ch_ts = px.line(channel_ts_df, x="Date", y="Volume", color="Channel",
-                                color_discrete_map=CHANNEL_COLOR_MAP)
+                                color_discrete_sequence=["#ffffff", "#e84545", "#d4a017", "#3a86a8"])
             fig_ch_ts.update_layout(**PLOTLY_LAYOUT, height=400)
             st.plotly_chart(fig_ch_ts, use_container_width=True)
 
@@ -1667,7 +1495,7 @@ if active_page == "Channels":
         if ch_totals:
             ch_df = pd.DataFrame(list(ch_totals.items()), columns=["Channel", "Total Events"])
             fig_ch_pie = px.pie(ch_df, values="Total Events", names="Channel",
-                                color="Channel", color_discrete_map=CHANNEL_COLOR_MAP,
+                                color_discrete_sequence=["#ffffff", "#e84545", "#d4a017", "#3a86a8"],
                                 hole=0.6)
             fig_ch_pie.update_layout(**PLOTLY_LAYOUT, height=400)
             st.plotly_chart(fig_ch_pie, use_container_width=True)
