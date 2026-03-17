@@ -13,7 +13,7 @@
 
 - UEBA Dataset v3 (ueba_dataset_3a.csv, ueba_dataset_3b.csv):
     * Version 3 introduces HTTP-related features and flags
-    * Number of Features (a, b): 34, 92 
+    * Number of Features (a, b): 34, 108 
     * Chunked loading is introduced for large CSV files (e.g., email.csv, http.csv)
     * Preprocessing pipeline now produces two dataset:
         - Dataset A: (user, pc, day) level dataset to be used for drill-down analysis

@@ -932,12 +932,12 @@ def build_layer_b(layer_a_df: pd.DataFrame, rolling_window: int=5) -> pd.DataFra
     return layer_b_df
 
 
-# Layer C
+# Drill-Down Functionality
 
 # Functions
-def get_layer_c_drilldown(layer_a_df: pd.DataFrame, user: str, day: str, sorting_cols: list[str] | None=None) -> pd.DataFrame:
+def get_drilldown(layer_a_df: pd.DataFrame, user: str, day: str, sorting_cols: list[str] | None=None) -> pd.DataFrame:
     """
-    Creates layer C, drill-down support which serves as a lookup layer built from layer A.
+    Creates drill-down support which serves as a lookup layer built from layer A's dataset.
     
     Args:
         layer_a_df: The behavioral matrix produced in layer A
