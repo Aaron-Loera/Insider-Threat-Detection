@@ -1,0 +1,962 @@
+import os
+import numpy as np
+import pandas as pd
+from urllib.parse import urlparse
+
+# Layer A
+
+# Constants
+DEFAULT_OUTPUT_DIR = "processed_datasets"
+WORK_HOURS = (9, 17)
+
+USECOLS_MAP = {
+    "logon":  ["date", "user", "pc", "activity"],
+    "file":   ["date", "user", "pc", "activity", "filename"],
+    "device": ["date", "user", "pc", "activity"],
+    "email":  ["date", "user", "pc", "to", "attachments"],
+    "http":   ["date", "user", "pc", "url", "activity"],
+}
+
+DTYPE_MAP = {
+    "user":     "category",
+    "pc":       "category",
+    "activity": "category",
+}
+
+TIMESTAMP_FORMAT = "%m/%d/%Y %H:%M:%S"
+
+LARGE_FILE_SOURCES = {"email", "http"}
+
+INTERNAL_EMAIL_DOMAIN = "dtaa.com"
+LONG_URL_THRESHOLD = 90
+
+JOB_DOMAINS = {
+    "careerbuilder.com",
+    "indeed.com",
+    "monster.com",
+    "simplyhired.com",
+    "linkedin.com",
+    "www.linkedin.com"
+}
+
+CLOUD_STORAGE_DOMAINS = {
+    "dropbox.com",
+    "www.dropbox.com",
+    "drive.google.com",
+    "docs.google.com",
+    "yousendit.com",
+    "www.yousendit.com"
+}
+
+SUSPICIOUS_DOMAINS = {
+    "wikileaks.org",
+    "www.wikileaks.org"
+}
+
+# Functions
+def load_raw_logs(cert_path: str) -> dict:
+    """
+    Loads the raw CERT log files needed for preprocessing. Small files are loaded eagerly
+    whereas large files are represented as {path: chunked=True} for downstream chunked
+    processing.
+    
+    Args:
+        cert_path: The base path containing the CERT dataset
+        
+    Returns:
+        dict: {file_name: DataFrame | {"path": str, "chunked": True}}
+    """
+    file_map = {
+        "logon":  "logon.csv",
+        "file":   "file.csv",
+        "device": "device.csv",
+        "email":  "email.csv",
+        "http":   "http.csv",
+    }
+    
+    logs = {}
+    missing_files = []
+    
+    for source_name, filename in file_map.items():
+        full_path = os.path.join(cert_path, filename)
+        # Takes note of missing file paths
+        if not os.path.exists(full_path):
+            missing_files.append(filename)
+            continue
+        # Defers large files for later chunked loading
+        if source_name in LARGE_FILE_SOURCES:
+            logs[source_name] = {"path": full_path, "chunked": True}
+        # Loads small files with optimized dtypes
+        else:
+            applicable_dtype = {col: DTYPE_MAP[col] for col in USECOLS_MAP[source_name] if col in DTYPE_MAP}
+            logs[source_name] = pd.read_csv(
+                full_path,
+                usecols=USECOLS_MAP[source_name],
+                dtype=applicable_dtype
+            )
+            
+    if missing_files:
+        raise FileNotFoundError("Missing required CERT files: " + ", ".join(missing_files))
+    
+    return logs
+
+
+def normalize_shared_columns(df: pd.DataFrame, remove_cols: list=["id"]) -> pd.DataFrame:
+    """
+    Normalizes CERT log files across commonly shared columns. Additionally drops columns that are deemed irrelevant.
+    
+    Args:
+        df: The raw CERT dataframe (logon, file, device, or email)
+        remove_cols: The columns to drop from the original CERT file
+        
+    Returns:
+        pd.Dataframe: A normalized dataframe with consistent identifiers and fields
+    """
+    # Standardizing column names
+    df = df.copy()
+    df.columns = df.columns.str.lower().str.strip()
+    
+    # Renaming date column
+    if "date" in df.columns:
+        df.rename(columns={"date": "timestamp"}, inplace=True)
+        
+    if "timestamp" not in df.columns:
+        raise KeyError("Expected a 'date' or 'timestamp' column in DataFrame.")
+        
+    # Converting timestamp to datetime.
+    df["timestamp"] = pd.to_datetime(df["timestamp"], format=TIMESTAMP_FORMAT, errors="coerce")
+    
+    # Dropping rows with invalid timestamps
+    df.dropna(axis=0, subset=["timestamp"], inplace=True)
+    
+    # Creating a 'day' aggregation key column
+    df["day"] = df["timestamp"].dt.floor("D")
+    
+    # Normalizing identifiers
+    df["user"] = df["user"].astype(str).str.lower().str.strip()
+    df["pc"] = df["pc"].astype(str).str.lower().str.strip()
+    
+    # Dropping unusable columns
+    remove_cols = [col.lower().strip() for col in remove_cols]
+    cols_to_drop = [col for col in remove_cols if col in df.columns]
+    df.drop(axis=1, columns=cols_to_drop, inplace=True)
+    
+    # Sorting rows for consistency
+    df.sort_values(by=["user", "pc", "timestamp"], inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    
+    return df
+
+def validate_normalized_files(logs: dict[str, pd.DataFrame], required_cols: set={"user", "pc", "timestamp", "day"}) -> None:
+    """
+    A sanity-check for normalized CERT logs before feature extraction is performed.
+    Chunked sources (email, http) are skipped as they are validated per-chunk during extraction.
+    
+    Args:
+        logs: A dictionary of the format: {log_name: DataFrame | {"path": str, "chunked": True}}
+        required_cols: A set of required columns for each CERT log
+        
+    Returns:
+        None:
+    """
+    print("Validating normalized files")
+    for name, df in logs.items():
+        # Case where file is marked as large file
+        if isinstance(df, dict):
+            print(f"Skipped {name}.csv (validated per chunk during extraction)")
+            continue
+        # Raises error if required column is missing
+        if not required_cols.issubset(df.columns):
+            missing = required_cols.difference(df.columns)
+            raise ValueError(f"Normalized {name} log is missing column(s): {sorted(missing)}")
+        # Raises error if required column is in invalid format
+        if str(df["day"].dtype) != "datetime64[ns]":
+            raise TypeError(f"Normalized {name} log has invalid 'day' format: {df["day"].dtype}")
+        
+    print("All CERT logs were properly normalized.")
+    
+    
+def extract_domain(url: str) -> str:
+    """
+    Extracts a lowercased domain from a URL-like value.
+    
+    Args:
+        url: Raw url string
+        
+    Returns:
+        str: The domain found within the URL
+    """
+    if pd.isna(url):
+        return ""
+    
+    url = str(url).strip().lower()
+    if not url:
+        return ""
+    
+    if not url.startswith(("http://", "https://")):
+        url = "http://" + url
+        
+    try:
+        return urlparse(url).netloc.lower()
+    except Exception:
+        return ""
+    
+    
+def load_log_in_chunks(filepath: str, usecols: list, dtype: dict, chunksize: int=50_000) -> pd.io.parsers.readers.TextFileReader:
+    """
+    Returns an iterator consisting of DataFrames for processing large CSV files in fixed-size chunks.
+    
+    Args:
+        filepath: Absolute path to the CSV file
+        usecols: The columns to load in from the CSV file
+        dtype: Dict of dtype assignments for specific columns
+        chunksize: Number of rows per chunk
+        
+    Returns:
+        pd.io.parsers.TextFileReader: An iterable of DataFrames, one per chunk
+    """
+    applicable_dtype = {col: dtype[col] for col in usecols if col in dtype}
+    return pd.read_csv(filepath, usecols=usecols, dtype=applicable_dtype, chunksize=chunksize)
+
+
+def combine_partial_aggregations(partial_list: list, merge_cols: list) -> pd.DataFrame:
+    """
+    Concatenates a list of per-chunk aggregated DataFrames and sums all count columns across groups.
+    
+    Args:
+        partial_list: A list containing the chunked groupby-aggregated DataFrames with additive count columns
+        merge_cols: The groupby key columns such as (user, pc, day)
+        
+    Returns:
+        pd.DataFrame: Combined aggregation with counts correctly summed across all chunks
+    """
+    combined = pd.concat(partial_list, ignore_index=True)
+    return combined.groupby(merge_cols, as_index=False).sum()
+
+
+def build_unique_count(identity_frames: list, merge_cols: list, value_col: str, output_col: str) -> pd.DataFrame:
+    """
+    Computes an exact per-group nunique count from accumulated per-chunk DataFrames.
+    
+    Args:
+        identity_frames: Per-chunk deduplicated DataFrames
+        merge_cols: The groupby key columns (user, pc, day)
+        value_col: The column whose distinct values are being counted
+        output_col: Name for the resulting count column
+        
+    Returns:
+        pd.DataFrame: (merge_cols + output_col) with exact nunique counts
+    """
+    combined = pd.concat(identity_frames, ignore_index=True).drop_duplicates()
+    return (
+        combined.groupby(merge_cols)[value_col]
+        .nunique()
+        .reset_index()
+        .rename(columns={value_col: output_col})
+    )
+    
+    
+def extract_logon_features(norm_df: pd.DataFrame, work_hours: tuple=(9, 17)) -> pd.DataFrame:
+    """
+    Extracts daily authentication behavior features from logon events to create an aggregated feature table.
+    
+    Args:
+        norm_df: The normalized logon dataframe
+        work_hours: The range describing regular work hours based on a 24-hour format
+        
+    Returns:
+        pd.DataFrame: Aggregated logon behavior features per (user, pc, day)
+    """
+    df = norm_df.copy()
+    
+    # Defining off-hour logons
+    df["hour"] = df["timestamp"].dt.hour
+    df["off_hours"] = (df["hour"] < work_hours[0]) | (df["hour"] > work_hours[1])
+    
+    # Creating groups based on (user, pc, day)    
+    grouped = df.groupby(["user", "pc", "day"])
+    
+    # Deriving logon-related features
+    features = grouped.agg(
+        logon_count = ("activity", lambda x: (x=="Logon").sum()),
+        logoff_count = ("activity", lambda x: (x=="Logoff").sum()),
+        off_hours_logon = ("off_hours", "sum")
+    ).reset_index()
+    
+    return features
+
+
+def extract_file_features(norm_df: pd.DataFrame, work_hours: tuple=(9, 17)) -> pd.DataFrame:
+    """
+    Extracts daily file access behavior features to create an aggregated feature table.
+    
+    Args:
+        norm_df: Normalized file activity dataframe
+        work_hours: The range describing regular work hours based on a 24-hour format
+        
+    Returns:
+        pd.DataFrame: Aggregated file behavior features per (user, pc, day)
+    """
+    df = norm_df.copy()
+    
+    # Defining off-hour logons
+    df["hour"] = df["timestamp"].dt.hour
+    df["off_hours"] = (df["hour"] < work_hours[0]) | (df["hour"] > work_hours[1])
+    
+    # Creating groups based on (user, pc, day)
+    grouped = df.groupby(["user", "pc", "day"])
+    
+    # Deriving file-related features
+    features = grouped.agg(
+        file_open_count = ("activity", lambda x: (x=="File Open").sum()),
+        file_write_count = ("activity", lambda x: (x=="File Write").sum()),
+        file_copy_count = ("activity", lambda x: (x=="File Copy").sum()),
+        file_delete_count = ("activity", lambda x: (x=="File Delete").sum()),
+        unique_files_accessed = ("filename", "nunique"),
+        off_hours_files_accessed = ("off_hours", "sum")
+    ).reset_index()
+    
+    return features
+
+
+def extract_device_features(norm_df: pd.DataFrame, work_hours: tuple=(9, 17)) -> pd.DataFrame:
+    """
+    Extracts daily removable media (USB) behavior features to create an aggregated feature table.
+    
+    Args:
+        norm_df: Normalized file activity dataframe
+        work_hours: The range describing regular work hours based on a 24-hour format
+        
+    Returns:
+        pd.DataFrame: Aggregated removable media behavior features per (user, pc, day)
+    """
+    df = norm_df.copy()
+    
+    # Defining off-hour logons
+    df["hour"] = df["timestamp"].dt.hour
+    df["off_hours"] = (df["hour"] < work_hours[0]) | (df["hour"] > work_hours[1])
+    
+    # Creating groups based on (user, pc, day)
+    grouped = df.groupby(["user", "pc", "day"])
+    
+    # Deriving media-related features
+    features = grouped.agg(
+        usb_insert_count = ("activity", lambda x: (x=="Connect").sum()),
+        usb_remove_count = ("activity", lambda x: (x=="Disconnect").sum()),
+        off_hours_usb_usage = ("off_hours", "sum")
+    ).reset_index()
+    
+    return features
+
+
+def extract_email_features_chunked(filepath: str, work_hours: tuple = (9, 17), chunksize: int=50_000) -> pd.DataFrame:
+    """
+    Memory-efficient email feature extraction via chunked CSV reading.
+    
+    Additive counts are accumulated per chunk then combined via `combine_partial_aggregations`.
+    Unique recipients are tracked via `build_unique_count`.
+    
+    Args:
+        filepath: Absolute path to email.csv
+        work_hours: The range describing regular work hours based on a 24-hour format
+        chunksize: Number of rows per chunk
+        
+    Returns:
+        pd.DataFrame: Aggregated email behavior features per (user, pc, day)
+    """
+    MERGE_COLS = ["user", "pc", "day"]
+    partial_aggs = []
+    identity_frames = []
+
+    for chunk in load_log_in_chunks(filepath, USECOLS_MAP["email"], DTYPE_MAP, chunksize):
+        chunk = normalize_shared_columns(chunk)
+        
+        # Defining off-hours emails
+        chunk["hour"] = chunk["timestamp"].dt.hour
+        chunk["off_hours"] = (chunk["hour"] < work_hours[0]) | (chunk["hour"] > work_hours[1])
+        
+        # External email heuristic
+        chunk["external_emails_sent"] = ~chunk["to"].str.contains(INTERNAL_EMAIL_DOMAIN, na=False)
+
+        # Deriving email-related features per chunk
+        partial = chunk.groupby(MERGE_COLS).agg(
+            emails_sent = ("to", "count"),
+            external_emails_sent = ("external_emails_sent", "sum"),
+            attachments_sent = ("attachments", lambda x: x.notnull().sum()),
+            off_hours_emails = ("off_hours", "sum")
+        ).reset_index()
+
+        # Accumulating deduplicated tuples (user, pc, day, to) for unique recipient counting
+        identity_frames.append(chunk[MERGE_COLS + ["to"]].drop_duplicates())
+        partial_aggs.append(partial)
+        del chunk, partial
+
+    # Computes aggregation and unique count operations across all chunks
+    combined = combine_partial_aggregations(partial_aggs, MERGE_COLS)
+    unique_recipients  = build_unique_count(identity_frames, MERGE_COLS, "to", "unique_recipients")
+
+    return combined.merge(unique_recipients, on=MERGE_COLS, how="left")
+
+
+def extract_http_features_chunked(filepath: str, work_hours: tuple=(9, 17), chunksize: int=50_000) -> pd.DataFrame:
+    """
+    Memory-efficient HTTP feature extraction via chunked CSV reading.
+    
+    Additive counts are accumulated per chunk then combined via `combine_partial_aggregations`.
+    Unique domains visited are tracked via `build_unique_count`.
+    
+    Args:
+        filepath: Absolute path to http.csv
+        work_hours: The range describing regular work hours based on a 24-hour format
+        chunksize: Number of rows per chunk
+        
+    Returns:
+        pd.DataFrame: Aggregated web browsing features per (user, pc, day)
+    """
+    MERGE_COLS = ["user", "pc", "day"]
+    partial_aggs = []
+    identity_frames = []
+
+    for chunk in load_log_in_chunks(filepath, USECOLS_MAP["http"], DTYPE_MAP, chunksize):
+        chunk = normalize_shared_columns(chunk)
+
+        # Defining off-hours web activity
+        chunk["hour"] = chunk["timestamp"].dt.hour
+        chunk["off_hours"] = (chunk["hour"] < work_hours[0]) | (chunk["hour"] > work_hours[1])
+
+        # Deriving http-related features per chunk
+        chunk["url"] = chunk["url"].astype(str).str.strip().str.lower()
+        chunk["url_length"] = chunk["url"].str.len()
+        chunk["domain"] = chunk["url"].apply(extract_domain)
+        
+        chunk["is_www_visit"] = (chunk["activity"] == "WWW Visit").astype(int)
+        chunk["is_www_download"] = (chunk["activity"] == "WWW Download").astype(int)
+        chunk["is_www_upload"] = (chunk["activity"] == "WWW Upload").astype(int)
+               
+        chunk["is_job_site"] = chunk["domain"].isin(JOB_DOMAINS).astype(int)
+        chunk["is_cloud_storage"] = chunk["domain"].isin(CLOUD_STORAGE_DOMAINS).astype(int)
+        chunk["is_suspicious_domain"] = chunk["domain"].isin(SUSPICIOUS_DOMAINS).astype(int)
+        chunk["is_long_url"] = (chunk["url_length"] >= LONG_URL_THRESHOLD).astype(int)
+
+        # Grouping chunk and aggregating features
+        grouped_chunk = chunk.groupby(MERGE_COLS, dropna=False)
+        
+        agg_chunk = grouped_chunk.agg(
+            http_total_requests = ("url", "count"),
+            http_visit_count = ("is_www_visit", "sum"),
+            http_download_count = ("is_www_download", "sum"),
+            http_upload_count = ("is_www_upload", "sum"),
+            http_jobsite_visits = ("is_job_site", "sum"),
+            http_cloud_storage_visits = ("is_cloud_storage", "sum"),
+            http_suspicious_site_visits = ("is_suspicious_domain", "sum"),
+            off_hours_http_requests = ("off_hours", "sum"),
+            http_long_url_count = ("is_long_url", "sum"),
+        ).reset_index()
+
+        # Accumulating deduplicated tuples (user, pc, day, domain) for unique domain counting
+        identity_frames.append(chunk[MERGE_COLS + ["domain"]].drop_duplicates())
+        partial_aggs.append(agg_chunk)
+        del chunk, agg_chunk
+
+    # Computes aggregation and unique count operations across all chunks
+    combined = combine_partial_aggregations(partial_aggs, MERGE_COLS)
+    unique_domains = build_unique_count(identity_frames, MERGE_COLS, "domain", "unique_domains_visited")
+
+    return combined.merge(unique_domains, on=MERGE_COLS, how="left")
+
+
+def merge_behavioral_features(feature_tables: list[pd.DataFrame], merge_cols: list=["user", "pc", "day"]) -> pd.DataFrame:
+    """
+    Merges multiple aggregated behavioral feature tables into a single dataset.
+    
+    Args:
+        feature_tables: A list of aggregated features dataframes to merge, where each table must contain the merge columns
+        merge_cols: Key columns to merge on
+        
+    Returns:
+        pd.DataFrame: A unified table with missing activity filled with zeros
+    """
+    # Filtering out empty tables
+    valid_tables = [df for df in feature_tables if ((df is not None) and (not df.empty))]
+    
+    if not valid_tables:
+        raise ValueError("No valid feature tables provided for merging")
+
+    merged_df = valid_tables[0].copy()
+    
+    # Iteratively merging tables
+    for df in valid_tables[1:]:
+        merged_df = merged_df.merge(df, on=merge_cols, how="outer")
+        
+    # Identifying feature columns, excluding identifiers
+    feature_cols = [col for col in merged_df.columns if col not in merge_cols]
+    
+    # Filling missing feature values with zero
+    merged_df[feature_cols] = merged_df[feature_cols].fillna(0).astype("int32")
+    merged_df[feature_cols] = merged_df[feature_cols].astype("int32")
+    
+    # Sorting dataframe for consistency
+    merged_df.sort_values(by=merge_cols, inplace=True)
+    merged_df.reset_index(drop=True, inplace=True)
+    
+    # Ensuring no duplicate rows are 
+    if merged_df.duplicated(subset=merge_cols).any():
+        raise ValueError("Duplicate rows detected after merging feature tables.")
+    
+    return merged_df
+
+
+def add_pc_features(df: pd.DataFrame, min_history: int=10) -> pd.DataFrame:
+    """
+    Adds PC-derived behavioral history to an aggregated behavioral matrix.
+    
+    Args:
+        df: The behavioral matrix
+        min_history: Minimum prior observations required before flagging new PC usage as abnormal activity
+        
+    Returns:
+        pd.DataFrame: A behavioral matrix with added user-to-PC behavioral history
+    """
+    df = df.copy()
+    df.sort_values(by=["user", "day", "pc"], inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    
+    # Tracking historical PC usage counts
+    df["pc_prior_use_count"] = df.groupby(["user", "pc"]).cumcount()
+    df["user_total_prior_days"] = df.groupby("user").cumcount()
+    df["pc_seen_before"]  = (df["pc_prior_use_count"] > 0).astype(int)
+    
+    df["pc_prior_use_ratio"] = np.where(
+        df["user_total_prior_days"] > 0,
+        df["pc_prior_use_count"] / df["user_total_prior_days"],
+        0.0
+    )
+    
+    # Identifying a user's primary PC (i.e., most-used PC)
+    primary_pc_map = (
+        df.groupby(["user", "pc"])
+        .size()
+        .reset_index(name="count")
+        .sort_values(["user", "count", "pc"], ascending=[True, False, True])
+        .drop_duplicates(subset=["user"])
+        .set_index("user")["pc"]
+        .to_dict()
+    )
+    
+    df["pc_is_primary"] = (df["pc"] == df["user"].map(primary_pc_map)).astype(int)
+    
+    # Tracking the number of distinct PC's previously used
+    df["distinct_pcs_used_prior"] = (
+        df.groupby(["user"])["pc"]
+        .transform(lambda s: [len(set(s.iloc[:i])) for i in range(len(s))])
+    )
+    
+    # Tracking the number of unique PC's used on a given day
+    same_day_counts = (
+        df.groupby(["user", "day"])["pc"]
+        .transform("nunique")
+    )
+    
+    df["n_pcs_used_today"] = same_day_counts
+    
+    # Identifies new PC usage after an established history
+    df["new_pc_after_stable_history"] = (
+        (df["pc_prior_use_count"] == 0) &
+        (df["user_total_prior_days"] >= min_history)
+    ).astype(int)
+    
+    df.drop(columns=["user_total_prior_days"], inplace=True)
+    
+    return df
+
+
+def build_layer_a(cert_path: str, work_hours: tuple=(9, 17)) -> pd.DataFrame:
+    """
+    Builds the complete layer A drill-down-ready dataset at the (user, pc, day) level.
+    
+    Args:
+        cert_path: The base path containing the CERT dataset
+        work_hours: The range describing regular work hours based on a 24-hour format
+    """
+    # Loading the raw log files from the CERT dataset
+    raw_logs = load_raw_logs(cert_path)
+    
+    # Normalizing and validating files
+    normalized_logs = {}
+    
+    for name, df in raw_logs.items():
+        if isinstance(df, dict) and df.get("chunked"):
+            print(f"{name}.csv will be normalized when loaded per-chunk")
+            normalized_logs[name] = df["path"]
+        else:
+            normalized_logs[name] = normalize_shared_columns(df)
+    
+    # Feature engineering each log file respectively
+    feature_tables = [
+        extract_logon_features(normalized_logs["logon"], work_hours),
+        extract_file_features(normalized_logs["file"], work_hours),
+        extract_device_features(normalized_logs["device"], work_hours),
+        extract_email_features_chunked(normalized_logs["email"], work_hours),
+        extract_http_features_chunked(normalized_logs["http"], work_hours)
+    ]
+    
+    # Merging the feature tables
+    behavioral_matrix = merge_behavioral_features(feature_tables)
+    
+    # Adding pc behavioral features
+    layer_a_matrix = add_pc_features(behavioral_matrix)
+    
+    return layer_a_matrix
+
+
+def save_dataset(dataset: pd.DataFrame, filename: str, output_dir: str=DEFAULT_OUTPUT_DIR) -> str:
+    """
+    Saves the UEBA-enhanced dataset to the specified path as a CSV file.
+    
+    Args:
+        dataset: The UEBA-enhanced dataset
+        file_name: The desired name of the CSV dataset
+        output_dir: Directory where processed outputs are saved
+        
+    Returns:
+        str: Full path to the saved dataset
+    """
+    # Ensures directory exists
+    save_path = os.path.join(os.getcwd(), output_dir)
+    os.makedirs(save_path, exist_ok=True)
+    
+    # Creates full file path
+    file_path = os.path.join(save_path, filename)
+    
+    # Saving the dataset
+    dataset.to_csv(file_path)
+    print(f"Dataset successfully saved to: {file_path}")
+    
+    return file_path
+
+
+# Layer B
+
+# Constants
+LAYER_B_ID_COLS = ["user", "day"]
+
+LAYER_B_SUM_COLS = [
+    "logon_count",
+    "logoff_count",
+    "off_hours_logon",
+    "file_open_count",
+    "file_write_count",
+    "file_copy_count",
+    "file_delete_count",
+    "unique_files_accessed",
+    "off_hours_files_accessed",
+    "usb_insert_count",
+    "usb_remove_count",
+    "off_hours_usb_usage",
+    "emails_sent",
+    "external_emails_sent",
+    "attachments_sent",
+    "off_hours_emails",
+    "unique_recipients",
+    "http_total_requests",
+    "http_visit_count",
+    "http_download_count",
+    "http_upload_count",
+    "http_jobsite_visits",
+    "http_cloud_storage_visits",
+    "http_suspicious_site_visits",
+    "off_hours_http_requests",
+    "http_long_url_count",
+    "unique_domains_visited"
+]
+
+LAYER_B_MAX_COLS = [
+    "pc_seen_before",
+    "new_pc_after_stable_history"
+]
+
+LAYER_B_MEAN_COLS = [
+    "pc_prior_use_ratio",
+    "pc_is_primary"
+]
+
+LAYER_B_CONTEXT_MAX_COLS = [
+    "distinct_pcs_used_prior"
+]
+
+LAYER_B_UEBA_BASE_FEATURES = [
+    "logon_count",
+    "logoff_count",
+    "off_hours_logon",
+    "file_open_count",
+    "file_write_count",
+    "file_copy_count",
+    "file_delete_count",
+    "unique_files_accessed",
+    "off_hours_files_accessed",
+    "usb_insert_count",
+    "usb_remove_count",
+    "off_hours_usb_usage",
+    "emails_sent",
+    "external_emails_sent",
+    "attachments_sent",
+    "off_hours_emails",
+    "unique_recipients",
+    "http_total_requests",
+    "http_visit_count",
+    "http_download_count",
+    "http_upload_count",
+    "http_jobsite_visits",
+    "http_cloud_storage_visits",
+    "http_suspicious_site_visits",
+    "off_hours_http_requests",
+    "http_long_url_count",
+    "unique_domains_visited",
+    "pcs_used_count",
+    "non_primary_pc_used_flag",
+    "non_primary_pc_http_requests_flag",
+    "non_primary_pc_usb_flag",
+    "non_primary_pc_file_copy_flag",
+]
+
+# Functions
+def collapse_layer(layer_a_dataset: pd.DataFrame, required_cols: list=["user", "pc", "day"]) -> pd.DataFrame:
+    """
+    Collapses the layer A (user, pc, day) behavioral matrix into a layer B (user, day) matrix.
+    
+    Args:
+        layer_a_dataset: Layer A DataFrame at the (user, day, pc) level
+        require_cols: Required key columns in the inputted dataset
+        
+    Returns:
+        pd.DataFrame: Layer B dataframe at the (user, day) level
+    """
+    df = layer_a_dataset.copy()
+    df.sort_values(by=required_cols, inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    
+    # Ensuring no required columns are missing
+    missing = set(required_cols).difference(df.columns)
+    if missing:
+        raise ValueError(f"Layer A dataset missing required columns: {sorted(missing)}")
+    
+    # Mapping feature column to their corresponding operation
+    agg_map = {}
+    
+    for col in LAYER_B_SUM_COLS:
+        if col in df.columns:
+            agg_map[col] = "sum"
+            
+    for col in LAYER_B_MAX_COLS:
+        if col in df.columns:
+            agg_map[col] = "max"
+            
+    for col in LAYER_B_MEAN_COLS:
+        if col in df.columns:
+            agg_map[col] = "mean"
+            
+    for col in LAYER_B_CONTEXT_MAX_COLS:
+        if col in df.columns:
+            agg_map[col] = "max"
+            
+    layer_b_df = df.groupby(by=["user", "day"], as_index=False).agg(agg_map)
+    
+    # Deriving number of unique PCs used
+    pcs_used = (
+        df.groupby(["user", "day"])["pc"]
+        .nunique()
+        .reset_index(name="pcs_used_count")
+    )
+        
+    # Defining non-primary PC column
+    if "pc_is_primary" in df.columns:
+        non_primary_mask = (df["pc_is_primary"] == 0).astype(int)
+    else:
+        non_primary_mask = pd.Series(0, index=df.index)
+        
+    non_primary_rows = (
+        df.assign(non_primary_pc_used=non_primary_mask)
+        .groupby(["user", "day"])["non_primary_pc_used"]
+        .sum()
+        .reset_index(name="non_primary_pc_used_flag")
+    )
+    
+    # Extracting counts from different logs
+    http_source = df["http_total_requests"] if "http_total_requests" in df.columns else 0
+    usb_source = df["usb_insert_count"] if "usb_insert_count" in df.columns else 0
+    file_copy_source = df["file_copy_count"] if "file_copy_count" in df.columns else 0
+    
+    # Deriving cross-channel flags
+    non_primary_http = (
+        df.assign(non_primary_http=non_primary_mask * http_source)
+        .groupby(["user", "day"])["non_primary_http"]
+        .sum()
+        .reset_index(name="non_primary_pc_http_requests_flag")
+    )
+    
+    non_primary_usb = (
+        df.assign(non_primary_usb=non_primary_mask * usb_source)
+        .groupby(["user", "day"])["non_primary_usb"]
+        .sum()
+        .reset_index(name="non_primary_pc_usb_flag")
+    )
+    
+    non_primary_file_copy = (
+        df.assign(non_primary_file_copy=non_primary_mask * file_copy_source)
+        .groupby(["user", "day"])["non_primary_file_copy"]
+        .sum()
+        .reset_index(name="non_primary_pc_file_copy_flag")
+    )
+    
+    # Merging derived behavioral features
+    layer_b_df = layer_b_df.merge(pcs_used, on=["user", "day"], how="left")
+    layer_b_df = layer_b_df.merge(non_primary_rows, on=["user", "day"], how="left")
+    layer_b_df = layer_b_df.merge(non_primary_http, on=["user", "day"], how="left")
+    layer_b_df = layer_b_df.merge(non_primary_usb, on=["user", "day"], how="left")
+    layer_b_df = layer_b_df.merge(non_primary_file_copy, on=["user", "day"], how="left")
+    
+    # Renaming primary PC column
+    if "pc_is_primary" in layer_b_df.columns:
+        layer_b_df.rename(columns={"pc_is_primary": "primary_pc_activity_ratio"}, inplace=True)
+
+    # Filling missing values in feature columns
+    feature_cols = [col for col in layer_b_df.columns if col not in LAYER_B_ID_COLS]
+    layer_b_df[feature_cols] = layer_b_df[feature_cols].fillna(0)
+    
+    # Ensuring there's not duplicate rows in the final dataset
+    if layer_b_df.duplicated(subset=LAYER_B_ID_COLS).any():
+        raise ValueError("Duplicate rows detected in layer B after collapse.")
+    
+    return layer_b_df
+
+
+def get_layer_b_features(df: pd.DataFrame) -> list[str]:
+    """
+    Returns the layer B columns that should receive z-scores and rolling deltas.
+    
+    Args:
+        df: The collapsed layer B dataset
+        
+    Returns
+        str: A list of feature column names
+    """
+    col_names = [col for col in LAYER_B_UEBA_BASE_FEATURES if col in df.columns]
+    return col_names
+
+
+def apply_ueba_enhancements(df: pd.DataFrame, feature_cols: list, rolling_window: int=5) -> pd.DataFrame:
+    """
+    Applying UEBA-specific enhancements to a behavioral matrix such as:
+    - Per-user causal z-score deviations based only on prior history
+    - Causal rolling mean deltas that exclude the current row
+    - Cross-channel risk flags
+    
+    Args:
+        df: A layer B dataset at the (user, day) granularity
+        feature_cols: Feature columns to apply z-scores and rolling deltas to
+        rolling_window: Window size in days for rolling statistics
+        
+    Returns:
+        pd.DataFrame: An enhanced UEBA-ready feature dataset
+    """
+    df = df.copy()
+    df.sort_values(by=["user", "day"], inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    
+    # Defining per-user causal z-score deviations
+    for col in feature_cols:
+        grouped = df.groupby("user")[col]
+        
+        # Building baselines from prior observations
+        prior_mean = grouped.transform(lambda x: x.shift(1).expanding(min_periods=1).mean())
+        prior_std = grouped.transform(lambda x: x.shift(1).expanding(min_periods=2).std())
+        
+        # Avoiding division by zero
+        prior_std.replace(0, np.nan, inplace=True)
+        
+        # Computing z-scores
+        df[f"{col}_zscore"] = ((df[col] - prior_mean) / prior_std).fillna(0.0)
+        
+    # Defining causal rolling temporal deltas
+    for col in feature_cols:
+        prior_rolling_mean = (
+            df.groupby("user")[col]
+            .transform(lambda x: x.shift(1).rolling(window=rolling_window, min_periods=1).mean())
+        )
+        # First observations have no prior window, so the delta defaults to 0.
+        df[f"{col}_rolling_delta"] = (df[col] - prior_rolling_mean).fillna(0.0)
+        
+    # Extracting off-hour columns
+    off_hours_cols = [col for col in feature_cols if col.startswith("off_hours")]
+    
+    if off_hours_cols:
+        df["off_hours_activity_flag"] = (df[off_hours_cols].sum(axis=1) > 0).astype(int)
+    else:
+        df["off_hours_activity_flag"] = 0
+        
+    # Defining cross-channel risk flags
+    df["usb_file_activity_flag"] = ((df.get("usb_insert_count", 0) > 0) & (df.get("file_write_count", 0) > 0)).astype(int)
+        
+    df["external_comm_activity_flag"] = (df.get("external_emails_sent", 0) > 0).astype(int)
+    
+    df["jobsite_usb_activity_flag"] = ((df.get("http_jobsite_visits", 0) > 0) & (df.get("usb_insert_count", 0) > 0)).astype(int)
+    
+    df["suspicious_upload_flag"] = ((df.get("http_jobsite_visits", 0) > 0) & (df.get("http_upload_count", 0) > 0)).astype(int)
+    
+    df["cloud_upload_flag"] = ((df.get("http_upload_count", 0) > 0) & (df.get("http_cloud_storage_visits", 0) > 0)).astype(int)
+    
+    df["non_primary_pc_risk_flag"] = (
+        (df.get("non_primary_pc_http_requests_flag", 0) > 0) |
+        (df.get("non_primary_pc_usb_flag", 0) > 0) |
+        (df.get("non_primary_pc_file_copy_flag", 0) > 0)
+    ).astype(int)
+
+    return df
+
+
+def build_layer_b(layer_a_df: pd.DataFrame, rolling_window: int=5) -> pd.DataFrame:
+    """
+    Builds the final layer B user-day UEBA modeling matrix.
+    
+    Args:
+        layer_a_df: The behavioral matrix produced in layer A
+        rolling_window: The window size in days to compute the rolling delta
+        
+    Returns:
+        pd.DataFrame: A model-ready UEBA dataset at the (user, day) level
+    """
+    layer_b_df = collapse_layer(layer_a_df)
+    feature_cols = get_layer_b_features(layer_b_df)
+    layer_b_df = apply_ueba_enhancements(layer_b_df, feature_cols=feature_cols, rolling_window=rolling_window)
+    
+    return layer_b_df
+
+
+# Layer C
+
+# Functions
+def get_layer_c_drilldown(layer_a_df: pd.DataFrame, user: str, day: str, sorting_cols: list[str] | None=None) -> pd.DataFrame:
+    """
+    Creates layer C, drill-down support which serves as a lookup layer built from layer A.
+    
+    Args:
+        layer_a_df: The behavioral matrix produced in layer A
+        user: User to investigate
+        day: Day to investigate (YYYY-MM-DD format)
+        sorting_cols: Columns used to sort returned values
+        
+    Returns:
+        pd.DataFrame: 
+    """
+    # Lookup of the specified user and day
+    drilldown_df = layer_a_df[(layer_a_df["user"] == user) & (layer_a_df["day"] == day)].copy()
+    
+    # Sorts rows based on the specified columns
+    if sorting_cols:
+        drilldown_df.sort_values(
+            by=sorting_cols,
+            ascending=False,
+            inplace=True,
+            ignore_index=True)
+    
+    return drilldown_df

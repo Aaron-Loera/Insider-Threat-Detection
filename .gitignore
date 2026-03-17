@@ -6,8 +6,9 @@
 *.npy
 *.keras
 settings.json
-Preprocessing.py
 
+# Notebooks
+Scratch.ipynb
 
 # Python
 __pycache__/
