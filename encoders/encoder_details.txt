@@ -4,6 +4,7 @@
         - Latent Dimension: 16
         - Hidden Dimension: 64
         - Epochs: 40
+        - Batch Size: 128
     * Loss:
         - Training Loss: 2.82%
         - Validation Loss: 3.29%
@@ -14,6 +15,19 @@
         - Latent Dimension: 16
         - Hidden Dimension: 64
         - Epochs: 40
+        - Batch Size: 128
     * Loss:
         - Training Loss: 4.16%
         - Validation Loss: 4.77%
+
+- Autoencoder Model 3 (encoders\encoder_model_3):
+    * This model was trained on "ueba_dataset_3b"
+    * This model now has 2 hidden layers compared to 1 in the previous models
+    * Hyperparameters:
+        - Latent Dimension: 16
+        - Hidden Dimensions: 64 and 32
+        - Epochs: 40 
+        - Batch Size: 256
+    * Loss 
+        - Training Loss: 11.65%
+        - Validation Loss: 10.63%
