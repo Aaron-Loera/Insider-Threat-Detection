@@ -6,7 +6,7 @@ import tensorflow as tf
 
 class ReconstructionErrorExplainer:
     """
-    Decomposed an Autoencoders reconstruction error into:
+    Decomposes an Autoencoder's reconstruction error into:
         - Feature-level errors
         - Percentage contribution per feature
         - Optional behavioral group-level aggregation
@@ -64,7 +64,7 @@ class ReconstructionErrorExplainer:
             total_errors: An array containing total reconstruction error per sample
             
         Returns:
-            np.ndarray: The contribition ratio of the shape: (n_samples, n_features)
+            np.ndarray: The contribution ratio of the shape: (n_samples, n_features)
         """
         # Ensuring there's no division by 0
         total_error_safe = np.where(total_error == 0, 1e-8, total_error)
@@ -134,7 +134,7 @@ class ReconstructionErrorExplainer:
             model: A trained autoencoder model
             metadata: Optional metadata columns
             include_feat_err: Includes raw per-feature reconstruction errors
-            include_contributions: Inlcudes per-feature contribution ratios
+            include_contributions: Includes per-feature contribution ratios
             
         Returns:
             pd.DataFrame: A structured DataFrame containing metadata, total error, group-level errors, and optional feature-level details

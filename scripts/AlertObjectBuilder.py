@@ -117,7 +117,7 @@ class AlertObjectBuilder:
         Extracts the top-K contributing factors from a row.
         
         Args:
-            row: A row consisting of metadata and recontruction error data
+            row: A row consisting of metadata and reconstruction error data
             
         Returns:
             list: A list of the form: (feature_name, contribution_value)
@@ -164,7 +164,6 @@ class AlertObjectBuilder:
         # Creating alert dictionary
         alert = {
             "user": row["user"],
-            "pc": row["pc"],
             "day": row["day"],
             "ae_percentile_rank": ae_percentile,
             "ae_risk_band": ae_risk_band,
