@@ -11,3 +11,10 @@
         - N-Estimators: 200
         - Contamination: 0.05
         - Random State: 42
+
+- Isolation Forest Model 3 (isolation_forests\iforest_model_3):
+    * This model was trained on Autoencoder Model 3's latent embeddings
+    * Hyperparameters:
+        - N-Estimators: 200
+        - Contamination: 0.05
+        - Random State: 42

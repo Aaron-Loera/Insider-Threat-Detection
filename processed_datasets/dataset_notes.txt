@@ -1,8 +1,23 @@
 - UEBA Dataset (ueba_dataset.csv):
     * This is the baseline UEBA dataset 
-    * Number of Features (exluding user, PC, and day): 54
+    * Number of Features (excluding user, PC, and day): 54
+    * Working Hours: (9, 17)
+    * Rolling Window Size: 7
 
 - UEBA Dataset v2 (ueba_dataset_2.csv):
     * Version 2 introduces PC-related features and flags:
     * Number of Features (excluding user, PC, and day): 78
+    * Corrected how z-scores and rolling deltas were computed
+    * Working Hours: (9, 17)
+    * Rolling Window Size: 7
+
+- UEBA Dataset v3 (ueba_dataset_3a.csv, ueba_dataset_3b.csv):
+    * Version 3 introduces HTTP-related features and flags
+    * Number of Features (a, b): 34, 108 
+    * Chunked loading is introduced for large CSV files (e.g., email.csv, http.csv)
+    * Preprocessing pipeline now produces two dataset:
+        - Dataset A: (user, pc, day) level dataset to be used for drill-down analysis
+        - Dataset B: (user, day) level dataset to be used for model training
+    * Working Hours: (9, 17)
+    * Rolling Window Size: 5
 

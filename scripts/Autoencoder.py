@@ -8,14 +8,14 @@ class Autoencoder:
     Autoencoder for learning latent representation of UEBA behavioral features.
     """
     
-    def __init__(self, input_dim: int, latent_dim: int=16, hidden_dim: int=64, learning_rate: float=1e-3) -> None:
+    def __init__(self, input_dim: int, latent_dim: int=16, hidden_dims: tuple | int=64, learning_rate: float=1e-3) -> None:
         """
         Initializes the autoencoder architecture.
         
         Args:
             input_dim: The number of input features
             latent_dim: The size of latent embeddings
-            hidden_dim: The size of hidden layers
+            hidden_dim: The size of hidden layers. If a tuple is provided each integer is treated as its own hidden layer
             learning_rate: Optimizer learning rate
             
         Returns:
@@ -23,7 +23,8 @@ class Autoencoder:
         """
         self.input_dim = input_dim
         self.latent_dim = latent_dim
-        self.hidden_dim = hidden_dim
+        
+        self.hidden_dims = hidden_dims
         self.learning_rate = learning_rate
         
         self.autoencoder, self.encoder = self._build_model()
@@ -42,11 +43,27 @@ class Autoencoder:
         """
         # Encoder construction
         inputs = layers.Input(shape=(self.input_dim,), name="ueba_input")
-        x = layers.Dense(self.hidden_dim, activation="relu")(inputs)
+
+        if isinstance(self.hidden_dims, int):
+            x = layers.Dense(self.hidden_dims, activation="relu")(inputs)
+            
+        elif isinstance(self.hidden_dims, tuple):
+            x = layers.Dense(self.hidden_dims[0], activation="relu")(inputs)
+            for i in range(1, len(self.hidden_dims)):
+                x = layers.Dense(self.hidden_dims[i], activation="relu")(x)
+        
+        # Latent space   
         latent = layers.Dense(self.latent_dim, activation="relu", name="latent_space")(x)
         
         # Decoder construction
-        x = layers.Dense(self.hidden_dim, activation="relu")(latent)
+        if isinstance(self.hidden_dims, int):
+            x = layers.Dense(self.hidden_dims, activation="relu")(latent)
+            
+        elif isinstance(self.hidden_dims, tuple):
+            x = layers.Dense(self.hidden_dims[-1], activation="relu")(latent)
+            for i in range(len(self.hidden_dims)-2, -1, -1):
+                x = layers.Dense(self.hidden_dims[i], activation="relu")(x)
+                
         outputs = layers.Dense(self.input_dim, activation="linear")(x)
         
         # Defining the autoencoder and encoder
@@ -118,7 +135,7 @@ class Autoencoder:
         # Reconstructing original feature matrix
         reconstruction = self.autoencoder.predict(feature_matrix)
         
-        # Computing the mean sqaured error
+        # Computing the mean squared error
         error = np.mean(np.square(feature_matrix - reconstruction), axis=1)
         
         return error

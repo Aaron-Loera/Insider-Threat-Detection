@@ -13,7 +13,7 @@ class UEBAIsolationForest:
         
         Args:
             n_estimators: The number of trees in the forest
-            max_samples: The subsamples size for each tree
+            max_samples: The subsample size for each tree
             contamination: Expected proportion of anomalies
             random_state: Random seed for reproducibility
             
@@ -31,7 +31,7 @@ class UEBAIsolationForest:
      
     def train(self, latent_embeddings: np.ndarray):
         """
-        Trains the Isolation Forest on latent embeddibgs.
+        Trains the Isolation Forest on latent embeddings.
         
         Args:
             latent_embeddings: Latent embedding matrix of shape: (n_samples, latent_emb_dim)
