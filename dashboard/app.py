@@ -523,10 +523,10 @@ st.markdown("""
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Prefer Parquet (5-10x faster I/O); fall back to CSV
-ANALYST_TABLE_PARQUET = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_2.parquet")
-ANALYST_TABLE_CSV = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_2.csv")
-UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_2.parquet")
-UEBA_CSV = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_2.csv")
+ANALYST_TABLE_PARQUET = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_3.parquet")
+ANALYST_TABLE_CSV = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_3.csv")
+UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.parquet")
+UEBA_CSV = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.csv")
 
 # Only load columns the dashboard actually uses
 UEBA_COLS = [

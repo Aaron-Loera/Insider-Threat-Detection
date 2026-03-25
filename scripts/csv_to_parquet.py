@@ -19,8 +19,8 @@ import pandas as pd
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CSV_FILES = [
-    os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset.csv"),
-    os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_2.csv"),
+    os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.csv"),
+    os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_3.csv"),
 ]
 
 
