@@ -532,7 +532,7 @@ ANALYST_TABLE_CSV = os.path.join(BASE_DIR, "explainability", "alert_table", "ale
 UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.parquet")
 UEBA_CSV = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.csv")
 LIVE_OUTPUT = os.path.join(BASE_DIR, "processed_datasets", "live_results.jsonl")
-
+LIVE_SIM_SCRIPT = os.path.join(BASE_DIR, "live_simulation.py")
 # Only load columns the dashboard actually uses
 UEBA_COLS = [
     "user", "pc", "day",
