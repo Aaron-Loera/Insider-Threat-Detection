@@ -73,31 +73,3 @@ def get_scores(newData_df):
     result_df.index = newData_df.index
 
     return result_df
-
-# Function to emulate live data
-def emulate_live_data(test_df_path="processed_datasets/test_stream.csv", live_path="processed_datasets/live.csv", interval=0.5):
-    
-    test_data = pd.read_csv(test_df_path)
-    live_data = pd.DataFrame()  # Start with empty live.csv
-    
-    for idx, row in test_data.iterrows():
-        # Append one row to live.csv
-        row_df = pd.DataFrame([row])
-        live_data = pd.concat([live_data, row_df], ignore_index=True)
-        live_data.to_csv(live_path, index=False)
-
-        print(f"Appended row {idx} to {live_path}")
-        
-        print(get_scores(row_df))  # send this to dashboard
-        
-        # Wait before next row
-        time.sleep(interval)
-        
-        # Break if test data is exhausted
-        if idx >= len(test_data) - 1:
-            break
-
-# Run in a thread 
-if __name__ == "__main__":
-    thread = threading.Thread(target=emulate_live_data)
-    thread.start()
