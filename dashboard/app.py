@@ -5,7 +5,11 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import json
 import os
+import subprocess
+import sys
+import time
 
 # ──────────────────────────────────────────────────────────────
 # Page Config & Custom CSS
@@ -1395,6 +1399,12 @@ if active_page == "Investigation":
 # PAGE: Alerts
 # ══════════════════════════════════════════════════════════════
 
+# ── Initialise live-mode session state ────────────────────────
+if "live_mode" not in st.session_state:
+    st.session_state.live_mode = False
+if "live_proc" not in st.session_state:
+    st.session_state.live_proc = None  # subprocess.Popen or None
+
 if active_page == "Alerts":
     st.markdown(
         "<div class='page-header-block'>"
@@ -1403,44 +1413,147 @@ if active_page == "Alerts":
         "</div>",
         unsafe_allow_html=True,
     )
-    _filter_bar("al_flt")
-    filtered_df = _get_filtered_df()
 
-    # Alert severity filter within this tab
-    alert_cols = st.columns([2, 2, 2, 6])
-    with alert_cols[0]:
-        alert_risk = st.multiselect("Severity", ["HIGH", "MEDIUM", "LOW"], default=["HIGH", "MEDIUM"], key="alert_sev")
-    with alert_cols[1]:
-        min_pctl = st.slider("Min Percentile", 0.0, 100.0, 0.0, key="min_pctl")
-    with alert_cols[2]:
-        max_results = st.number_input("Max Rows", min_value=10, max_value=10000, value=500, step=50, key="max_rows")
+    # ── Live-simulation control row ────────────────────────────
+    ctrl_left, ctrl_right = st.columns([3, 9])
+    with ctrl_left:
+        if not st.session_state.live_mode:
+            if st.button("▶ START LIVE SIMULATION", key="start_live", use_container_width=True):
+                # Clear any previous output
+                if os.path.exists(LIVE_OUTPUT):
+                    os.remove(LIVE_OUTPUT)
+                # Launch the unified simulation script as a subprocess
+                proc = subprocess.Popen(
+                    [sys.executable, LIVE_SIM_SCRIPT, "--interval", "0.5"],
+                    cwd=BASE_DIR,
+                )
+                st.session_state.live_proc = proc
+                st.session_state.live_mode = True
+                st.rerun()
+        else:
+            if st.button("⏹ STOP LIVE SIMULATION", key="stop_live", use_container_width=True):
+                proc = st.session_state.live_proc
+                if proc is not None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                st.session_state.live_proc = None
+                st.session_state.live_mode = False
+                st.rerun()
 
-    alert_data = filtered_df[
-        (filtered_df["risk_levels"].isin(alert_risk)) &
-        (filtered_df["percentile_rank"] >= min_pctl)
-    ].sort_values("percentile_rank", ascending=False).head(max_results)
+    # ── LIVE mode ─────────────────────────────────────────────
+    if st.session_state.live_mode:
+        # Check whether the subprocess is still running
+        proc = st.session_state.live_proc
+        proc_running = proc is not None and proc.poll() is None
+        stream_done  = False
 
-    alert_display_cols = ["user", "day", "risk_levels", "anomaly_scores", "percentile_rank"]
-    # Add cross-channel flags if present
-    alert_display_cols += [c for c in CROSS_FLAGS if c in alert_data.columns]
+        # Read all scored rows emitted so far
+        live_rows = []
+        if os.path.exists(LIVE_OUTPUT):
+            with open(LIVE_OUTPUT, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if obj.get("_eos"):
+                        stream_done = True
+                    else:
+                        live_rows.append(obj)
 
-    st.dataframe(
-        alert_data[alert_display_cols],
-        use_container_width=True,
-        height=500,
-        column_config={
-            "risk_levels": st.column_config.TextColumn("Risk Level"),
-            "anomaly_scores": st.column_config.NumberColumn("Anomaly Score", format="%.6f"),
-            "percentile_rank": st.column_config.ProgressColumn("Percentile", min_value=0, max_value=100, format="%.1f"),
-        },
-    )
+        # Status strip
+        _status_color = "#3c9" if proc_running else "#e84545"
+        _status_label = "RUNNING" if proc_running else ("COMPLETE" if stream_done else "STOPPED")
+        with ctrl_right:
+            st.markdown(
+                f"<span style='font-family:JetBrains Mono,monospace; font-size:11px; "
+                f"color:{_status_color}; letter-spacing:1.5px;'>● {_status_label}</span>"
+                f"<span style='font-family:JetBrains Mono,monospace; font-size:10px; "
+                f"color:#555; margin-left:16px;'>{len(live_rows):,} rows received</span>",
+                unsafe_allow_html=True,
+            )
 
-    st.download_button(
-        "EXPORT ALERTS",
-        data=alert_data[alert_display_cols].to_csv(index=False).encode("utf-8"),
-        file_name="insider_threat_alerts.csv",
-        mime="text/csv",
-    )
+        if live_rows:
+            live_df = pd.DataFrame(live_rows)
+            # Keep only the columns users care about; drop the diagnostic field
+            live_df = live_df.drop(columns=[c for c in ("_score_ms", "event_index") if c in live_df.columns])
+
+            # Most-recent rows first; cap at 500 to keep the table snappy
+            live_df = live_df.tail(500).iloc[::-1].reset_index(drop=True)
+
+            # Column config for the live table
+            _live_col_cfg = {
+                "risk_level":     st.column_config.TextColumn("Risk Level"),
+                "anomaly_score":  st.column_config.NumberColumn("Anomaly Score", format="%.6f"),
+                "percentile_rank":st.column_config.ProgressColumn("Percentile", min_value=0, max_value=100, format="%.1f"),
+            }
+            st.dataframe(live_df, use_container_width=True, height=500, column_config=_live_col_cfg)
+
+            st.download_button(
+                "EXPORT LIVE ALERTS",
+                data=live_df.to_csv(index=False).encode("utf-8"),
+                file_name="live_alerts.csv",
+                mime="text/csv",
+            )
+        else:
+            st.info("Waiting for first scored row… (models are loading)")
+
+        # Auto-refresh while the process is still running
+        if proc_running:
+            time.sleep(1)
+            st.rerun()
+        elif stream_done and st.session_state.live_mode:
+            # Natural end-of-stream: auto-stop
+            st.session_state.live_proc = None
+            st.session_state.live_mode = False
+            st.success("Simulation complete — all test rows processed.")
+
+    # ── STATIC mode ───────────────────────────────────────────
+    else:
+        _filter_bar("al_flt")
+        filtered_df = _get_filtered_df()
+
+        # Alert severity filter within this tab
+        alert_cols = st.columns([2, 2, 2, 6])
+        with alert_cols[0]:
+            alert_risk = st.multiselect("Severity", ["HIGH", "MEDIUM", "LOW"], default=["HIGH", "MEDIUM"], key="alert_sev")
+        with alert_cols[1]:
+            min_pctl = st.slider("Min Percentile", 0.0, 100.0, 0.0, key="min_pctl")
+        with alert_cols[2]:
+            max_results = st.number_input("Max Rows", min_value=10, max_value=10000, value=500, step=50, key="max_rows")
+
+        alert_data = filtered_df[
+            (filtered_df["risk_levels"].isin(alert_risk)) &
+            (filtered_df["percentile_rank"] >= min_pctl)
+        ].sort_values("percentile_rank", ascending=False).head(max_results)
+
+        alert_display_cols = ["user", "day", "risk_levels", "anomaly_scores", "percentile_rank"]
+        # Add cross-channel flags if present
+        alert_display_cols += [c for c in CROSS_FLAGS if c in alert_data.columns]
+
+        st.dataframe(
+            alert_data[alert_display_cols],
+            use_container_width=True,
+            height=500,
+            column_config={
+                "risk_levels":    st.column_config.TextColumn("Risk Level"),
+                "anomaly_scores": st.column_config.NumberColumn("Anomaly Score", format="%.6f"),
+                "percentile_rank":st.column_config.ProgressColumn("Percentile", min_value=0, max_value=100, format="%.1f"),
+            },
+        )
+
+        st.download_button(
+            "EXPORT ALERTS",
+            data=alert_data[alert_display_cols].to_csv(index=False).encode("utf-8"),
+            file_name="insider_threat_alerts.csv",
+            mime="text/csv",
+        )
 
 
 # ══════════════════════════════════════════════════════════════
