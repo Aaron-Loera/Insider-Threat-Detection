@@ -6,6 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
+import ast as _ast
 
 # ──────────────────────────────────────────────────────────────
 # Page Config & Custom CSS
@@ -523,10 +524,10 @@ st.markdown("""
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Prefer Parquet (5-10x faster I/O); fall back to CSV
-ANALYST_TABLE_PARQUET = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_2.parquet")
-ANALYST_TABLE_CSV = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_2.csv")
-UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_2.parquet")
-UEBA_CSV = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_2.csv")
+ANALYST_TABLE_PARQUET = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_3.parquet")
+ANALYST_TABLE_CSV = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_3.csv")
+UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.parquet")
+UEBA_CSV = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.csv")
 
 # Only load columns the dashboard actually uses
 UEBA_COLS = [
@@ -582,8 +583,11 @@ def load_data():
         if "day" in df.columns:
             df["day"] = pd.to_datetime(df["day"], errors="coerce")
 
-    # Merge
-    analyst_cols = ["user", "day", "anomaly_scores", "percentile_rank", "risk_levels"]
+    # Merge — include alert-context columns from the alert table
+    analyst_cols = [
+        "user", "day", "anomaly_scores", "percentile_rank", "risk_levels",
+        "top_contributors", "if_percentile_rank", "if_risk_band", "explanation",
+    ]
     analyst_cols = [c for c in analyst_cols if c in analyst.columns]
     merged = ueba.merge(analyst[analyst_cols], on=["user", "day"], how="inner")
 
@@ -681,6 +685,94 @@ PLOTLY_LAYOUT = dict(
 )
 
 RISK_COLORS = {"HIGH": "#e84545", "MEDIUM": "#d4a017", "LOW": "#3a86a8"}
+
+# ──────────────────────────────────────────────────────────────
+# Alert context helpers
+# ──────────────────────────────────────────────────────────────
+
+import ast as _ast
+
+_FEATURE_LABELS: dict[str, str] = {
+    "off_hours_logon":             "after-hours logon activity",
+    "off_hours_logon_count":       "after-hours logon activity",
+    "logon_count":                 "elevated logon frequency",
+    "file_open_count":             "high file open activity",
+    "file_write_count":            "file write activity",
+    "file_copy_count":             "file copy activity",
+    "file_delete_count":           "file deletion activity",
+    "unique_files_accessed":       "access to many unique files",
+    "off_hours_files_accessed":    "after-hours file access",
+    "usb_insert_count":            "USB device insertion",
+    "usb_remove_count":            "USB device removal",
+    "off_hours_usb_usage":         "after-hours USB usage",
+    "usb_file_activity_flag":      "USB-related file activity",
+    "emails_sent":                 "high email volume",
+    "unique_recipients":           "many unique email recipients",
+    "external_emails":             "external email activity",
+    "external_email_count":        "external email activity",
+    "attachements_sent":           "email attachment activity",
+    "off_hours_emails":            "after-hours email activity",
+    "off_hours_activity_flag":     "off-hours behavioral anomaly",
+    "external_comm_activity_flag": "external communication flags",
+}
+
+
+def parse_top_contributors(raw) -> list[str]:
+    """Return a list of feature name strings from top_contributors, however it is stored."""
+    if raw is None:
+        return []
+    if isinstance(raw, float):
+        return []  # NaN from a left-join miss
+    if isinstance(raw, list):
+        names = []
+        for item in raw:
+            if isinstance(item, (list, tuple)) and len(item) >= 1:
+                names.append(str(item[0]))
+            elif isinstance(item, str):
+                names.append(item)
+        return names
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return []
+        try:
+            parsed = _ast.literal_eval(raw)
+            if isinstance(parsed, list):
+                return parse_top_contributors(parsed)
+        except Exception:
+            pass
+    return []
+
+
+def prettify_feature_name(name: str) -> str:
+    """Convert a raw snake_case feature name to an analyst-readable label."""
+    cleaned = name.strip().replace("contribution_", "")
+    return _FEATURE_LABELS.get(cleaned, cleaned.replace("_", " "))
+
+
+def build_alert_summary(top_contributors_raw) -> str:
+    """
+    Return a short, analyst-friendly sentence describing the top contributing
+    behaviors for an alert.  Gracefully returns a fallback if data is missing.
+    """
+    features = parse_top_contributors(top_contributors_raw)
+    if not features:
+        return "No contributor detail available for this alert."
+
+    labels: list[str] = []
+    seen: set[str] = set()
+    for f in features:
+        lbl = prettify_feature_name(f)
+        if lbl not in seen:
+            seen.add(lbl)
+            labels.append(lbl)
+
+    if len(labels) == 1:
+        return f"This alert is primarily driven by {labels[0]}."
+    if len(labels) == 2:
+        return f"This alert is mainly driven by {labels[0]} and {labels[1]}."
+    body = ", ".join(labels[:-1]) + f", and {labels[-1]}"
+    return f"This alert is mainly driven by {body}."
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1196,9 +1288,7 @@ if active_page == "Overview":
     if CROSS_FLAGS:
         section_header("Cross-Channel Risk Flags (Global)", "sh_cross_flags")
         flag_labels = {
-            "usb_file_activity_flag": "USB + File Write",
-            "off_hours_activity_flag": "Off-Hours Activity",
-            "external_comm_activity_flag": "External Communication",
+            "usb_file_activity_flag": "USB + FILE WRITE",    "off_hours_activity_flag": "OFF-HOURS ACTIVITY",    "external_comm_activity_flag": "EXTERNAL COMMS",
         }
         flag_data = []
         for flag in CROSS_FLAGS:
@@ -1399,14 +1489,14 @@ if active_page == "Alerts":
     st.markdown(
         "<div class='page-header-block'>"
         "<h1 class='page-title'>Alerts</h1>"
-        "<p class='page-subtitle'>Sortable, filterable table of all anomaly detection alerts. Click column headers to sort.</p>"
+        "<p class='page-subtitle'>Sortable, filterable list of anomaly detection alerts with behavioral context.</p>"
         "</div>",
         unsafe_allow_html=True,
     )
     _filter_bar("al_flt")
     filtered_df = _get_filtered_df()
 
-    # Alert severity filter within this tab
+    # ── Filters (unchanged) ──
     alert_cols = st.columns([2, 2, 2, 6])
     with alert_cols[0]:
         alert_risk = st.multiselect("Severity", ["HIGH", "MEDIUM", "LOW"], default=["HIGH", "MEDIUM"], key="alert_sev")
@@ -1418,23 +1508,106 @@ if active_page == "Alerts":
     alert_data = filtered_df[
         (filtered_df["risk_levels"].isin(alert_risk)) &
         (filtered_df["percentile_rank"] >= min_pctl)
-    ].sort_values("percentile_rank", ascending=False).head(max_results)
+    ].sort_values("percentile_rank", ascending=False).head(int(max_results))
 
+    # Cap card rendering to keep the UI responsive
+    CARD_LIMIT = 100
+    total_alerts = len(alert_data)
+    card_data = alert_data.head(CARD_LIMIT)
+
+    if total_alerts == 0:
+        st.info("No alerts match the current filters.")
+    else:
+        if total_alerts > CARD_LIMIT:
+            st.caption(
+                f"Displaying top {CARD_LIMIT} of {total_alerts:,} matching alerts. "
+                "Use the export button below for the complete set."
+            )
+
+        # ── Column header row ──
+        st.markdown(
+            "<div style='display:grid;grid-template-columns:72px 1fr 108px 90px 130px;"
+            "gap:8px;padding:6px 4px;border-bottom:1px solid #1a1a1a;margin-bottom:2px;'>"
+            "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+            "text-transform:uppercase;letter-spacing:1.5px;'>Risk</span>"
+            "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+            "text-transform:uppercase;letter-spacing:1.5px;'>User / Investigation hint</span>"
+            "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+            "text-transform:uppercase;letter-spacing:1.5px;'>Day</span>"
+            "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+            "text-transform:uppercase;letter-spacing:1.5px;'>Percentile</span>"
+            "<span></span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Per-alert card rows ──
+        for i, row in enumerate(card_data.itertuples()):
+            risk    = getattr(row, "risk_levels",    "LOW")
+            user    = getattr(row, "user",           "—")
+            day_val = getattr(row, "day",            None)
+            day_str = day_val.strftime("%Y-%m-%d") if hasattr(day_val, "strftime") else str(day_val)
+            pctl    = getattr(row, "percentile_rank", 0.0)
+            top_raw = getattr(row, "top_contributors", None)
+            summary = build_alert_summary(top_raw)
+
+            risk_color = RISK_COLORS.get(risk, "#666666")
+
+            c_risk, c_info, c_day, c_pctl, c_btn = st.columns([1, 5, 2, 1, 2])
+
+            with c_risk:
+                st.markdown(
+                    f"<div style='padding-top:5px;'>"
+                    f"<span style='background:{risk_color}22;color:{risk_color};font-size:9px;"
+                    f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:2px 6px;"
+                    f"border:1px solid {risk_color}55;display:inline-block;'>{risk}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+            with c_info:
+                st.markdown(
+                    f"<div style='padding:2px 0 4px 0;'>"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                    f"color:#e0e0e0;font-weight:600;'>{user}</span>"
+                    f"<br><span style='font-family:Inter,sans-serif;font-size:11px;"
+                    f"color:#666;line-height:1.5;'>{summary}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+            with c_day:
+                st.markdown(
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                    f"color:#888;padding-top:5px;'>{day_str}</div>",
+                    unsafe_allow_html=True,
+                )
+
+            with c_pctl:
+                st.markdown(
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                    f"color:{risk_color};padding-top:5px;'>P{pctl:.1f}</div>",
+                    unsafe_allow_html=True,
+                )
+
+            with c_btn:
+                if st.button("Investigate →", key=f"al_inv_{i}", use_container_width=True):
+                    st.session_state["inv_user_search"] = user
+                    st.session_state["_nav_request"] = "Investigation"
+                    st.rerun()
+
+            st.markdown(
+                "<div style='border-bottom:1px solid #0d0d0d;margin:2px 0;'></div>",
+                unsafe_allow_html=True,
+            )
+
+    # ── Export (unchanged columns + top_contributors if present) ──
     alert_display_cols = ["user", "day", "risk_levels", "anomaly_scores", "percentile_rank"]
-    # Add cross-channel flags if present
     alert_display_cols += [c for c in CROSS_FLAGS if c in alert_data.columns]
+    if "top_contributors" in alert_data.columns:
+        alert_display_cols.append("top_contributors")
 
-    st.dataframe(
-        alert_data[alert_display_cols],
-        use_container_width=True,
-        height=500,
-        column_config={
-            "risk_levels": st.column_config.TextColumn("Risk Level"),
-            "anomaly_scores": st.column_config.NumberColumn("Anomaly Score", format="%.6f"),
-            "percentile_rank": st.column_config.ProgressColumn("Percentile", min_value=0, max_value=100, format="%.1f"),
-        },
-    )
-
+    st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
     st.download_button(
         "EXPORT ALERTS",
         data=alert_data[alert_display_cols].to_csv(index=False).encode("utf-8"),
