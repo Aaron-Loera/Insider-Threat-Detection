@@ -538,7 +538,14 @@ UEBA_COLS = [
     "usb_insert_count", "usb_remove_count", "off_hours_usb_usage",
     "emails_sent", "unique_recipients", "external_emails",
     "attachements_sent", "off_hours_emails",
+    # HTTP / web activity (v3 dataset)
+    "http_total_requests", "http_visit_count", "http_download_count",
+    "http_upload_count", "http_jobsite_visits", "http_cloud_storage_visits",
+    "http_suspicious_site_visits", "off_hours_http_requests",
+    "http_long_url_count", "unique_domains_visited",
+    # Cross-channel flags
     "usb_file_activity_flag", "off_hours_activity_flag", "external_comm_activity_flag",
+    "jobsite_usb_activity_flag", "suspicious_upload_flag", "cloud_upload_flag",
 ]
 
 
@@ -647,27 +654,35 @@ RAW_FEATURES = [
     "usb_insert_count", "usb_remove_count", "off_hours_usb_usage",
     "emails_sent", "unique_recipients", "external_emails",
     "attachements_sent", "off_hours_emails",
+    "http_total_requests", "http_visit_count", "http_download_count",
+    "http_upload_count", "http_jobsite_visits", "http_cloud_storage_visits",
+    "http_suspicious_site_visits", "off_hours_http_requests",
+    "http_long_url_count", "unique_domains_visited",
 ]
 RAW_FEATURES = [f for f in RAW_FEATURES if f in merged_df.columns]
 
 CROSS_FLAGS = [
     "usb_file_activity_flag", "off_hours_activity_flag", "external_comm_activity_flag",
+    "jobsite_usb_activity_flag", "suspicious_upload_flag", "cloud_upload_flag",
 ]
 CROSS_FLAGS = [f for f in CROSS_FLAGS if f in merged_df.columns]
 
 # Channel groupings for radar / breakdown charts
 CHANNELS = {
-    "Authentication": ["logon_count", "logoff_count", "off_hours_logon"],
-    "File Access":    ["file_open_count", "file_write_count", "file_copy_count",
-                       "file_delete_count", "unique_files_accessed", "off_hours_files_accessed"],
-    "Removable Media":["usb_insert_count", "usb_remove_count", "off_hours_usb_usage"],
-    "Email":          ["emails_sent", "unique_recipients", "external_emails",
-                       "attachements_sent", "off_hours_emails"],
+    "Authentication":  ["logon_count", "logoff_count", "off_hours_logon"],
+    "File Access":     ["file_open_count", "file_write_count", "file_copy_count",
+                        "file_delete_count", "unique_files_accessed", "off_hours_files_accessed"],
+    "Removable Media": ["usb_insert_count", "usb_remove_count", "off_hours_usb_usage"],
+    "Email":           ["emails_sent", "unique_recipients", "external_emails",
+                        "attachements_sent", "off_hours_emails"],
+    "Web Activity":    ["http_total_requests", "http_visit_count", "http_download_count",
+                        "http_upload_count", "http_jobsite_visits", "http_cloud_storage_visits",
+                        "http_suspicious_site_visits", "off_hours_http_requests",
+                        "http_long_url_count", "unique_domains_visited"],
 }
-# Filter to features actually present
+# Filter to features actually present; drop channels with no data
 CHANNELS = {k: [f for f in v if f in merged_df.columns] for k, v in CHANNELS.items()}
-
-# user_risk is now pre-computed inside load_data() and cached
+CHANNELS = {k: v for k, v in CHANNELS.items() if v}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -693,28 +708,142 @@ RISK_COLORS = {"HIGH": "#e84545", "MEDIUM": "#d4a017", "LOW": "#3a86a8"}
 import ast as _ast
 
 _FEATURE_LABELS: dict[str, str] = {
-    "off_hours_logon":             "after-hours logon activity",
-    "off_hours_logon_count":       "after-hours logon activity",
-    "logon_count":                 "elevated logon frequency",
-    "file_open_count":             "high file open activity",
-    "file_write_count":            "file write activity",
-    "file_copy_count":             "file copy activity",
-    "file_delete_count":           "file deletion activity",
-    "unique_files_accessed":       "access to many unique files",
-    "off_hours_files_accessed":    "after-hours file access",
-    "usb_insert_count":            "USB device insertion",
-    "usb_remove_count":            "USB device removal",
-    "off_hours_usb_usage":         "after-hours USB usage",
-    "usb_file_activity_flag":      "USB-related file activity",
-    "emails_sent":                 "high email volume",
-    "unique_recipients":           "many unique email recipients",
-    "external_emails":             "external email activity",
-    "external_email_count":        "external email activity",
-    "attachements_sent":           "email attachment activity",
-    "off_hours_emails":            "after-hours email activity",
-    "off_hours_activity_flag":     "off-hours behavioral anomaly",
-    "external_comm_activity_flag": "external communication flags",
+    # ── Authentication ──
+    "off_hours_logon":                          "after-hours logon activity",
+    "off_hours_logon_count":                    "after-hours logon activity",
+    "logon_count":                              "elevated logon frequency",
+    # ── File activity ──
+    "file_open_count":                          "high file open activity",
+    "file_write_count":                         "file write activity",
+    "file_copy_count":                          "file copy activity",
+    "file_delete_count":                        "file deletion activity",
+    "unique_files_accessed":                    "access to many unique files",
+    "off_hours_files_accessed":                 "after-hours file access",
+    # ── USB ──
+    "usb_insert_count":                         "USB device insertion",
+    "usb_remove_count":                         "USB device removals",
+    "off_hours_usb_usage":                      "after-hours USB usage",
+    "usb_file_activity_flag":                   "USB-related file activity",
+    "jobsite_usb_activity_flag":                "job-site browsing combined with USB activity",
+    # ── Email ──
+    "emails_sent":                              "high email volume",
+    "unique_recipients":                        "many unique email recipients",
+    "external_emails":                          "external email activity",
+    "external_email_count":                     "external email activity",
+    "attachements_sent":                        "email attachment activity",
+    "attachments_sent":                         "email attachment activity",
+    "off_hours_emails":                         "after-hours email activity",
+    # ── Cross-channel flags ──
+    "off_hours_activity_flag":                  "off-hours behavioral anomalies",
+    "external_comm_activity_flag":              "external communication anomalies",
+    # ── HTTP / Web activity (raw counts) ──
+    "http_total_requests":                      "total web requests",
+    "http_visit_count":                         "web page visits",
+    "http_download_count":                      "web downloads",
+    "http_upload_count":                        "web uploads",
+    "http_jobsite_visits":                      "job-site website visits",
+    "http_cloud_storage_visits":                "cloud storage website visits",
+    "http_suspicious_site_visits":              "suspicious website visits",
+    "off_hours_http_requests":                  "after-hours HTTP activity",
+    "http_long_url_count":                      "long-URL HTTP activity",
+    "unique_domains_visited":                   "unique websites visited",
+    # ── HTTP cross-channel flags ──
+    "jobsite_usb_activity_flag":                "job-site browsing combined with USB activity",
+    "suspicious_upload_flag":                   "suspicious web upload activity",
+    "cloud_upload_flag":                        "cloud storage upload activity",
+    # ── Known z-score variants ──
+    "file_delete_count_zscore":                 "unusually high file deletion activity",
+    "file_write_count_zscore":                  "unusually high file write activity",
+    "file_copy_count_zscore":                   "unusually high file copy activity",
+    "file_open_count_zscore":                   "unusually high file open activity",
+    "unique_files_accessed_zscore":             "unusually high unique file access",
+    "off_hours_files_accessed_zscore":          "unusually high after-hours file access",
+    "off_hours_logon_zscore":                   "unusually high after-hours logon activity",
+    "http_long_url_count_zscore":               "unusually high long-URL HTTP activity",
+    "off_hours_http_requests_zscore":           "unusually high after-hours HTTP activity",
+    "attachments_sent_zscore":                  "unusually high attachment-sending activity",
+    "attachements_sent_zscore":                 "unusually high attachment-sending activity",
+    "external_emails_sent_zscore":              "unusually high external email activity",
+    "external_email_count_zscore":              "unusually high external email activity",
+    "emails_sent_zscore":                       "unusually high email volume",
+    "unique_recipients_zscore":                 "unusually high number of unique email recipients",
+    "usb_insert_count_zscore":                  "unusually high USB insertion activity",
+    "http_total_requests_zscore":               "unusually high web request volume",
+    "http_visit_count_zscore":                  "unusually high web browsing activity",
+    "http_download_count_zscore":               "unusually high web download activity",
+    "http_upload_count_zscore":                 "unusually high web upload activity",
+    "http_jobsite_visits_zscore":               "unusually high job-site browsing activity",
+    "http_cloud_storage_visits_zscore":         "unusually high cloud storage activity",
+    "http_suspicious_site_visits_zscore":       "unusually high suspicious site visits",
+    "unique_domains_visited_zscore":            "unusually high number of unique websites visited",
+    # ── Known rolling-delta variants ──
+    "file_delete_count_rolling_delta":          "sudden spike in file deletions",
+    "file_write_count_rolling_delta":           "sudden spike in file write activity",
+    "file_copy_count_rolling_delta":            "sudden spike in file copy activity",
+    "file_open_count_rolling_delta":            "sudden spike in file open activity",
+    "unique_files_accessed_rolling_delta":      "sudden increase in unique file access",
+    "off_hours_files_accessed_rolling_delta":   "sudden increase in after-hours file access",
+    "off_hours_logon_rolling_delta":            "sudden increase in after-hours logons",
+    "emails_sent_rolling_delta":                "sudden spike in email volume",
+    "external_emails_rolling_delta":            "sudden spike in external email activity",
+    "attachments_sent_rolling_delta":           "sudden spike in attachment-sending",
+    "attachements_sent_rolling_delta":          "sudden spike in attachment-sending",
+    "usb_insert_count_rolling_delta":           "sudden spike in USB device activity",
+    "http_requests_rolling_delta":              "sudden spike in HTTP requests",
+    "off_hours_http_requests_rolling_delta":    "sudden increase in after-hours HTTP activity",
+    "http_total_requests_rolling_delta":        "sudden spike in web requests",
+    "http_visit_count_rolling_delta":           "sudden spike in web browsing",
+    "http_download_count_rolling_delta":        "sudden spike in web downloads",
+    "http_upload_count_rolling_delta":          "sudden spike in web uploads",
+    "http_jobsite_visits_rolling_delta":        "sudden increase in job-site browsing",
+    "http_cloud_storage_visits_rolling_delta":  "sudden increase in cloud storage website visits",
+    "http_suspicious_site_visits_rolling_delta": "sudden increase in suspicious site visits",
+    "http_long_url_count_rolling_delta":        "sudden spike in long-URL HTTP activity",
+    "unique_domains_visited_rolling_delta":     "sudden increase in unique websites visited",
 }
+
+# Base-name phrases used by the pattern-matching fallback in prettify_feature_name()
+_BASE_LABELS: dict[str, str] = {
+    "file_delete_count":        "file deletions",
+    "file_write_count":         "file write activity",
+    "file_copy_count":          "file copy activity",
+    "file_open_count":          "file open activity",
+    "unique_files_accessed":    "unique file access",
+    "off_hours_files_accessed": "after-hours file access",
+    "off_hours_logon":          "after-hours logons",
+    "off_hours_logon_count":    "after-hours logons",
+    "logon_count":              "logon frequency",
+    "logoff_count":             "logoff activity",
+    "external_emails":          "external email activity",
+    "external_email_count":     "external email activity",
+    "external_emails_sent":     "external email activity",
+    "http_long_url":            "long-URL HTTP activity",
+    "off_hours_http":           "after-hours HTTP activity",
+    "attachments_sent":         "attachment-sending activity",
+    "attachements_sent":        "attachment-sending activity",
+    "emails_sent":              "email volume",
+    "unique_recipients":        "unique email recipients",
+    "off_hours_emails":         "after-hours email activity",
+    "usb_insert_count":         "USB device activity",
+    "usb_remove_count":         "USB device removals",
+    "off_hours_usb_usage":      "after-hours USB usage",
+    "http_requests":            "HTTP requests",
+    "http_long_url":            "long-URL HTTP activity",
+    "off_hours_http":           "after-hours HTTP activity",
+    "http_total_requests":          "web requests",
+    "http_visit_count":             "web page visits",
+    "http_download_count":          "web downloads",
+    "http_upload_count":            "web uploads",
+    "http_jobsite_visits":          "job-site browsing",
+    "http_cloud_storage_visits":    "cloud storage website visits",
+    "http_suspicious_site_visits":  "suspicious site visits",
+    "unique_domains_visited":       "unique websites visited",
+}
+
+
+def _humanize_base(base: str) -> str:
+    """Map a bare feature base name to a readable phrase for pattern-generated sentences."""
+    return _BASE_LABELS.get(base, base.replace("_", " "))
 
 
 def parse_top_contributors(raw) -> list[str]:
@@ -745,15 +874,31 @@ def parse_top_contributors(raw) -> list[str]:
 
 
 def prettify_feature_name(name: str) -> str:
-    """Convert a raw snake_case feature name to an analyst-readable label."""
+    """Convert a raw feature name to an analyst-readable investigation phrase."""
     cleaned = name.strip().replace("contribution_", "")
-    return _FEATURE_LABELS.get(cleaned, cleaned.replace("_", " "))
+    # 1. Exact dictionary hit — covers flags, known features, and common variants
+    if cleaned in _FEATURE_LABELS:
+        return _FEATURE_LABELS[cleaned]
+    # 2. Pattern: z-score suffix → "unusually high <base>"
+    if cleaned.endswith("_zscore"):
+        base = cleaned[: -len("_zscore")]
+        return f"unusually high {_humanize_base(base)}"
+    # 3. Pattern: rolling-delta suffix → "sudden spike/increase in <base>"
+    if cleaned.endswith("_rolling_delta"):
+        base = cleaned[: -len("_rolling_delta")]
+        human = _humanize_base(base)
+        if base.endswith(("_count", "_sent")):
+            return f"sudden spike in {human}"
+        return f"sudden increase in {human}"
+    # 4. Last resort: replace underscores with spaces
+    return cleaned.replace("_", " ")
 
 
 def build_alert_summary(top_contributors_raw) -> str:
     """
     Return a short, analyst-friendly sentence describing the top contributing
-    behaviors for an alert.  Gracefully returns a fallback if data is missing.
+    behaviors for an alert. Shows up to 3 contributors; appends 'and additional
+    signals' when the full list contains more than 3 unique contributors.
     """
     features = parse_top_contributors(top_contributors_raw)
     if not features:
@@ -767,12 +912,19 @@ def build_alert_summary(top_contributors_raw) -> str:
             seen.add(lbl)
             labels.append(lbl)
 
-    if len(labels) == 1:
-        return f"This alert is primarily driven by {labels[0]}."
-    if len(labels) == 2:
-        return f"This alert is mainly driven by {labels[0]} and {labels[1]}."
-    body = ", ".join(labels[:-1]) + f", and {labels[-1]}"
-    return f"This alert is mainly driven by {body}."
+    has_more = len(labels) > 3
+    display = labels[:3]
+
+    if len(display) == 1:
+        return f"This alert is primarily driven by {display[0]}."
+
+    if len(display) == 2:
+        return f"This alert is mainly driven by {display[0]} and {display[1]}."
+
+    # Exactly 3 shown
+    body = f"{display[0]}, {display[1]}, and {display[2]}"
+    suffix = ", and additional signals" if has_more else ""
+    return f"This alert is mainly driven by {body}{suffix}."
 
 
 # ──────────────────────────────────────────────────────────────
@@ -975,7 +1127,10 @@ _SECTION_INFO = {
         "A summary of whether this user triggered any multi-channel co-occurrence flags:\n\n"
         "- **USB + File Write** — device use coincided with large file write events\n"
         "- **Off-Hours Activity** — actions occurred outside normal business hours\n"
-        "- **External Communication** — outbound connections to external hosts were detected\n\n"
+        "- **External Communication** — outbound connections to external hosts were detected\n"
+        "- **Jobsite + USB** — job-site browsing on a day when USB was inserted\n"
+        "- **Cloud Upload** — web upload to a known cloud storage domain\n"
+        "- **Suspicious Upload** — web upload performed via a job-site domain\n\n"
         "Combinations of multiple flags substantially increase the likelihood of an insider threat."
     ),
     "Raw Activity Records": (
@@ -1255,11 +1410,13 @@ if active_page == "Overview":
             with col_info:
                 st.markdown(
                     f"<div style='padding:2px 0 1px 0;'>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;color:#e0e0e0;font-weight:600;'>{uid}</span>"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                    f"color:#e0e0e0;font-weight:600;'>{uid}</span>"
                     f"&nbsp;&nbsp;<span style='background:{badge_color}22;color:{badge_color};font-size:9px;"
                     f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 5px;"
                     f"border:1px solid {badge_color}55;'>{badge_label}</span>"
-                    f"<br><span style='font-family:Inter,sans-serif;font-size:10px;color:#555;'>"
+                    f"<br><span style='font-family:Inter,sans-serif;font-size:10px;"
+                    f"color:#555;line-height:1.5;'>"
                     f"Percentile {score:.1f} &middot; {days} high-risk day{'s' if days != 1 else ''}</span>"
                     f"</div>",
                     unsafe_allow_html=True,
@@ -1458,18 +1615,24 @@ if active_page == "Investigation":
     # ── Cross-Channel Flags for This User ──
     if CROSS_FLAGS:
         section_header("Cross-Channel Risk Indicators", "sh_cross_ind")
-        fc1, fc2, fc3 = st.columns(3)
-        flag_details = [
-            ("usb_file_activity_flag",        "USB + FILE WRITE",    "USB inserted AND files written on same day"),
-            ("off_hours_activity_flag",        "OFF-HOURS ACTIVITY",  "Activity detected outside 9 AM - 5 PM"),
-            ("external_comm_activity_flag",    "EXTERNAL COMMS",      "Emails sent to external domains"),
+        _all_flag_details = [
+            ("usb_file_activity_flag",     "USB + FILE WRITE",    "USB inserted AND files written on same day"),
+            ("off_hours_activity_flag",    "OFF-HOURS ACTIVITY",  "Activity detected outside 9 AM – 5 PM"),
+            ("external_comm_activity_flag","EXTERNAL COMMS",      "Emails sent to external domains"),
+            ("jobsite_usb_activity_flag",  "JOBSITE + USB",       "Job-site browsing on a day USB was inserted"),
+            ("cloud_upload_flag",          "CLOUD UPLOAD",        "Upload event to a cloud storage domain"),
+            ("suspicious_upload_flag",     "SUSPICIOUS UPLOAD",   "Upload event via a job-site domain"),
         ]
-        for col_w, (flag, label, desc) in zip([fc1, fc2, fc3], flag_details):
-            if flag in user_data.columns:
-                triggered = int(user_data[flag].sum())
+        # Only display flags that exist in the loaded data
+        _visible_flags = [(f, l, d) for f, l, d in _all_flag_details if f in user_data.columns]
+        for _row_start in range(0, len(_visible_flags), 3):
+            _row = _visible_flags[_row_start: _row_start + 3]
+            _cols = st.columns(3)
+            for _col_w, (_flag, _label, _desc) in zip(_cols, _row):
+                triggered = int(user_data[_flag].sum())
                 total = len(user_data)
-                col_w.metric(label, f"{triggered} / {total} days")
-                col_w.caption(desc)
+                _col_w.metric(_label, f"{triggered} / {total} days")
+                _col_w.caption(_desc)
 
     # ── Raw Activity Table ──
     section_header("Raw Activity Records", "sh_raw_records")
