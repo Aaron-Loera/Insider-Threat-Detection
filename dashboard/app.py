@@ -533,16 +533,31 @@ UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.par
 UEBA_CSV = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.csv")
 LIVE_OUTPUT = os.path.join(BASE_DIR, "processed_datasets", "live_results.jsonl")
 LIVE_SIM_SCRIPT = os.path.join(BASE_DIR, "live_simulation.py")
+
 # Only load columns the dashboard actually uses
 UEBA_COLS = [
     "user", "pc", "day",
+    # Auth
     "logon_count", "logoff_count", "off_hours_logon",
+    # File
     "file_open_count", "file_write_count", "file_copy_count",
     "file_delete_count", "unique_files_accessed", "off_hours_files_accessed",
+    # Removable media
     "usb_insert_count", "usb_remove_count", "off_hours_usb_usage",
-    "emails_sent", "unique_recipients", "external_emails",
-    "attachements_sent", "off_hours_emails",
+    # Email
+    "emails_sent", "unique_recipients", "external_emails_sent",
+    "attachments_sent", "off_hours_emails",
+    # HTTP
+    "http_total_requests", "http_visit_count", "http_download_count", "http_upload_count",
+    "http_jobsite_visits", "http_cloud_storage_visits", "http_suspicious_site_visits",
+    "off_hours_http_requests", "http_long_url_count", "unique_domains_visited",
+    # PC / endpoint
+    "pcs_used_count", "non_primary_pc_used_flag", "non_primary_pc_http_requests_flag",
+    "non_primary_pc_usb_flag", "non_primary_pc_file_copy_flag",
+    # Cross-channel flags
     "usb_file_activity_flag", "off_hours_activity_flag", "external_comm_activity_flag",
+    "jobsite_usb_activity_flag", "suspicious_upload_flag", "cloud_upload_flag",
+    "non_primary_pc_risk_flag",
 ]
 
 
@@ -642,17 +657,30 @@ if not DATA_LOADED:
 
 # Base behavioral feature columns (raw counts)
 RAW_FEATURES = [
+    # Auth
     "logon_count", "logoff_count", "off_hours_logon",
+    # File
     "file_open_count", "file_write_count", "file_copy_count",
     "file_delete_count", "unique_files_accessed", "off_hours_files_accessed",
+    # Removable media
     "usb_insert_count", "usb_remove_count", "off_hours_usb_usage",
-    "emails_sent", "unique_recipients", "external_emails",
-    "attachements_sent", "off_hours_emails",
+    # Email
+    "emails_sent", "unique_recipients", "external_emails_sent",
+    "attachments_sent", "off_hours_emails",
+    # HTTP
+    "http_total_requests", "http_visit_count", "http_download_count", "http_upload_count",
+    "http_jobsite_visits", "http_cloud_storage_visits", "http_suspicious_site_visits",
+    "off_hours_http_requests", "http_long_url_count", "unique_domains_visited",
+    # PC / endpoint
+    "pcs_used_count", "non_primary_pc_used_flag", "non_primary_pc_http_requests_flag",
+    "non_primary_pc_usb_flag", "non_primary_pc_file_copy_flag",
 ]
 RAW_FEATURES = [f for f in RAW_FEATURES if f in merged_df.columns]
 
 CROSS_FLAGS = [
     "usb_file_activity_flag", "off_hours_activity_flag", "external_comm_activity_flag",
+    "jobsite_usb_activity_flag", "suspicious_upload_flag", "cloud_upload_flag",
+    "non_primary_pc_risk_flag",
 ]
 CROSS_FLAGS = [f for f in CROSS_FLAGS if f in merged_df.columns]
 
@@ -662,11 +690,30 @@ CHANNELS = {
     "File Access":    ["file_open_count", "file_write_count", "file_copy_count",
                        "file_delete_count", "unique_files_accessed", "off_hours_files_accessed"],
     "Removable Media":["usb_insert_count", "usb_remove_count", "off_hours_usb_usage"],
-    "Email":          ["emails_sent", "unique_recipients", "external_emails",
-                       "attachements_sent", "off_hours_emails"],
+    "Email":          ["emails_sent", "unique_recipients", "external_emails_sent",
+                       "attachments_sent", "off_hours_emails"],
+    "HTTP Activity":  ["http_total_requests", "http_visit_count", "http_download_count",
+                       "http_upload_count", "http_jobsite_visits", "http_cloud_storage_visits",
+                       "http_suspicious_site_visits", "off_hours_http_requests",
+                       "http_long_url_count", "unique_domains_visited"],
+    "PC Activity":    ["pcs_used_count", "non_primary_pc_used_flag",
+                       "non_primary_pc_http_requests_flag", "non_primary_pc_usb_flag",
+                       "non_primary_pc_file_copy_flag"],
 }
 # Filter to features actually present
 CHANNELS = {k: [f for f in v if f in merged_df.columns] for k, v in CHANNELS.items()}
+# Drop empty channels (dataset may not have all features)
+CHANNELS = {k: v for k, v in CHANNELS.items() if v}
+
+# Explicit channel→color mapping so each channel keeps its color regardless of which are present in filtered data
+CHANNEL_COLOR_MAP = {
+    "Authentication":  "#ffffff",
+    "File Access":     "#e84545",
+    "Removable Media": "#d4a017",
+    "Email":           "#3a86a8",
+    "HTTP Activity":   "#7a7a7a",
+    "PC Activity":     "#6b4a2d",
+}
 
 # user_risk is now pre-computed inside load_data() and cached
 
@@ -856,7 +903,11 @@ _SECTION_INFO = {
         "Counts of records where suspicious activity co-occurred across multiple data channels:\n\n"
         "- **USB + File Write** — removable device use paired with large file write activity\n"
         "- **Off-Hours Activity** — logins or actions recorded outside normal working hours\n"
-        "- **External Communication** — significant outbound traffic to external endpoints\n\n"
+        "- **External Communication** — significant outbound traffic to external endpoints\n"
+        "- **Job Site + USB** — job-site browsing paired with USB insertion on the same day\n"
+        "- **Suspicious Upload** — HTTP upload to a suspicious or uncategorized domain\n"
+        "- **Cloud Upload** — HTTP upload to a known cloud storage service\n"
+        "- **Non-Primary PC** — sensitive activity (file copy, USB, HTTP) from an atypical endpoint\n\n"
         "These compound flags are stronger indicators of insider threat than any single "
         "channel signal alone."
     ),
@@ -871,7 +922,8 @@ _SECTION_INFO = {
         "**Behavioral Profile**\n\n"
         "A radar chart comparing the selected user's **average feature values** (solid line) "
         "against the **global population average** (dashed line).\n\n"
-        "Each axis represents a behavioural feature (e.g. email volume, logon count, file writes). "
+        "Each axis represents one of six behavioral channels: Authentication, File Access, "
+        "Removable Media, Email, HTTP Activity, and PC Activity. "
         "Axes where the user extends significantly beyond the population average indicate "
         "dimensions of behaviour worth investigating."
     ),
@@ -888,7 +940,11 @@ _SECTION_INFO = {
         "A summary of whether this user triggered any multi-channel co-occurrence flags:\n\n"
         "- **USB + File Write** — device use coincided with large file write events\n"
         "- **Off-Hours Activity** — actions occurred outside normal business hours\n"
-        "- **External Communication** — outbound connections to external hosts were detected\n\n"
+        "- **External Communication** — outbound connections to external hosts were detected\n"
+        "- **Job Site + USB** — job-site browsing paired with USB insertion on the same day\n"
+        "- **Suspicious Upload** — HTTP upload to a suspicious or uncategorized domain\n"
+        "- **Cloud Upload** — HTTP upload to a known cloud storage service\n"
+        "- **Non-Primary PC** — sensitive activity from an atypical endpoint\n\n"
         "Combinations of multiple flags substantially increase the likelihood of an insider threat."
     ),
     "Raw Activity Records": (
@@ -901,15 +957,17 @@ _SECTION_INFO = {
     ),
     "Channel Activity Volume": (
         "**Channel Activity Volume**\n\n"
-        "A bar chart showing the total number of events recorded across each data channel "
-        "(email, file, HTTP, logon, device) within the selected filters.\n\n"
+        "A line chart showing the total number of events recorded per day across each data channel "
+        "(Authentication, File Access, Removable Media, Email, HTTP Activity, PC Activity) "
+        "within the selected filters.\n\n"
         "Channels with disproportionately high volumes relative to peers can indicate "
         "a data exfiltration path that warrants deeper investigation."
     ),
     "Channel Volume Share": (
         "**Channel Volume Share**\n\n"
-        "A pie chart showing each channel's **percentage share** of all recorded events.\n\n"
-        "This gives a quick sense of which channels dominate activity organisationally. "
+        "A donut chart showing each channel's **percentage share** of all recorded events "
+        "across Authentication, File Access, Removable Media, Email, HTTP Activity, and PC Activity.\n\n"
+        "This gives a quick sense of which channels dominate activity organizationally. "
         "A sudden shift in these proportions between time periods may indicate an attack campaign."
     ),
     "Feature Distributions by Risk Level": (
@@ -1201,18 +1259,21 @@ if active_page == "Overview":
     if CROSS_FLAGS:
         section_header("Cross-Channel Risk Flags (Global)", "sh_cross_flags")
         flag_labels = {
-            "usb_file_activity_flag": "USB + File Write",
-            "off_hours_activity_flag": "Off-Hours Activity",
-            "external_comm_activity_flag": "External Communication",
+            "usb_file_activity_flag":             "USB + File Write",
+            "off_hours_activity_flag":             "Off-Hours Activity",
+            "external_comm_activity_flag":         "External Communication",
+            "jobsite_usb_activity_flag":           "Job Site + USB",
+            "suspicious_upload_flag":              "Suspicious Upload",
+            "cloud_upload_flag":                   "Cloud Upload",
+            "non_primary_pc_risk_flag":            "Non-Primary PC",
         }
         flag_data = []
         for flag in CROSS_FLAGS:
             count = int(filtered_df[flag].sum()) if flag in filtered_df.columns else 0
             flag_data.append({"Flag": flag_labels.get(flag, flag), "Triggered": count})
-        flag_df = pd.DataFrame(flag_data)
 
-        fc1, fc2, fc3 = st.columns(3)
-        for i, (col, row) in enumerate(zip([fc1, fc2, fc3], flag_data)):
+        flag_cols = st.columns(len(flag_data))
+        for col, row in zip(flag_cols, flag_data):
             with col:
                 pct = (row["Triggered"] / max(len(filtered_df), 1)) * 100
                 col.metric(row["Flag"], f'{row["Triggered"]:,}', f"{pct:.1f}% of records")
@@ -1373,18 +1434,22 @@ if active_page == "Investigation":
     # ── Cross-Channel Flags for This User ──
     if CROSS_FLAGS:
         section_header("Cross-Channel Risk Indicators", "sh_cross_ind")
-        fc1, fc2, fc3 = st.columns(3)
         flag_details = [
-            ("usb_file_activity_flag",        "USB + FILE WRITE",    "USB inserted AND files written on same day"),
-            ("off_hours_activity_flag",        "OFF-HOURS ACTIVITY",  "Activity detected outside 9 AM - 5 PM"),
-            ("external_comm_activity_flag",    "EXTERNAL COMMS",      "Emails sent to external domains"),
+            ("usb_file_activity_flag",             "USB + FILE WRITE",       "USB inserted AND files written on same day"),
+            ("off_hours_activity_flag",             "OFF-HOURS ACTIVITY",     "Activity detected outside 9 AM - 5 PM"),
+            ("external_comm_activity_flag",         "EXTERNAL COMMS",         "Emails sent to external domains"),
+            ("jobsite_usb_activity_flag",           "JOB SITE + USB",         "Job-site browsing paired with USB activity"),
+            ("suspicious_upload_flag",              "SUSPICIOUS UPLOAD",      "Upload to suspicious or uncategorized domain"),
+            ("cloud_upload_flag",                   "CLOUD UPLOAD",           "Upload to known cloud storage service"),
+            ("non_primary_pc_risk_flag",            "NON-PRIMARY PC",         "Sensitive activity from an unusual endpoint"),
         ]
-        for col_w, (flag, label, desc) in zip([fc1, fc2, fc3], flag_details):
-            if flag in user_data.columns:
-                triggered = int(user_data[flag].sum())
-                total = len(user_data)
-                col_w.metric(label, f"{triggered} / {total} days")
-                col_w.caption(desc)
+        present_flags = [(flag, label, desc) for flag, label, desc in flag_details if flag in user_data.columns]
+        flag_cols = st.columns(max(len(present_flags), 1))
+        for col_w, (flag, label, desc) in zip(flag_cols, present_flags):
+            triggered = int(user_data[flag].sum())
+            total = len(user_data)
+            col_w.metric(label, f"{triggered} / {total} days")
+            col_w.caption(desc)
 
     # ── Raw Activity Table ──
     section_header("Raw Activity Records", "sh_raw_records")
@@ -1588,7 +1653,7 @@ if active_page == "Channels":
         if channel_ts:
             channel_ts_df = pd.concat(channel_ts)
             fig_ch_ts = px.line(channel_ts_df, x="Date", y="Volume", color="Channel",
-                                color_discrete_sequence=["#ffffff", "#e84545", "#d4a017", "#3a86a8"])
+                                color_discrete_map=CHANNEL_COLOR_MAP)
             fig_ch_ts.update_layout(**PLOTLY_LAYOUT, height=400)
             st.plotly_chart(fig_ch_ts, use_container_width=True)
 
@@ -1602,7 +1667,7 @@ if active_page == "Channels":
         if ch_totals:
             ch_df = pd.DataFrame(list(ch_totals.items()), columns=["Channel", "Total Events"])
             fig_ch_pie = px.pie(ch_df, values="Total Events", names="Channel",
-                                color_discrete_sequence=["#ffffff", "#e84545", "#d4a017", "#3a86a8"],
+                                color="Channel", color_discrete_map=CHANNEL_COLOR_MAP,
                                 hole=0.6)
             fig_ch_pie.update_layout(**PLOTLY_LAYOUT, height=400)
             st.plotly_chart(fig_ch_pie, use_container_width=True)

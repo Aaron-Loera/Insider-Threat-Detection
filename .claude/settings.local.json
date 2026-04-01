@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls /c/Users/loera/Documents/Insider-Threat-Detection/*.ipynb)",
+      "Bash(git -C /c/Users/loera/Documents/Insider-Threat-Detection log --oneline)"
+    ]
+  }
+}
