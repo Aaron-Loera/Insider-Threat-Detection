@@ -869,7 +869,7 @@ _SECTION_INFO = {
         "A donut chart showing what proportion of activity records fall into each risk tier:\n\n"
         "- **HIGH** — anomaly score in the top percentile; warrants immediate review\n"
         "- **MEDIUM** — elevated but not critical; worth monitoring\n"
-        "- **LOW** — behaviour consistent with typical baseline activity\n\n"
+        "- **LOW** — behavior consistent with typical baseline activity\n\n"
         "Risk level is assigned per record based on the anomaly score percentile "
         "produced by the Isolation Forest model."
     ),
@@ -887,12 +887,12 @@ _SECTION_INFO = {
         "- **Percentile** — how the user ranks relative to all users (100 = most anomalous)\n"
         "- **High-risk days** — number of days flagged HIGH by the model\n"
         "- **Badge** — CRITICAL (≥80th pct), HIGH (≥60th), or ELEVATED (below 60th)\n\n"
-        "Click **Investigate →** to jump directly to that user's full behavioural profile."
+        "Click **Investigate →** to jump directly to that user's full behavioral profile."
     ),
     "Anomaly Score Distribution": (
         "**Anomaly Score Distribution**\n\n"
         "A histogram of raw anomaly scores across all records, coloured by risk level.\n\n"
-        "- Scores **near 0** indicate behaviour very close to the normal baseline\n"
+        "- Scores **near 0** indicate behavior very close to the normal baseline\n"
         "- Scores **toward 1** represent increasingly anomalous activity\n\n"
         "The Isolation Forest model assigns each record a score based on how easily it "
         "can be isolated from the rest of the dataset. Outliers require fewer splits and "
@@ -914,7 +914,7 @@ _SECTION_INFO = {
     "Anomaly Score Timeline": (
         "**Anomaly Score Timeline**\n\n"
         "A day-by-day line chart of the selected user's anomaly score.\n\n"
-        "- A **persistent elevation** suggests consistently unusual behaviour\n"
+        "- A **persistent elevation** suggests consistently unusual behavior\n"
         "- A **sudden spike** may point to a discrete incident on that date\n\n"
         "Use the date filter to narrow the window and correlate peaks with raw activity records below."
     ),
@@ -925,12 +925,12 @@ _SECTION_INFO = {
         "Each axis represents one of six behavioral channels: Authentication, File Access, "
         "Removable Media, Email, HTTP Activity, and PC Activity. "
         "Axes where the user extends significantly beyond the population average indicate "
-        "dimensions of behaviour worth investigating."
+        "dimensions of behavior worth investigating."
     ),
     "Daily Feature Activity": (
         "**Daily Feature Activity**\n\n"
         "A heatmap of the user's raw feature values over time.\n\n"
-        "- Each **row** is one behavioural feature\n"
+        "- Each **row** is one behavioral feature\n"
         "- Each **column** is one day\n"
         "- **Darker cells** = higher-than-usual activity on that day and feature\n\n"
         "This lets you pinpoint exactly which features drove an anomaly spike on a given date."
@@ -951,7 +951,7 @@ _SECTION_INFO = {
         "**Raw Activity Records**\n\n"
         "A full table of every aggregated daily record for the selected user within the "
         "current filter window.\n\n"
-        "Each row represents one day and includes all behavioural features (email, file, "
+        "Each row represents one day and includes all behavioral features (email, file, "
         "HTTP, logon, device activity), the computed anomaly score, and the assigned risk level. "
         "Use this to audit exactly what the model saw on any particular date."
     ),
@@ -975,7 +975,7 @@ _SECTION_INFO = {
         "Box plots for each numeric feature, grouped by risk level (HIGH / MEDIUM / LOW).\n\n"
         "The box shows the interquartile range (25th–75th percentile); the line inside is the median. "
         "Features where the HIGH box sits far above LOW are the **strongest predictors** "
-        "of anomalous behaviour in this dataset."
+        "of anomalous behavioral in this dataset."
     ),
     "Feature Correlation Matrix": (
         "**Feature Correlation Matrix**\n\n"
@@ -984,7 +984,7 @@ _SECTION_INFO = {
         "- **−1 (dark blue)** — features move in opposite directions\n"
         "- **~0** — no linear relationship\n\n"
         "Highly correlated features may be redundant for modelling, while unexpected "
-        "correlations can reveal undocumented behavioural patterns."
+        "correlations can reveal undocumented behavioral patterns."
     ),
 }
 
