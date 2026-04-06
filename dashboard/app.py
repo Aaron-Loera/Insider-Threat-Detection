@@ -1181,7 +1181,7 @@ if active_page == "Overview":
                 )
             with col_btn:
                 if st.button("Investigate →", key=f"inv_btn_{uid}", use_container_width=True):
-                    st.session_state["inv_user_search"] = uid
+                    st.session_state["inv_user_select"] = uid
                     st.session_state["_nav_request"] = "Investigation"
                     st.rerun()
             st.markdown("<div style='border-bottom:1px solid #111;margin:0;'></div>", unsafe_allow_html=True)
@@ -1202,22 +1202,32 @@ if active_page == "Overview":
     # ── Row 4: Cross-Channel Risk Flags Summary ──
     if CROSS_FLAGS:
         section_header("Cross-Channel Risk Flags (Global)", "sh_cross_flags")
-        flag_labels = {
-            "usb_file_activity_flag": "USB + File Write",
-            "off_hours_activity_flag": "Off-Hours Activity",
-            "external_comm_activity_flag": "External Communication",
-        }
-        flag_data = []
-        for flag in CROSS_FLAGS:
-            count = int(filtered_df[flag].sum()) if flag in filtered_df.columns else 0
-            flag_data.append({"Flag": flag_labels.get(flag, flag), "Triggered": count})
-        flag_df = pd.DataFrame(flag_data)
-
-        fc1, fc2, fc3 = st.columns(3)
-        for i, (col, row) in enumerate(zip([fc1, fc2, fc3], flag_data)):
-            with col:
-                pct = (row["Triggered"] / max(len(filtered_df), 1)) * 100
-                col.metric(row["Flag"], f'{row["Triggered"]:,}', f"{pct:.1f}% of records")
+        _flag_info = [
+            ("usb_file_activity_flag",     "USB + File Write",      "#e84545"),
+            ("off_hours_activity_flag",    "Off-Hours Activity",    "#d4a017"),
+            ("external_comm_activity_flag","External Communication","#3a86a8"),
+        ]
+        _cards_html = ""
+        for flag, label, color in _flag_info:
+            if flag in CROSS_FLAGS and flag in filtered_df.columns:
+                count = int(filtered_df[flag].sum())
+                pct = (count / max(len(filtered_df), 1)) * 100
+                _cards_html += (
+                    f"<div style='flex:1;background:#0a0a0a;border:1px solid #1a1a1a;"
+                    f"border-left:3px solid {color};padding:14px 18px;min-width:160px;'>"
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:10px;color:#555;"
+                    f"text-transform:uppercase;letter-spacing:1.5px;'>{label}</div>"
+                    f"<div style='display:flex;align-items:baseline;gap:8px;margin-top:8px;'>"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:22px;"
+                    f"color:{color};font-weight:600;'>{count:,}</span>"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                    f"color:#444;'>{pct:.1f}%</span>"
+                    f"</div></div>"
+                )
+        st.markdown(
+            f"<div style='display:flex;gap:12px;margin:4px 0 16px 0;flex-wrap:wrap;'>{_cards_html}</div>",
+            unsafe_allow_html=True,
+        )
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1235,36 +1245,22 @@ if active_page == "Investigation":
     _filter_bar("inv_flt")
     filtered_df = _get_filtered_df()
 
-    inv_col1, inv_col2 = st.columns([2, 4])
-    with inv_col1:
-        user_input = st.text_input(
-            "Search User ID",
-            value="",
-            placeholder="Type a user ID, e.g. acm2278",
-            key="inv_user_search",
-        )
-    # Find matching users as the admin types
-    if user_input:
-        query = user_input.lower().strip()
-        matches = [u for u in all_users if query in u.lower()]
-    else:
-        # Default: show top 20 riskiest users
-        matches = user_risk["user"].head(20).tolist()
+    # Build user list ordered by risk (highest first)
+    _risk_sorted = user_risk["user"].tolist()
+    _remaining = [u for u in all_users if u not in set(_risk_sorted)]
+    _all_users_sorted = _risk_sorted + _remaining
 
-    with inv_col2:
-        if matches:
-            # Pre-select exact match if found, otherwise first match
-            exact = [u for u in matches if u.lower() == (user_input or "").lower().strip()]
-            default_idx = matches.index(exact[0]) if exact else 0
-            selected_user = st.selectbox(
-                "Select from matches",
-                matches,
-                index=default_idx,
-                key="inv_user_select",
-            )
-        else:
-            st.warning(f"No user found matching '{user_input}'")
-            st.stop()
+    selected_user = st.selectbox(
+        "Search User ID",
+        _all_users_sorted,
+        index=None,
+        placeholder="Type to search, e.g. acm2278",
+        key="inv_user_select",
+    )
+
+    if selected_user is None:
+        st.info("Select a user above to begin investigation. Users are sorted by risk (highest first).")
+        st.stop()
 
     user_data = filtered_df[filtered_df["user"] == selected_user].sort_values("day")
 
@@ -1375,18 +1371,36 @@ if active_page == "Investigation":
     # ── Cross-Channel Flags for This User ──
     if CROSS_FLAGS:
         section_header("Cross-Channel Risk Indicators", "sh_cross_ind")
-        fc1, fc2, fc3 = st.columns(3)
-        flag_details = [
-            ("usb_file_activity_flag",        "USB + FILE WRITE",    "USB inserted AND files written on same day"),
-            ("off_hours_activity_flag",        "OFF-HOURS ACTIVITY",  "Activity detected outside 9 AM - 5 PM"),
-            ("external_comm_activity_flag",    "EXTERNAL COMMS",      "Emails sent to external domains"),
+        _flag_detail = [
+            ("usb_file_activity_flag",     "USB + File Write",   "USB + file write on same day", "#e84545"),
+            ("off_hours_activity_flag",    "Off-Hours Activity", "Outside 9 AM \u2013 5 PM",     "#d4a017"),
+            ("external_comm_activity_flag","External Comms",     "Emails to external domains",   "#3a86a8"),
         ]
-        for col_w, (flag, label, desc) in zip([fc1, fc2, fc3], flag_details):
+        _total = len(user_data)
+        _ucards = ""
+        for flag, label, desc, color in _flag_detail:
             if flag in user_data.columns:
                 triggered = int(user_data[flag].sum())
-                total = len(user_data)
-                col_w.metric(label, f"{triggered} / {total} days")
-                col_w.caption(desc)
+                pct = (triggered / max(_total, 1)) * 100
+                _ucards += (
+                    f"<div style='flex:1;background:#0a0a0a;border:1px solid #1a1a1a;"
+                    f"border-left:3px solid {color};padding:14px 18px;min-width:160px;'>"
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:10px;color:#555;"
+                    f"text-transform:uppercase;letter-spacing:1.5px;'>{label}</div>"
+                    f"<div style='display:flex;align-items:baseline;gap:8px;margin-top:8px;'>"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:20px;"
+                    f"color:{color};font-weight:600;'>{triggered}</span>"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                    f"color:#444;'>/ {_total} days &middot; {pct:.0f}%</span>"
+                    f"</div>"
+                    f"<div style='font-family:Inter,sans-serif;font-size:10px;color:#333;"
+                    f"margin-top:6px;'>{desc}</div>"
+                    f"</div>"
+                )
+        st.markdown(
+            f"<div style='display:flex;gap:12px;margin:4px 0 16px 0;flex-wrap:wrap;'>{_ucards}</div>",
+            unsafe_allow_html=True,
+        )
 
     # ── Raw Activity Table ──
     section_header("Raw Activity Records", "sh_raw_records")
