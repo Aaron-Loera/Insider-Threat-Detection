@@ -5,8 +5,8 @@ Usage (from project root):
     py scripts/csv_to_parquet.py
 
 The script converts:
-    processed_datasets/ueba_dataset.csv  ->  processed_datasets/ueba_dataset.parquet
-    static_dashboards/table_1.csv        ->  static_dashboards/table_1.parquet
+    processed_datasets/ueba_dataset.csv              ->  .parquet
+    explainability/alert_table/alert_table_2.csv      ->  .parquet
 
 The original CSV files are kept unchanged.
 """
@@ -19,8 +19,8 @@ import pandas as pd
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CSV_FILES = [
-    os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset.csv"),
-    os.path.join(BASE_DIR, "static_dashboards", "table_1.csv"),
+    os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.csv"),
+    os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_3.csv"),
 ]
 
 
