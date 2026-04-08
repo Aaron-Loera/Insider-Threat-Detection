@@ -1835,23 +1835,106 @@ if active_page == "Alerts":
         alert_data = filtered_df[
             (filtered_df["risk_levels"].isin(alert_risk)) &
             (filtered_df["percentile_rank"] >= min_pctl)
-        ].sort_values("percentile_rank", ascending=False).head(max_results)
+        ].sort_values("percentile_rank", ascending=False).head(int(max_results))
 
+        # Cap card rendering to keep the UI responsive
+        CARD_LIMIT = 100
+        total_alerts = len(alert_data)
+        card_data = alert_data.head(CARD_LIMIT)
+
+        if total_alerts == 0:
+            st.info("No alerts match the current filters.")
+        else:
+            if total_alerts > CARD_LIMIT:
+                st.caption(
+                    f"Displaying top {CARD_LIMIT} of {total_alerts:,} matching alerts. "
+                    "Use the export button below for the complete set."
+                )
+
+            # ── Column header row ──
+            st.markdown(
+                "<div style='display:grid;grid-template-columns:72px 1fr 108px 90px 130px;"
+                "gap:8px;padding:6px 4px;border-bottom:1px solid #1a1a1a;margin-bottom:2px;'>"
+                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+                "text-transform:uppercase;letter-spacing:1.5px;'>Risk</span>"
+                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+                "text-transform:uppercase;letter-spacing:1.5px;'>User / Investigation hint</span>"
+                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+                "text-transform:uppercase;letter-spacing:1.5px;'>Day</span>"
+                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+                "text-transform:uppercase;letter-spacing:1.5px;'>Percentile</span>"
+                "<span></span>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+
+            # ── Per-alert card rows ──
+            for i, row in enumerate(card_data.itertuples()):
+                risk    = getattr(row, "risk_levels",    "LOW")
+                user    = getattr(row, "user",           "—")
+                day_val = getattr(row, "day",            None)
+                day_str = day_val.strftime("%Y-%m-%d") if hasattr(day_val, "strftime") else str(day_val)
+                pctl    = getattr(row, "percentile_rank", 0.0)
+                top_raw = getattr(row, "top_contributors", None)
+                summary = build_alert_summary(top_raw)
+
+                risk_color = RISK_COLORS.get(risk, "#666666")
+
+                c_risk, c_info, c_day, c_pctl, c_btn = st.columns([1, 5, 2, 1, 2])
+
+                with c_risk:
+                    st.markdown(
+                        f"<div style='padding-top:5px;'>"
+                        f"<span style='background:{risk_color}22;color:{risk_color};font-size:9px;"
+                        f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:2px 6px;"
+                        f"border:1px solid {risk_color}55;display:inline-block;'>{risk}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                with c_info:
+                    st.markdown(
+                        f"<div style='padding:2px 0 4px 0;'>"
+                        f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                        f"color:#e0e0e0;font-weight:600;'>{user}</span>"
+                        f"<br><span style='font-family:Inter,sans-serif;font-size:11px;"
+                        f"color:#666;line-height:1.5;'>{summary}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                with c_day:
+                    st.markdown(
+                        f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                        f"color:#888;padding-top:5px;'>{day_str}</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                with c_pctl:
+                    st.markdown(
+                        f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                        f"color:{risk_color};padding-top:5px;'>P{pctl:.1f}</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                with c_btn:
+                    if st.button("Investigate →", key=f"al_inv_{i}", use_container_width=True):
+                        st.session_state["inv_user_search"] = user
+                        st.session_state["_nav_request"] = "Investigation"
+                        st.rerun()
+
+                st.markdown(
+                    "<div style='border-bottom:1px solid #0d0d0d;margin:2px 0;'></div>",
+                    unsafe_allow_html=True,
+                )
+
+        # ── Export (columns + top_contributors if present) ──
         alert_display_cols = ["user", "day", "risk_levels", "anomaly_scores", "percentile_rank"]
-        # Add cross-channel flags if present
         alert_display_cols += [c for c in CROSS_FLAGS if c in alert_data.columns]
+        if "top_contributors" in alert_data.columns:
+            alert_display_cols.append("top_contributors")
 
-        st.dataframe(
-            alert_data[alert_display_cols],
-            use_container_width=True,
-            height=500,
-            column_config={
-                "risk_levels":    st.column_config.TextColumn("Risk Level"),
-                "anomaly_scores": st.column_config.NumberColumn("Anomaly Score", format="%.6f"),
-                "percentile_rank":st.column_config.ProgressColumn("Percentile", min_value=0, max_value=100, format="%.1f"),
-            },
-        )
-
+        st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
         st.download_button(
             "EXPORT ALERTS",
             data=alert_data[alert_display_cols].to_csv(index=False).encode("utf-8"),
