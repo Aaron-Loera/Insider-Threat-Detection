@@ -379,6 +379,10 @@ st.markdown("""
         background-color: #0a0a0a !important;
     }
     .stSlider > div > div > div { border-radius: 0 !important; }
+    [data-baseweb="select"] > div,
+    [data-baseweb="select"] > div * {
+        cursor: pointer !important;
+    }
     button[kind="primary"], .stDownloadButton > button {
         border-radius: 0 !important;
         text-transform: uppercase;
@@ -1823,19 +1827,53 @@ if active_page == "Alerts":
         _filter_bar("al_flt")
         filtered_df = _get_filtered_df()
 
-        # Alert severity filter within this tab
-        alert_cols = st.columns([2, 2, 2, 6])
+        # Alert severity filter + sort controls
+        alert_cols = st.columns([2, 2, 2, 2, 2])
         with alert_cols[0]:
             alert_risk = st.multiselect("Severity", ["HIGH", "MEDIUM", "LOW"], default=["HIGH", "MEDIUM"], key="alert_sev")
         with alert_cols[1]:
             min_pctl = st.slider("Min Percentile", 0.0, 100.0, 0.0, key="min_pctl")
         with alert_cols[2]:
             max_results = st.number_input("Max Rows", min_value=10, max_value=10000, value=500, step=50, key="max_rows")
+        with alert_cols[3]:
+            sort_by = st.selectbox(
+                "Sort by",
+                ["Percentile", "Day", "Risk", "User"],
+                index=0,
+                key="alert_sort_by",
+            )
+        with alert_cols[4]:
+            sort_dir = st.selectbox(
+                "Order",
+                ["Descending", "Ascending"],
+                index=0,
+                key="alert_sort_dir",
+            )
 
+        _ascending = sort_dir == "Ascending"
+
+        # Filter first
         alert_data = filtered_df[
             (filtered_df["risk_levels"].isin(alert_risk)) &
             (filtered_df["percentile_rank"] >= min_pctl)
-        ].sort_values("percentile_rank", ascending=False).head(int(max_results))
+        ].copy()
+
+        # Sort: Risk uses a custom severity order; all others sort natively
+        if sort_by == "Risk":
+            _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+            alert_data["_risk_sort_key"] = alert_data["risk_levels"].map(_RISK_ORDER).fillna(3)
+            alert_data = alert_data.sort_values(
+                "_risk_sort_key", ascending=_ascending
+            ).drop(columns=["_risk_sort_key"])
+        elif sort_by == "Day":
+            alert_data["day"] = pd.to_datetime(alert_data["day"], errors="coerce")
+            alert_data = alert_data.sort_values("day", ascending=_ascending)
+        elif sort_by == "User":
+            alert_data = alert_data.sort_values("user", ascending=_ascending)
+        else:  # Percentile (default)
+            alert_data = alert_data.sort_values("percentile_rank", ascending=_ascending)
+
+        alert_data = alert_data.head(int(max_results))
 
         # Cap card rendering to keep the UI responsive
         CARD_LIMIT = 100
@@ -1852,19 +1890,17 @@ if active_page == "Alerts":
                 )
 
             # ── Column header row ──
+            _HDR = (
+                "font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+                "text-transform:uppercase;letter-spacing:1.5px;"
+            )
+            _h_risk, _h_info, _h_day, _h_pctl, _h_btn = st.columns([1, 5, 2, 1, 2])
+            _h_risk.markdown(f"<span style='{_HDR}'>Risk</span>", unsafe_allow_html=True)
+            _h_info.markdown(f"<span style='{_HDR}'>User / Investigation hint</span>", unsafe_allow_html=True)
+            _h_day.markdown(f"<span style='{_HDR}'>Day</span>", unsafe_allow_html=True)
+            _h_pctl.markdown(f"<span style='{_HDR}'>Percentile</span>", unsafe_allow_html=True)
             st.markdown(
-                "<div style='display:grid;grid-template-columns:72px 1fr 108px 90px 130px;"
-                "gap:8px;padding:6px 4px;border-bottom:1px solid #1a1a1a;margin-bottom:2px;'>"
-                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                "text-transform:uppercase;letter-spacing:1.5px;'>Risk</span>"
-                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                "text-transform:uppercase;letter-spacing:1.5px;'>User / Investigation hint</span>"
-                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                "text-transform:uppercase;letter-spacing:1.5px;'>Day</span>"
-                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                "text-transform:uppercase;letter-spacing:1.5px;'>Percentile</span>"
-                "<span></span>"
-                "</div>",
+                "<div style='border-bottom:1px solid #1a1a1a;margin:0 0 2px 0;'></div>",
                 unsafe_allow_html=True,
             )
 
