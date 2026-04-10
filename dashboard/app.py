@@ -1553,6 +1553,10 @@ if active_page == "Investigation":
         st.info("Select a user above to begin investigation. Users are sorted by risk (highest first).")
         st.stop()
 
+    # Clear stale alert context if the user was changed manually
+    if st.session_state.get("inv_alert_context", {}).get("user") != selected_user:
+        st.session_state.pop("inv_alert_context", None)
+
     user_data = filtered_df[filtered_df["user"] == selected_user].sort_values("day")
 
     if user_data.empty:
@@ -1580,6 +1584,159 @@ if active_page == "Investigation":
     u3.metric("High-Risk Days", u_high_days)
     u4.metric("Medium-Risk Days", u_med_days)
     u5.metric("Days Observed", u_total_days)
+
+        # ── Alert Context Summary (shown when navigating from Alerts tab) ──
+    _alert_ctx = st.session_state.get("inv_alert_context")
+    if _alert_ctx and _alert_ctx.get("user") == selected_user:
+        _ctx_risk = _alert_ctx.get("risk", "")
+        _ctx_risk_color = RISK_COLORS.get(_ctx_risk, "#666666")
+        _ctx_day = _alert_ctx.get("day", "")
+        _ctx_pctl = _alert_ctx.get("percentile", 0.0)
+        _ctx_summary = _alert_ctx.get("summary") or "Summary unavailable for this alert."
+        st.markdown(
+            f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+            f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 20px 0;'>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+            f"text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;'>Alert Summary</div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;color:#888;margin-bottom:6px;'>"
+            f"<span style='background:{_ctx_risk_color}22;color:{_ctx_risk_color};font-size:9px;"
+            f"letter-spacing:1px;padding:2px 6px;border:1px solid {_ctx_risk_color}55;"
+            f"margin-right:10px;'>{_ctx_risk}</span>"
+            f"Day: {_ctx_day}&nbsp;&nbsp;&middot;&nbsp;&nbsp;Percentile: P{_ctx_pctl:.1f}</div>"
+            f"<div style='font-family:Inter,sans-serif;font-size:12px;color:#bbb;line-height:1.6;'>"
+            f"{_ctx_summary}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Raw Alert Record ──
+        _ctx_day_ts = pd.to_datetime(_ctx_day, errors="coerce")
+        _raw_row = merged_df[
+            (merged_df["user"] == selected_user) &
+            (merged_df["day"] == _ctx_day_ts)
+        ]
+
+        _ALERT_RECORD_FIELDS = [
+            ("user",               "User"),
+            ("day",                "Day"),
+            ("risk_levels",        "Severity"),
+            ("percentile_rank",    "AE Percentile"),
+            ("anomaly_scores",     "IF Score"),
+            ("if_percentile_rank", "IF Percentile"),
+            ("if_risk_band",       "IF Risk Band"),
+            ("explanation",        "Explanation"),
+        ]
+
+        def _fmt_alert_val(col, val):
+            if col == "day" and hasattr(val, "strftime"):
+                return val.strftime("%Y-%m-%d")
+            if isinstance(val, str):
+                return val
+            try:
+                fv = float(val)
+                return str(int(fv)) if fv == int(fv) else f"{fv:.2f}"
+            except (TypeError, ValueError, OverflowError):
+                return str(val)
+
+        _kv_parts = []
+        if not _raw_row.empty:
+            _rec0 = _raw_row.iloc[0]
+            for _c, _l in _ALERT_RECORD_FIELDS:
+                if _c not in _raw_row.columns:
+                    continue
+                _v = _rec0[_c]
+                if not isinstance(_v, str) and pd.isnull(_v):
+                    continue
+                _kv_parts.append(
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:10px;color:#555;'>{_l}</span>"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:10px;color:#aaa;'>{_fmt_alert_val(_c, _v)}</span>"
+                )
+
+        _kv_grid = "".join(_kv_parts) if _kv_parts else (
+            "<span style='font-family:Inter,sans-serif;font-size:11px;color:#555;"
+            "grid-column:1/-1;'>Raw alert record unavailable.</span>"
+        )
+        st.markdown(
+            "<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+            "border-left:3px solid #1a1a1a;padding:14px 18px;margin:0 0 12px 0;'>"
+            "<div style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+            "text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;'>Raw Alert Record</div>"
+            f"<div style='display:grid;grid-template-columns:160px 1fr;gap:4px 16px;'>{_kv_grid}</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Top Contributor Raw Values ──
+        _tc_raw = (
+            _raw_row.iloc[0]["top_contributors"]
+            if not _raw_row.empty and "top_contributors" in _raw_row.columns
+            else None
+        )
+        _tc_features = parse_top_contributors(_tc_raw)
+
+        if _tc_features:
+            _avail_cols = set(merged_df.columns)
+
+            def _resolve_ueba_base(feat: str):
+                c = feat.strip().replace("contribution_", "")
+                if c in _avail_cols:
+                    return c
+                if c.endswith("_zscore") and c[:-7] in _avail_cols:
+                    return c[:-7]
+                if c.endswith("_rolling_delta") and c[:-14] in _avail_cols:
+                    return c[:-14]
+                return None
+
+            _tc_table_rows = []
+            _seen_bases: set = set()
+            for _feat in _tc_features:
+                _base = _resolve_ueba_base(_feat)
+                if not _base or _base in _seen_bases:
+                    continue
+                _seen_bases.add(_base)
+                if not _raw_row.empty and _base in _raw_row.columns:
+                    _rv = _raw_row.iloc[0][_base]
+                    _rv_str = "—" if (not isinstance(_rv, str) and pd.isnull(_rv)) else _fmt_alert_val(_base, _rv)
+                else:
+                    _rv_str = "unavailable"
+                _tc_table_rows.append((_base, prettify_feature_name(_feat), _rv_str))
+
+            if _tc_table_rows:
+                _tc_tbody_html = "".join(
+                    f"<tr>"
+                    f"<td style='font-family:JetBrains Mono,monospace;font-size:10px;color:#555;"
+                    f"padding:4px 16px 4px 0;border-bottom:1px solid #111;'>{_f}</td>"
+                    f"<td style='font-family:Inter,sans-serif;font-size:10px;color:#888;"
+                    f"padding:4px 16px 4px 0;border-bottom:1px solid #111;'>{_l}</td>"
+                    f"<td style='font-family:JetBrains Mono,monospace;font-size:10px;color:#e0e0e0;"
+                    f"padding:4px 0;border-bottom:1px solid #111;'>{_r}</td>"
+                    f"</tr>"
+                    for _f, _l, _r in _tc_table_rows
+                )
+                st.markdown(
+                    "<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+                    "border-left:3px solid #1a1a1a;padding:14px 18px;margin:0 0 20px 0;'>"
+                    "<div style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+                    "text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;'>Top Contributor Raw Values</div>"
+                    "<table style='width:100%;border-collapse:collapse;'>"
+                    "<thead><tr>"
+                    "<th style='font-family:JetBrains Mono,monospace;font-size:8px;color:#333;"
+                    "text-align:left;padding-bottom:6px;text-transform:uppercase;letter-spacing:1px;"
+                    "padding-right:16px;border-bottom:1px solid #1a1a1a;'>Feature</th>"
+                    "<th style='font-family:JetBrains Mono,monospace;font-size:8px;color:#333;"
+                    "text-align:left;padding-bottom:6px;text-transform:uppercase;letter-spacing:1px;"
+                    "padding-right:16px;border-bottom:1px solid #1a1a1a;'>Description</th>"
+                    "<th style='font-family:JetBrains Mono,monospace;font-size:8px;color:#333;"
+                    "text-align:left;padding-bottom:6px;text-transform:uppercase;letter-spacing:1px;"
+                    "border-bottom:1px solid #1a1a1a;'>Raw Value (v3B)</th>"
+                    "</tr></thead>"
+                    f"<tbody>{_tc_tbody_html}</tbody>"
+                    "</table></div>",
+                    unsafe_allow_html=True,
+                )
+
+    # ── Anomaly Timeline ──
+    section_header("Anomaly Score Timeline", "sh_score_timeline")
 
     # ── Anomaly Timeline ──
     section_header("Anomaly Score Timeline", "sh_score_timeline")
@@ -1828,7 +1985,7 @@ if active_page == "Alerts":
         filtered_df = _get_filtered_df()
 
         # Alert severity filter + sort controls
-        alert_cols = st.columns([2, 2, 2, 2, 2])
+        alert_cols = st.columns([2, 2, 2, 4])
         with alert_cols[0]:
             alert_risk = st.multiselect("Severity", ["HIGH", "MEDIUM", "LOW"], default=["HIGH", "MEDIUM"], key="alert_sev")
         with alert_cols[1]:
@@ -1836,21 +1993,24 @@ if active_page == "Alerts":
         with alert_cols[2]:
             max_results = st.number_input("Max Rows", min_value=10, max_value=10000, value=500, step=50, key="max_rows")
         with alert_cols[3]:
-            sort_by = st.selectbox(
-                "Sort by",
-                ["Percentile", "Day", "Risk", "User"],
+            sort_choice = st.selectbox(
+                "Sort alerts by",
+                [
+                    "Highest score first",
+                    "Lowest score first",
+                    "Highest severity first",
+                    "Lowest severity first",
+                    "Most recent first",
+                    "Oldest first",
+                    "User A–Z",
+                    "User Z–A",
+                ],
                 index=0,
-                key="alert_sort_by",
-            )
-        with alert_cols[4]:
-            sort_dir = st.selectbox(
-                "Order",
-                ["Descending", "Ascending"],
-                index=0,
-                key="alert_sort_dir",
+                key="alert_sort_choice",
             )
 
-        _ascending = sort_dir == "Ascending"
+        # Centralised severity mapping — extend here when new bands are added
+        _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 
         # Filter first
         alert_data = filtered_df[
@@ -1858,20 +2018,28 @@ if active_page == "Alerts":
             (filtered_df["percentile_rank"] >= min_pctl)
         ].copy()
 
-        # Sort: Risk uses a custom severity order; all others sort natively
-        if sort_by == "Risk":
-            _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
-            alert_data["_risk_sort_key"] = alert_data["risk_levels"].map(_RISK_ORDER).fillna(3)
+        # Sort based on explicit outcome label
+        if sort_choice == "Highest score first":
+            alert_data = alert_data.sort_values("percentile_rank", ascending=False)
+        elif sort_choice == "Lowest score first":
+            alert_data = alert_data.sort_values("percentile_rank", ascending=True)
+        elif sort_choice in ("Highest severity first", "Lowest severity first"):
+            _asc = sort_choice == "Lowest severity first"
+            alert_data["_risk_sort_key"] = alert_data["risk_levels"].map(_RISK_ORDER).fillna(-1)
             alert_data = alert_data.sort_values(
-                "_risk_sort_key", ascending=_ascending
+                ["_risk_sort_key", "percentile_rank"],
+                ascending=[_asc, False],
             ).drop(columns=["_risk_sort_key"])
-        elif sort_by == "Day":
+        elif sort_choice == "Most recent first":
             alert_data["day"] = pd.to_datetime(alert_data["day"], errors="coerce")
-            alert_data = alert_data.sort_values("day", ascending=_ascending)
-        elif sort_by == "User":
-            alert_data = alert_data.sort_values("user", ascending=_ascending)
-        else:  # Percentile (default)
-            alert_data = alert_data.sort_values("percentile_rank", ascending=_ascending)
+            alert_data = alert_data.sort_values("day", ascending=False)
+        elif sort_choice == "Oldest first":
+            alert_data["day"] = pd.to_datetime(alert_data["day"], errors="coerce")
+            alert_data = alert_data.sort_values("day", ascending=True)
+        elif sort_choice == "User A–Z":
+            alert_data = alert_data.sort_values("user", ascending=True)
+        else:  # User Z–A
+            alert_data = alert_data.sort_values("user", ascending=False)
 
         alert_data = alert_data.head(int(max_results))
 
@@ -1956,6 +2124,13 @@ if active_page == "Alerts":
                 with c_btn:
                     if st.button("Investigate →", key=f"al_inv_{i}", use_container_width=True):
                         st.session_state["inv_user_search"] = user
+                        st.session_state["inv_alert_context"] = {
+                            "user": user,
+                            "day": day_str,
+                            "risk": risk,
+                            "percentile": pctl,
+                            "summary": summary,
+                        }
                         st.session_state["_nav_request"] = "Investigation"
                         st.rerun()
 
