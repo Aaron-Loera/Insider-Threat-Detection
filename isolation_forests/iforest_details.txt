@@ -18,3 +18,16 @@
         - N-Estimators: 200
         - Contamination: 0.05
         - Random State: 42
+
+
+- Isolation Forest Model 4 (isolation_forests\iforest_model_4):
+    * This model was trained on Autoencoder Model 4's normal-behavior latent embeddings
+    * Hyperparameters:
+        - N-Estimators: 200
+        - Contamination: 0.001
+        - Random State: 42
+    * Performance:
+        - Anomalies Flagged: 1,271 (0.10%)    
+        - Mean Insider Score: 0.5030
+        - Mean Normal SCore: 0.3958
+        - Separation Ratio: 1.27     

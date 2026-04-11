@@ -8,7 +8,7 @@ class UEBAIsolationForest:
     Isolation Forest for anomaly detection on Autoencoder latent embeddings.
     """
     
-    def __init__(self, n_estimators: int=200, max_samples: str="auto", contamination: float=0.005, random_state: int=42) -> None:
+    def __init__(self, n_estimators: int=200, max_samples: str="auto", contamination: float=0.001, random_state: int=42) -> None:
         """
         Initializes the Isolation Forest.
         
@@ -105,7 +105,7 @@ def compute_contamination_rate(total_embeddings: np.ndarray, normal_embeddings: 
     Calculates the optimal contamination rate for an Isolation Forest.
     
     The normal embeddings are subtracted from the total embeddings to identify the ratio of insiders.
-    The contamination rate is then assigned using `max(computed_value, 0.005)` for numerical stability.
+    The contamination rate is then assigned using `max(computed_value, 0.001)` for numerical stability.
     
     Args:
         total_embeddings: Latent embeddings containing normal and insider rows
@@ -117,7 +117,7 @@ def compute_contamination_rate(total_embeddings: np.ndarray, normal_embeddings: 
     n_insiders = len(total_embeddings) - len(normal_embeddings)
     computed_rate = n_insiders / len(total_embeddings)
     
-    return max(computed_rate, 0.005)
+    return max(computed_rate, 0.001)
 
 
 def compute_separation_ratio(anomaly_scores: np.ndarray, insider_mask: pd.Series | np.ndarray) -> float:
