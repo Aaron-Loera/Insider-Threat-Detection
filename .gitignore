@@ -5,6 +5,7 @@
 *.pkl
 *.npy
 *.keras
+*.docx
 settings.json
 
 # Notebooks
@@ -14,3 +15,6 @@ Scratch.ipynb
 __pycache__/
 *.pyc
 .venv/
+
+# CLAUDE
+.claude/settings.local.json
