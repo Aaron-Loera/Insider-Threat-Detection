@@ -99,7 +99,7 @@ class ReconstructionErrorExplainer:
     
     def explain(self, input_data: np.ndarray, model: tf.keras.Model) -> dict:
         """
-        Generates a full reconstruction explaination.
+        Generates a full reconstruction explanation.
         
         Args:
             input_data: The input data
@@ -127,7 +127,7 @@ class ReconstructionErrorExplainer:
     
     def explain_to_df(self, input_data: np.ndarray, model: tf.keras.Model, metadata: pd.DataFrame | None=None, include_feat_err: bool=True, include_contributions: bool=True) -> pd.DataFrame:
         """
-        Generates a structured Pandas DataFrame containing reconstruction explainations.
+        Generates a structured Pandas DataFrame containing reconstruction explanations.
         
         Args:
             input_data: The scaled input data

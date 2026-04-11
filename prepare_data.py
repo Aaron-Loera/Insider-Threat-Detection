@@ -1,54 +1,18 @@
 # Imports 
 import os
 import joblib
-import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from tensorflow.keras.models import load_model
-from scripts.UEBAIsolationForest import UEBAIsolationForest  
+from scripts.UEBAIsolationForest import UEBAIsolationForest
+from scripts.Preprocessing import chronological_split  # re-export for backward compatibility
+
+__all__ = ["chronological_split", "get_insiders", "build_insider_mask", "get_scores"]
 
 # CONSTANTS 
 SCALER_PATH = os.path.join(r"encoders\encoder_model_1\feature_scaler.pkl")
 ENCODER_PATH = os.path.join(r"encoders\encoder_model_1\encoder_model.keras")
 IF_PATH  = os.path.join(r"isolation_forests\iforest_model_1\iforest_model.pkl")
-
-
-def chronological_split(csv_path: str | None=None, df: pd.DataFrame | None=None, split_ratio: float=0.9) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Loads and creates a chronological split for a UEBA-enhanced dataset.
-    
-    Either a path to a CSV file or a DataFrame can be provided. The split ratio determines the percentage that
-    will be used for model training. The remaining percentage will be used for model validation.
-    
-    Args:
-        csv_path: Path where the processed UEBA dataset is stored
-        df: UEBA-enhanced dataset
-        split_ratio: The ratio to dedicate to model training
-        
-    Returns:
-        tuple: A training and testing DataFrame 
-    """
-    if csv_path is None and df is None:
-        raise ValueError("Please provide either a CSV path or a DataFrame to create a split.")
-    
-    if df is None:
-        df = pd.read_csv(csv_path, index_col=0)
-    
-    # Normalize "user" and "day" columns
-    df["user"] = df["user"].str.strip().str.lower()
-    df["day"] = pd.to_datetime(df["day"]).dt.normalize()
-
-    # Ensure sorted globally by time
-    df = df.sort_values("day").reset_index(drop=True)
-
-    unique_days = np.sort(df["day"].unique())
-    cutoff_index = int(len(unique_days) * split_ratio)
-    cutoff_day = unique_days[cutoff_index]
-
-    train_df = df[df["day"] <= cutoff_day]
-    test_df  = df[df["day"] > cutoff_day]
-
-    return train_df, test_df
 
 
 def get_insiders(path: str, version: str | float, return_all: bool=False) -> pd.DataFrame:
@@ -153,10 +117,3 @@ def get_scores(newData_df: pd.DataFrame) -> pd.DataFrame:
     return result_df
 
 
-if __name__ == "__main__":
-    # Split Table 
-    train_df, test_df = chronological_split(r"processed_datasets\ueba_dataset_3b.csv")
-
-    # Convert to CSV
-    train_df.to_csv("processed_datasets/train.csv", index=False)
-    test_df.to_csv("processed_datasets/test_stream.csv", index=False)
