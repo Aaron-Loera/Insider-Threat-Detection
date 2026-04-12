@@ -573,13 +573,6 @@ def load_data():
     else:
         analyst = pd.read_csv(ANALYST_TABLE_CSV)
 
-    # This will be removed once dashboard is adapted to new alert table layout
-    analyst = analyst.rename(columns={
-        "if_anomaly_score":   "anomaly_scores",
-        "ae_percentile_rank": "percentile_rank",
-        "ae_risk_band":       "risk_levels",
-    })
-
     # ── Load UEBA dataset ──
     if os.path.exists(UEBA_PARQUET):
         import pyarrow.parquet as pq
@@ -605,23 +598,23 @@ def load_data():
 
     # Merge — include alert-context columns from the alert table
     analyst_cols = [
-        "user", "day", "anomaly_scores", "percentile_rank", "risk_levels",
+        "user", "day", "if_anomaly_score", "ae_percentile_rank", "ae_risk_band",
         "top_contributors", "if_percentile_rank", "if_risk_band", "explanation",
     ]
     analyst_cols = [c for c in analyst_cols if c in analyst.columns]
-    merged = ueba.merge(analyst[analyst_cols], on=["user", "day"], how="inner")
+    merged = ueba.merge(analyst[analyst_cols], on=["user", "day"], how="left")
 
     # Pre-compute per-user risk summary (expensive groupby, do once)
     user_risk = (
         merged.groupby("user")
         .agg(
-            max_score=("anomaly_scores", "max"),
-            mean_score=("anomaly_scores", "mean"),
-            max_percentile=("percentile_rank", "max"),
+            max_score=("if_anomaly_score", "max"),
+            mean_score=("if_anomaly_score", "mean"),
+            max_percentile=("ae_percentile_rank", "max"),
             alert_days=("day", "nunique"),
-            critical_count=("risk_levels", lambda x: (x == "CRITICAL").sum()),
-            high_count=("risk_levels", lambda x: (x == "HIGH").sum()),
-            medium_count=("risk_levels", lambda x: (x == "MEDIUM").sum()),
+            critical_count=("ae_risk_band", lambda x: (x == "CRITICAL").sum()),
+            high_count=("ae_risk_band", lambda x: (x == "HIGH").sum()),
+            medium_count=("ae_risk_band", lambda x: (x == "MEDIUM").sum()),
         )
         .reset_index()
         .sort_values("max_percentile", ascending=False)
@@ -1088,7 +1081,7 @@ def show_filters():
 
 def _get_filtered_df():
     """Return merged_df sliced by current session_state filter values."""
-    mask = merged_df["risk_levels"].isin(st.session_state.flt_risk)
+    mask = merged_df["ae_risk_band"].isin(st.session_state.flt_risk)
     mask &= merged_df["day"].dt.date >= st.session_state.flt_date_start
     mask &= merged_df["day"].dt.date <= st.session_state.flt_date_end
     return merged_df[mask]
@@ -1301,7 +1294,7 @@ if active_page == "Overview":
     filtered_df = _get_filtered_df()
 
     # ── Critical Alert Notice ──────────────────────────────────
-    _high_df = filtered_df[filtered_df["risk_levels"].isin(["CRITICAL", "HIGH"])]
+    _high_df = filtered_df[filtered_df["ae_risk_band"].isin(["CRITICAL", "HIGH"])]
     _high_user_count = _high_df["user"].nunique()
     _high_record_count = len(_high_df)
 
@@ -1310,8 +1303,8 @@ if active_page == "Overview":
         _top_alert_users = (
             _high_df.groupby("user", observed=True)
             .agg(
-                peak_pct=("percentile_rank", "max") if "percentile_rank" in _high_df.columns else ("anomaly_scores", "max"),
-                high_days=("risk_levels", "count"),
+                peak_pct=("ae_percentile_rank", "max") if "ae_percentile_rank" in _high_df.columns else ("if_anomaly_score", "max"),
+                high_days=("ae_risk_band", "count"),
             )
             .sort_values("peak_pct", ascending=False)
             .head(5)
@@ -1347,11 +1340,11 @@ if active_page == "Overview":
 
     total_users = filtered_df["user"].nunique()
     total_records = len(filtered_df)
-    critical_risk_users = filtered_df[filtered_df["risk_levels"] == "CRITICAL"]["user"].nunique()
-    high_risk_users = filtered_df[filtered_df["risk_levels"] == "HIGH"]["user"].nunique()
-    medium_risk_users = filtered_df[filtered_df["risk_levels"] == "MEDIUM"]["user"].nunique()
-    avg_anomaly = filtered_df["anomaly_scores"].mean()
-    detection_rate = (filtered_df["risk_levels"].isin(["CRITICAL", "HIGH", "MEDIUM"]).sum() / max(len(filtered_df), 1)) * 100
+    critical_risk_users = filtered_df[filtered_df["ae_risk_band"] == "CRITICAL"]["user"].nunique()
+    high_risk_users = filtered_df[filtered_df["ae_risk_band"] == "HIGH"]["user"].nunique()
+    medium_risk_users = filtered_df[filtered_df["ae_risk_band"] == "MEDIUM"]["user"].nunique()
+    avg_anomaly = filtered_df["if_anomaly_score"].mean()
+    detection_rate = (filtered_df["ae_risk_band"].isin(["CRITICAL", "HIGH", "MEDIUM"]).sum() / max(len(filtered_df), 1)) * 100
 
     st.markdown(
         "<div class='kpi-scroll-wrapper'>"
@@ -1394,7 +1387,7 @@ if active_page == "Overview":
 
     with col_left:
         section_header("Risk Distribution", "sh_risk_dist")
-        risk_counts = filtered_df["risk_levels"].value_counts().reset_index()
+        risk_counts = filtered_df["ae_risk_band"].value_counts().reset_index()
         risk_counts.columns = ["Risk Level", "Count"]
         fig_donut = px.pie(
             risk_counts, values="Count", names="Risk Level",
@@ -1411,7 +1404,7 @@ if active_page == "Overview":
     with col_right:
         section_header("Alert Trend Over Time", "sh_alert_trend")
         daily_alerts = (
-            filtered_df.groupby([filtered_df["day"].dt.date, "risk_levels"])
+            filtered_df.groupby([filtered_df["day"].dt.date, "ae_risk_band"])
             .size()
             .reset_index(name="count")
         )
@@ -1485,9 +1478,9 @@ if active_page == "Overview":
         # Sample for histogram to avoid sending 2M+ points to Plotly
         hist_df = filtered_df if len(filtered_df) <= MAX_PLOT_POINTS else filtered_df.sample(MAX_PLOT_POINTS, random_state=42)
         fig_hist = px.histogram(
-            hist_df, x="anomaly_scores", nbins=80,
-            color="risk_levels", color_discrete_map=RISK_COLORS,
-            labels={"anomaly_scores": "Anomaly Score", "risk_levels": "Risk Level"},
+            hist_df, x="if_anomaly_score", nbins=80,
+            color="ae_risk_band", color_discrete_map=RISK_COLORS,
+            labels={"if_anomaly_score": "Anomaly Score", "ae_risk_band": "Risk Level"},
         )
         fig_hist.update_layout(**PLOTLY_LAYOUT, height=440, barmode="overlay")
         fig_hist.update_traces(opacity=0.75)
@@ -1564,11 +1557,11 @@ if active_page == "Investigation":
 
     # ── User KPI Row ──
     u1, u2, u3, u4, u5, u6 = st.columns(6)
-    u_max_score = user_data["anomaly_scores"].max()
-    u_max_pctl = user_data["percentile_rank"].max()
-    u_crit_days = (user_data["risk_levels"] == "CRITICAL").sum()
-    u_high_days = (user_data["risk_levels"] == "HIGH").sum()
-    u_med_days = (user_data["risk_levels"] == "MEDIUM").sum()
+    u_max_score = user_data["if_anomaly_score"].max()
+    u_max_pctl = user_data["ae_percentile_rank"].max()
+    u_crit_days = (user_data["ae_risk_band"] == "CRITICAL").sum()
+    u_high_days = (user_data["ae_risk_band"] == "HIGH").sum()
+    u_med_days = (user_data["ae_risk_band"] == "MEDIUM").sum()
     u_total_days = len(user_data)
 
     # Determine overall user risk label
@@ -1592,17 +1585,17 @@ if active_page == "Investigation":
     section_header("Anomaly Score Timeline", "sh_score_timeline")
     fig_timeline = go.Figure()
     fig_timeline.add_trace(go.Scatter(
-        x=user_data["day"], y=user_data["anomaly_scores"],
+        x=user_data["day"], y=user_data["if_anomaly_score"],
         mode="lines+markers", name="Anomaly Score",
         line=dict(color="#ffffff", width=1.5),
         marker=dict(size=4, color="#ffffff"),
     ))
     # Color markers by risk level
     for risk, color in RISK_COLORS.items():
-        subset = user_data[user_data["risk_levels"] == risk]
+        subset = user_data[user_data["ae_risk_band"] == risk]
         if not subset.empty:
             fig_timeline.add_trace(go.Scatter(
-                x=subset["day"], y=subset["anomaly_scores"],
+                x=subset["day"], y=subset["if_anomaly_score"],
                 mode="markers", name=risk,
                 marker=dict(size=8, color=color, symbol="square", line=dict(width=1, color="#000")),
 
@@ -1702,7 +1695,7 @@ if active_page == "Investigation":
 
     # ── Raw Activity Table ──
     section_header("Raw Activity Records", "sh_raw_records")
-    display_cols = ["day", "risk_levels", "anomaly_scores", "percentile_rank"] + RAW_FEATURES + CROSS_FLAGS
+    display_cols = ["day", "ae_risk_band", "if_anomaly_score", "ae_percentile_rank"] + RAW_FEATURES + CROSS_FLAGS
     display_cols = [c for c in display_cols if c in user_data.columns]
     st.dataframe(
         user_data[display_cols].sort_values("day", ascending=False),
@@ -1806,7 +1799,7 @@ if active_page == "Alerts":
             _live_col_cfg = {
                 "risk_level":     st.column_config.TextColumn("Risk Level"),
                 "anomaly_score":  st.column_config.NumberColumn("Anomaly Score", format="%.6f"),
-                "percentile_rank":st.column_config.ProgressColumn("Percentile", min_value=0, max_value=100, format="%.1f"),
+                "ae_percentile_rank":st.column_config.ProgressColumn("Percentile", min_value=0, max_value=100, format="%.1f"),
             }
             st.dataframe(live_df, use_container_width=True, height=500, column_config=_live_col_cfg)
 
@@ -1844,9 +1837,9 @@ if active_page == "Alerts":
             max_results = st.number_input("Max Rows", min_value=10, max_value=10000, value=500, step=50, key="max_rows")
 
         alert_data = filtered_df[
-            (filtered_df["risk_levels"].isin(alert_risk)) &
-            (filtered_df["percentile_rank"] >= min_pctl)
-        ].sort_values("percentile_rank", ascending=False).head(int(max_results))
+            (filtered_df["ae_risk_band"].isin(alert_risk)) &
+            (filtered_df["ae_percentile_rank"] >= min_pctl)
+        ].sort_values("ae_percentile_rank", ascending=False).head(int(max_results))
 
         # Cap card rendering to keep the UI responsive
         CARD_LIMIT = 100
@@ -1881,11 +1874,11 @@ if active_page == "Alerts":
 
             # ── Per-alert card rows ──
             for i, row in enumerate(card_data.itertuples()):
-                risk    = getattr(row, "risk_levels",    "LOW")
+                risk    = getattr(row, "ae_risk_band",    "LOW")
                 user    = getattr(row, "user",           "—")
                 day_val = getattr(row, "day",            None)
                 day_str = day_val.strftime("%Y-%m-%d") if hasattr(day_val, "strftime") else str(day_val)
-                pctl    = getattr(row, "percentile_rank", 0.0)
+                pctl    = getattr(row, "ae_percentile_rank", 0.0)
                 top_raw = getattr(row, "top_contributors", None)
                 summary = build_alert_summary(top_raw)
 
@@ -1940,7 +1933,7 @@ if active_page == "Alerts":
                 )
 
         # ── Export (columns + top_contributors if present) ──
-        alert_display_cols = ["user", "day", "risk_levels", "anomaly_scores", "percentile_rank"]
+        alert_display_cols = ["user", "day", "ae_risk_band", "if_anomaly_score", "ae_percentile_rank"]
         alert_display_cols += [c for c in CROSS_FLAGS if c in alert_data.columns]
         if "top_contributors" in alert_data.columns:
             alert_display_cols.append("top_contributors")
@@ -2011,9 +2004,9 @@ if active_page == "Channels":
         # Downsample for box plot — browser can't handle 2M+ points
         box_df = filtered_df if len(filtered_df) <= MAX_PLOT_POINTS else filtered_df.sample(MAX_PLOT_POINTS, random_state=42)
         fig_box = px.box(
-            box_df, x="risk_levels", y=selected_feature,
-            color="risk_levels", color_discrete_map=RISK_COLORS,
-            category_orders={"risk_levels": ["HIGH", "MEDIUM", "LOW"]},
+            box_df, x="ae_risk_band", y=selected_feature,
+            color="ae_risk_band", color_discrete_map=RISK_COLORS,
+            category_orders={"ae_risk_band": RISK_TIERS},
         )
         fig_box.update_layout(**PLOTLY_LAYOUT, height=400, xaxis_title="Risk Level", yaxis_title=selected_feature)
         st.plotly_chart(fig_box, use_container_width=True)
