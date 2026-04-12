@@ -1,7 +1,9 @@
 import os
 import numpy as np
 import tensorflow as tf
+import matplotlib.pyplot as plt
 from tensorflow.keras import layers, models
+from tensorflow.keras.callbacks import EarlyStopping, CSVLogger
 
 class Autoencoder:
     """
@@ -15,7 +17,7 @@ class Autoencoder:
         Args:
             input_dim: The number of input features
             latent_dim: The size of latent embeddings
-            hidden_dim: The size of hidden layers. If a tuple is provided each integer is treated as its own hidden layer
+            hidden_dims: The size of hidden layers. If a tuple is provided each integer is treated as its own hidden layer
             learning_rate: Optimizer learning rate
             
         Returns:
@@ -23,7 +25,6 @@ class Autoencoder:
         """
         self.input_dim = input_dim
         self.latent_dim = latent_dim
-        
         self.hidden_dims = hidden_dims
         self.learning_rate = learning_rate
         
@@ -46,14 +47,17 @@ class Autoencoder:
 
         if isinstance(self.hidden_dims, int):
             x = layers.Dense(self.hidden_dims, activation="relu")(inputs)
+            x = layers.Dropout(0.2)(x)
             
         elif isinstance(self.hidden_dims, tuple):
             x = layers.Dense(self.hidden_dims[0], activation="relu")(inputs)
+            x = layers.Dropout(0.2)(x)
             for i in range(1, len(self.hidden_dims)):
                 x = layers.Dense(self.hidden_dims[i], activation="relu")(x)
+                x = layers.Dropout(0.2)(x)
         
-        # Latent space   
-        latent = layers.Dense(self.latent_dim, activation="relu", name="latent_space")(x)
+        # Latent space
+        latent = layers.Dense(self.latent_dim, activation="linear", name="latent_space")(x)
         
         # Decoder construction
         if isinstance(self.hidden_dims, int):
@@ -79,32 +83,52 @@ class Autoencoder:
         return (autoencoder, encoder)
     
     
-    def train(self, x_train: np.ndarray, save_path: str, epochs: int=50, batch_size: int=128, validation_split: float=0.1):
+    def train(self, x_train: np.ndarray, save_path: str, epochs: int=100, batch_size: int=256, x_val: np.ndarray=None):
         """
-        Trains the autoencoder using the specified hyperparameters.
+        Trains the autoencoder with early stopping.
         
         Args:
-            x_train: The scaled UEBA-enhanced feature matrix
-            save_path: The path to store the training log
-            epochs: The number of epochs to train the autoencoder for
+            x_train: The scaled and filtered training feature matrix (i.e., no insider rows)
+            save_path: The path to store the training log and model artifacts
+            epochs: Maximum number of epochs
             batch_size: Batch size
-            validation_split: The validation data ratio
+            x_val: The scaled and filtered validation feature matrix (i.e., no insider rows). If None,
+                   a 10% random validation_split is used as fallback.
         """
-        # Defining logger to save training history
         log_save_path = os.path.join(save_path, "training_log.csv")
-        csv_logger = tf.keras.callbacks.CSVLogger(log_save_path, append=True)
+        csv_logger = CSVLogger(log_save_path, append=False)
         
-        # Training the full autoencoder
-        history = self.autoencoder.fit(
-            x_train,
-            x_train,
-            epochs=epochs,
-            batch_size=batch_size,
-            validation_split=validation_split,
-            shuffle=True,
-            verbose=1,
-            callbacks=[csv_logger]
+        early_stop = EarlyStopping(
+            monitor="val_loss",
+            patience=10,
+            restore_best_weights=True,
+            verbose=1
         )
+        
+        callbacks = [csv_logger, early_stop]
+        
+        if x_val is not None:
+            history = self.autoencoder.fit(
+                x_train,
+                x_train,
+                validation_data=(x_val, x_val),
+                epochs=epochs,
+                batch_size=batch_size,
+                shuffle=True,
+                verbose=1,
+                callbacks=callbacks
+            )
+        else:
+            history = self.autoencoder.fit(
+                x_train,
+                x_train,
+                epochs=epochs,
+                batch_size=batch_size,
+                validation_split=0.1,
+                shuffle=True,
+                verbose=1,
+                callbacks=callbacks
+            )
         
         return history
         
@@ -117,7 +141,7 @@ class Autoencoder:
             feature_matrix: The scaled UEBA feature matrix
             
         Returns:
-            np.ndarray: The generate latent embeddings
+            np.ndarray: The generated latent embeddings
         """
         return self.encoder.predict(feature_matrix)
     
@@ -132,10 +156,30 @@ class Autoencoder:
         Returns:
             np.ndarray: Reconstruction MSE per sample
         """
-        # Reconstructing original feature matrix
         reconstruction = self.autoencoder.predict(feature_matrix)
-        
-        # Computing the mean squared error
         error = np.mean(np.square(feature_matrix - reconstruction), axis=1)
-        
         return error
+
+
+def plot_loss(history, save_path) -> None:
+    """
+    Plots training vs. validation loss with EarlyStopping best-epoch annotation.
+    """
+    train_loss = history.history["loss"]
+    val_loss = history.history["val_loss"]
+    best_epoch = np.argmin(val_loss)
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_loss, label="Training Loss", marker=".", color="steelblue")
+    plt.plot(val_loss, label="Validation Loss", marker=".", color="coral")
+    plt.axvline(x=best_epoch, color="green", linestyle="--", alpha=0.7, label=f"Best epoch ({best_epoch})")
+    plt.xlabel("Epoch")
+    plt.ylabel("MSE Loss")
+    plt.xlim(0.0)
+    plt.ylim(0.0, 1.0)
+    plt.title("Autoencoder Training History (Normal-Only Data)")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_path, "training_history.png"), dpi=150)
+    plt.show()    

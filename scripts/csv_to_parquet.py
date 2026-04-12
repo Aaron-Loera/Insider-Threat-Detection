@@ -5,8 +5,8 @@ Usage (from project root):
     py scripts/csv_to_parquet.py
 
 The script converts:
-    processed_datasets/ueba_dataset.csv              ->  .parquet
-    explainability/alert_table/alert_table_2.csv      ->  .parquet
+    processed_datasets/ueba_dataset_3b.csv           ->  .parquet
+    explainability/alert_table/alert_table_3.csv     ->  .parquet
 
 The original CSV files are kept unchanged.
 """
@@ -25,6 +25,19 @@ CSV_FILES = [
 
 
 def convert(csv_path: str) -> None:
+    """
+    Convert a single CSV file to Parquet, skipping if already up-to-date.
+
+    Writes the Parquet file alongside the source CSV. Skips conversion if the
+    Parquet file exists and is newer than the CSV (mtime comparison). Prints
+    status and file-size comparison on conversion.
+
+    Args:
+        csv_path: Absolute path to the source CSV file.
+        
+    Returns:
+        None:
+    """
     parquet_path = csv_path.rsplit(".", 1)[0] + ".parquet"
     rel = os.path.relpath(csv_path, BASE_DIR)
 
@@ -49,6 +62,9 @@ def convert(csv_path: str) -> None:
 
 
 def main() -> None:
+    """
+    Convert all files listed in CSV_FILES.
+    """
     print("CSV -> Parquet converter\n")
     for path in CSV_FILES:
         convert(path)
