@@ -195,3 +195,24 @@ class AlertObjectBuilder:
             alerts.append(alert)
             
         return pd.DataFrame(alerts)
+    
+    
+def save_table(df: pd.DataFrame, save_path: str) -> None:
+    """
+    Saves the DataFrame table as a CSV file to the specified path.
+    
+    Args:
+        df: DataFrame table
+        save_path: Path to save table to ending in "*.csv"
+        
+    Returns:
+        None:
+    """
+    # Ensuring output directory exists
+    output_dir = r"explainability\alert_table"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    full_path = os.path.join(output_dir, save_path)
+    df.to_csv(full_path, index=False)
+    
+    print("Successfully saved to:", full_path)

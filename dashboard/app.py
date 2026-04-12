@@ -528,10 +528,10 @@ st.markdown("""
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Prefer Parquet (5-10x faster I/O); fall back to CSV
-ANALYST_TABLE_PARQUET = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_3.parquet")
-ANALYST_TABLE_CSV = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_3.csv")
-UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.parquet")
-UEBA_CSV = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.csv")
+ANALYST_TABLE_PARQUET = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_4.parquet")
+ANALYST_TABLE_CSV = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_4.csv")
+UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_4", "ueba_dataset_4_train.parquet")
+UEBA_CSV = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_4", "ueba_dataset_4_train.csv")
 LIVE_OUTPUT = os.path.join(BASE_DIR, "processed_datasets", "live_results.jsonl")
 LIVE_SIM_SCRIPT = os.path.join(BASE_DIR, "live_simulation.py")
 
@@ -647,10 +647,10 @@ if not DATA_LOADED:
     st.title("INSIDER THREAT DETECTION")
     st.error(
         "**Data files not found.** Please run the preprocessing and model notebooks first:\n\n"
-        "1. `CERT_Preprocessing.ipynb` → generates `processed_datasets/ueba_dataset.csv`\n"
+        "1. `CERT_Preprocessing.ipynb` → generates `processed_datasets/ueba_dataset_4/ueba_dataset_4_train.csv`\n"
         "2. `Autoencoder.ipynb` → trains the encoder model\n"
         "3. `Isolation_Forest.ipynb` → generates anomaly scores\n"
-        "4. `Alert_Object_Builder.ipynb` → generates `explainability/alert_table/alert_table_2.csv`"
+        "4. `Alert_Object_Builder.ipynb` → generates `explainability/alert_table/alert_table_4.csv`"
     )
     st.stop()
 

@@ -139,7 +139,7 @@ class ReconstructionErrorExplainer:
         Returns:
             pd.DataFrame: A structured DataFrame containing metadata, total error, group-level errors, and optional feature-level details
         """
-        # Computing reconstruction explainations
+        # Computing reconstruction explanations
         results = self.explain(input_data, model)
         
         feature_error = results["feature_error"]
@@ -172,3 +172,24 @@ class ReconstructionErrorExplainer:
                 error_df[f"contribution_{feature}"] = contribution_ratio[:, idx]
                 
         return error_df
+    
+
+def save_table(df: pd.DataFrame, save_path: str) -> None:
+    """
+    Saves the DataFrame table as a CSV file to the specified path.
+    
+    Args:
+        df: DataFrame table
+        save_path: Path to save table to ending in "*.csv"
+        
+    Returns:
+        None:
+    """
+    # Ensuring output directory exists
+    output_dir = r"explainability\reconstruction_error"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    full_path = os.path.join(output_dir, save_path)
+    df.to_csv(full_path, index=False)
+    
+    print("Successfully saved to:", full_path)
