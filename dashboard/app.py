@@ -619,6 +619,7 @@ def load_data():
             mean_score=("anomaly_scores", "mean"),
             max_percentile=("percentile_rank", "max"),
             alert_days=("day", "nunique"),
+            critical_count=("risk_levels", lambda x: (x == "CRITICAL").sum()),
             high_count=("risk_levels", lambda x: (x == "HIGH").sum()),
             medium_count=("risk_levels", lambda x: (x == "MEDIUM").sum()),
         )
@@ -736,7 +737,8 @@ PLOTLY_LAYOUT = dict(
     yaxis=dict(gridcolor="#1a1a1a", zerolinecolor="#1a1a1a"),
 )
 
-RISK_COLORS = {"HIGH": "#e84545", "MEDIUM": "#d4a017", "LOW": "#3a86a8"}
+RISK_TIERS = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+RISK_COLORS = {"CRITICAL": "#ff1744", "HIGH": "#e84545", "MEDIUM": "#d4a017", "LOW": "#3a86a8"}
 
 # ──────────────────────────────────────────────────────────────
 # Alert context helpers
@@ -1045,7 +1047,7 @@ if "flt_date_start" not in st.session_state:
 if "flt_date_end" not in st.session_state:
     st.session_state.flt_date_end = _DS_MAX
 if "flt_risk" not in st.session_state:
-    st.session_state.flt_risk = ["HIGH", "MEDIUM", "LOW"]
+    st.session_state.flt_risk = list(RISK_TIERS)
 
 
 @st.dialog("Filters")
@@ -1062,7 +1064,7 @@ def show_filters():
     st.markdown("**Risk Levels**")
     rl = st.multiselect(
         "Risk Levels",
-        ["HIGH", "MEDIUM", "LOW"],
+        RISK_TIERS,
         default=st.session_state.flt_risk,
         label_visibility="collapsed",
         key="dlg_risk",
@@ -1074,13 +1076,13 @@ def show_filters():
             if isinstance(dr, tuple) and len(dr) == 2:
                 st.session_state.flt_date_start = dr[0]
                 st.session_state.flt_date_end = dr[1]
-            st.session_state.flt_risk = rl if rl else ["HIGH", "MEDIUM", "LOW"]
+            st.session_state.flt_risk = rl if rl else list(RISK_TIERS)
             st.rerun()
     with reset_col:
         if st.button("Reset", use_container_width=True):
             st.session_state.flt_date_start = _DS_MIN
             st.session_state.flt_date_end = _DS_MAX
-            st.session_state.flt_risk = ["HIGH", "MEDIUM", "LOW"]
+            st.session_state.flt_risk = list(RISK_TIERS)
             st.rerun()
 
 
@@ -1299,7 +1301,7 @@ if active_page == "Overview":
     filtered_df = _get_filtered_df()
 
     # ── Critical Alert Notice ──────────────────────────────────
-    _high_df = filtered_df[filtered_df["risk_levels"] == "HIGH"]
+    _high_df = filtered_df[filtered_df["risk_levels"].isin(["CRITICAL", "HIGH"])]
     _high_user_count = _high_df["user"].nunique()
     _high_record_count = len(_high_df)
 
@@ -1322,7 +1324,7 @@ if active_page == "Overview":
                 f"<div class='alert-notice-row-item'>"
                 f"<span class='u-id'>{_row['user']}</span>"
                 f"<span class='u-pct'>P{_row['peak_pct']:.0f}</span>"
-                f"<span class='u-days'>{int(_row['high_days'])} high-risk day{'s' if _row['high_days'] != 1 else ''}</span>"
+                f"<span class='u-days'>{int(_row['high_days'])} critical/high-risk day{'s' if _row['high_days'] != 1 else ''}</span>"
                 f"</div>"
             )
 
@@ -1330,7 +1332,7 @@ if active_page == "Overview":
             "<div class='alert-notice-banner'>"
             "<div class='alert-notice-header'>"
             f"<span class='alert-notice-title'>Active Alerts Requiring Immediate Attention</span>"
-            f"<span class='alert-notice-count'>{_high_user_count:,} high-risk user{'s' if _high_user_count != 1 else ''} &nbsp;&middot;&nbsp; {_high_record_count:,} flagged record{'s' if _high_record_count != 1 else ''}</span>"
+            f"<span class='alert-notice-count'>{_high_user_count:,} critical/high-risk user{'s' if _high_user_count != 1 else ''} &nbsp;&middot;&nbsp; {_high_record_count:,} flagged record{'s' if _high_record_count != 1 else ''}</span>"
             "</div>"
             f"<div class='alert-notice-rows'>{_user_pills}</div>"
             "</div>"
@@ -1345,21 +1347,23 @@ if active_page == "Overview":
 
     total_users = filtered_df["user"].nunique()
     total_records = len(filtered_df)
+    critical_risk_users = filtered_df[filtered_df["risk_levels"] == "CRITICAL"]["user"].nunique()
     high_risk_users = filtered_df[filtered_df["risk_levels"] == "HIGH"]["user"].nunique()
     medium_risk_users = filtered_df[filtered_df["risk_levels"] == "MEDIUM"]["user"].nunique()
     avg_anomaly = filtered_df["anomaly_scores"].mean()
-    detection_rate = (filtered_df["risk_levels"].isin(["HIGH", "MEDIUM"]).sum() / max(len(filtered_df), 1)) * 100
+    detection_rate = (filtered_df["risk_levels"].isin(["CRITICAL", "HIGH", "MEDIUM"]).sum() / max(len(filtered_df), 1)) * 100
 
     st.markdown(
         "<div class='kpi-scroll-wrapper'>"
         "<div class='kpi-scroll-arrow' id='kpi-arrow-left'>&#8592;</div>"
         f"<div class='kpi-scroll-row' id='kpi-row'>"
         f"<div class='kpi-card' style='border-color:#ffffff'><h3>Users Monitored</h3><h1 style='color:#ffffff'>{total_users:,}</h1><p>Active in period</p></div>"
-        f"<div class='kpi-card' style='border-color:#e84545'><h3>High Risk</h3><h1 style='color:#e84545'>{high_risk_users}</h1><p>&ge; 95th percentile</p></div>"
+        f"<div class='kpi-card' style='border-color:#ff1744'><h3>Critical Risk</h3><h1 style='color:#ff1744'>{critical_risk_users}</h1><p>&ge; 95th percentile</p></div>"
+        f"<div class='kpi-card' style='border-color:#e84545'><h3>High Risk</h3><h1 style='color:#e84545'>{high_risk_users}</h1><p>&ge; 90th percentile</p></div>"
         f"<div class='kpi-card' style='border-color:#d4a017'><h3>Medium Risk</h3><h1 style='color:#d4a017'>{medium_risk_users}</h1><p>&ge; 80th percentile</p></div>"
         f"<div class='kpi-card' style='border-color:#666666'><h3>Total Records</h3><h1 style='color:#cccccc'>{total_records:,}</h1><p>User-day observations</p></div>"
         f"<div class='kpi-card' style='border-color:#666666'><h3>Avg Anomaly Score</h3><h1 style='color:#cccccc'>{avg_anomaly:.4f}</h1><p>Across all records</p></div>"
-        f"<div class='kpi-card' style='border-color:#666666'><h3>Detection Rate</h3><h1 style='color:#cccccc'>{detection_rate:.1f}%</h1><p>Medium + High alerts</p></div>"
+        f"<div class='kpi-card' style='border-color:#666666'><h3>Detection Rate</h3><h1 style='color:#cccccc'>{detection_rate:.1f}%</h1><p>Medium + High + Critical alerts</p></div>"
         "</div>"
         "<div class='kpi-scroll-arrow' id='kpi-arrow-right'>&#8594;</div>"
         "</div>",
@@ -1433,17 +1437,20 @@ if active_page == "Overview":
         for rank, row in enumerate(top_users.itertuples(), start=1):
             uid = row.user
             score = row.max_percentile
-            days = row.high_count
+            days = row.critical_count + row.high_count
             # Color badge based on score
-            if score >= 80:
-                badge_color = "#e84545"
+            if score >= 95:
+                badge_color = "#ff1744"
                 badge_label = "CRITICAL"
-            elif score >= 60:
-                badge_color = "#d4a017"
+            elif score >= 90:
+                badge_color = "#e84545"
                 badge_label = "HIGH"
+            elif score >= 80:
+                badge_color = "#d4a017"
+                badge_label = "MEDIUM"
             else:
-                badge_color = "#4a9eff"
-                badge_label = "ELEVATED"
+                badge_color = "#3a86a8"
+                badge_label = "LOW"
 
             col_rank, col_info, col_btn = st.columns([1, 5, 3])
             with col_rank:
@@ -1556,15 +1563,18 @@ if active_page == "Investigation":
         st.stop()
 
     # ── User KPI Row ──
-    u1, u2, u3, u4, u5 = st.columns(5)
+    u1, u2, u3, u4, u5, u6 = st.columns(6)
     u_max_score = user_data["anomaly_scores"].max()
     u_max_pctl = user_data["percentile_rank"].max()
+    u_crit_days = (user_data["risk_levels"] == "CRITICAL").sum()
     u_high_days = (user_data["risk_levels"] == "HIGH").sum()
     u_med_days = (user_data["risk_levels"] == "MEDIUM").sum()
     u_total_days = len(user_data)
 
     # Determine overall user risk label
     if u_max_pctl >= 95:
+        u_risk_label, u_risk_color = "CRITICAL", "#ff1744"
+    elif u_max_pctl >= 90:
         u_risk_label, u_risk_color = "HIGH", "#ff6b6b"
     elif u_max_pctl >= 80:
         u_risk_label, u_risk_color = "MEDIUM", "#feca57"
@@ -1573,9 +1583,10 @@ if active_page == "Investigation":
 
     u1.metric("Overall Risk", u_risk_label)
     u2.metric("Peak Percentile", f"{u_max_pctl:.1f}")
-    u3.metric("High-Risk Days", u_high_days)
-    u4.metric("Medium-Risk Days", u_med_days)
-    u5.metric("Days Observed", u_total_days)
+    u3.metric("Critical-Risk Days", u_crit_days)
+    u4.metric("High-Risk Days", u_high_days)
+    u5.metric("Medium-Risk Days", u_med_days)
+    u6.metric("Days Observed", u_total_days)
 
     # ── Anomaly Timeline ──
     section_header("Anomaly Score Timeline", "sh_score_timeline")
@@ -1826,7 +1837,7 @@ if active_page == "Alerts":
         # Alert severity filter within this tab
         alert_cols = st.columns([2, 2, 2, 6])
         with alert_cols[0]:
-            alert_risk = st.multiselect("Severity", ["HIGH", "MEDIUM", "LOW"], default=["HIGH", "MEDIUM"], key="alert_sev")
+            alert_risk = st.multiselect("Severity", RISK_TIERS, default=["CRITICAL", "HIGH", "MEDIUM"], key="alert_sev")
         with alert_cols[1]:
             min_pctl = st.slider("Min Percentile", 0.0, 100.0, 0.0, key="min_pctl")
         with alert_cols[2]:
