@@ -6,6 +6,7 @@
 *.npy
 *.keras
 *.docx
+*.pdf
 settings.json
 
 # Notebooks
