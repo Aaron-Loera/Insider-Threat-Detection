@@ -27,20 +27,20 @@ import websockets
 
 # ── Paths (all relative to the repo root, i.e. this file's directory) ────────
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-SCALER_PATH = os.path.join(BASE_DIR, "encoders",         "encoder_model_1", "feature_scaler.pkl")
-ENCODER_PATH= os.path.join(BASE_DIR, "encoders",         "encoder_model_1", "encoder_model.keras")
-IF_PATH     = os.path.join(BASE_DIR, "isolation_forests","iforest_model_1", "iforest_model.pkl")
+SCALER_PATH = os.path.join(BASE_DIR, "encoders",         "encoder_model_4", "feature_scaler.pkl")
+ENCODER_PATH= os.path.join(BASE_DIR, "encoders",         "encoder_model_4", "encoder_model.keras")
+IF_PATH     = os.path.join(BASE_DIR, "isolation_forests","iforest_model_4", "iforest_model.pkl")
 # Reference distribution used to compute global percentile ranks
-ALERT_TABLE_PARQUET = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_2.parquet")
-ALERT_TABLE_CSV     = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_2.csv")
+IF_SCORES_PATH = os.path.join(BASE_DIR, "isolation_forests", "iforest_model_4", "anomaly_scores.npy")
 # Default simulation input
-DEFAULT_INPUT  = os.path.join(BASE_DIR, "processed_datasets", "test_stream.csv")
+DEFAULT_INPUT  = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_4", "ueba_dataset_4_test_stream.csv")
 # Live output (one JSON object per line, appended as rows arrive)
 DEFAULT_OUTPUT = os.path.join(BASE_DIR, "processed_datasets", "live_results.jsonl")
 
-# Risk-band thresholds (percentile cutoffs, consistent with the dashboard)
-HIGH_THRESH   = 95.0
-MEDIUM_THRESH = 80.0
+# Risk-band thresholds (percentile cutoffs, consistent with AlertObjectBuilder)
+CRITICAL_THRESH = 95.0
+HIGH_THRESH     = 90.0
+MEDIUM_THRESH   = 80.0
 
 # ── Global WebSocket client registry ─────────────────────────────────────────
 _ws_clients: set = set()
@@ -72,11 +72,7 @@ class LiveScorer:
 
         # Load historical scores for global percentile computation
         print("[live_simulation] Loading reference score distribution …", flush=True)
-        if os.path.exists(ALERT_TABLE_PARQUET):
-            ref = pd.read_parquet(ALERT_TABLE_PARQUET, columns=["if_anomaly_score"])
-        else:
-            ref = pd.read_csv(ALERT_TABLE_CSV, usecols=["if_anomaly_score"])
-        self.ref_scores: np.ndarray = ref["if_anomaly_score"].dropna().values
+        self.ref_scores: np.ndarray = np.load(IF_SCORES_PATH)
         print(
             f"[live_simulation] Ready. Reference distribution: {len(self.ref_scores):,} rows.",
             flush=True,
@@ -104,18 +100,19 @@ class LiveScorer:
         # Global percentile (fraction of reference scores strictly below this score)
         percentile = float(np.mean(self.ref_scores < raw_score) * 100)
 
-        risk_level = (
-            "HIGH"   if percentile >= HIGH_THRESH   else
-            "MEDIUM" if percentile >= MEDIUM_THRESH else
+        if_risk_band = (
+            "CRITICAL" if percentile >= CRITICAL_THRESH else
+            "HIGH"     if percentile >= HIGH_THRESH     else
+            "MEDIUM"   if percentile >= MEDIUM_THRESH   else
             "LOW"
         )
 
         payload = {
             **meta,
-            "anomaly_score":    round(raw_score,  6),
-            "percentile_rank":  round(percentile, 2),
-            "risk_level":       risk_level,
-            "_score_ms":        round(elapsed_ms, 1),   # diagnostic; dashboard ignores this
+            "if_anomaly_score":  round(raw_score,  6),
+            "if_percentile_rank": round(percentile, 2),
+            "if_risk_band":      if_risk_band,
+            "_score_ms":         round(elapsed_ms, 1),   # diagnostic; dashboard ignores this
         }
         return payload
 
@@ -165,7 +162,7 @@ async def _run_simulation(
         _stop_event.set()
         return
 
-    test_df = pd.read_csv(input_path)
+    test_df = pd.read_csv(input_path, index_col=0)
     total   = len(test_df)
     print(f"[live_simulation] Streaming {total:,} rows from {os.path.basename(input_path)}", flush=True)
 
@@ -191,8 +188,8 @@ async def _run_simulation(
 
         print(
             f"[live_simulation] [{idx+1:>5}/{total}]  user={payload.get('user','?')}"
-            f"  score={payload['anomaly_score']:.4f}  pct={payload['percentile_rank']:.1f}"
-            f"  risk={payload['risk_level']}  ({payload['_score_ms']} ms)",
+            f"  score={payload['if_anomaly_score']:.4f}  pct={payload['if_percentile_rank']:.1f}"
+            f"  risk={payload['if_risk_band']}  ({payload['_score_ms']} ms)",
             flush=True,
         )
 

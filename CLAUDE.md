@@ -29,7 +29,7 @@ This is a UEBA (User and Entity Behavior Analytics) insider threat detection sys
 ### Two Runtime Components
 
 **1. `dashboard/app.py`** — Streamlit web UI for security analysts
-- Loads two pre-computed datasets at startup (cached via `@st.cache_data`): `explainability/alert_table/alert_table_3.parquet` and `processed_datasets/ueba_dataset_3b.parquet`
+- Loads two pre-computed datasets at startup (cached via `@st.cache_data`): `explainability/alert_table/alert_table_4.parquet` and `processed_datasets/ueba_dataset_4/ueba_dataset_4_train.parquet`
 - Merges them on `(user, day)` keys
 - Four tabs: Overview (KPIs + charts), Investigation (per-user deep dive), Alerts (filterable feed), Channels (feature analysis)
 - Global sidebar filters (date range, risk level, user search) drive all views
@@ -45,23 +45,32 @@ This is a UEBA (User and Entity Behavior Analytics) insider threat detection sys
 
 ```
 Raw CERT logs (logon/file/device/email/http CSVs)
-  → CERT_Preprocessing.ipynb     # Feature engineering → ueba_dataset.csv (54-108 features)
-  → Autoencoder.ipynb            # Train autoencoder, extract 16-dim embeddings + scaler
-  → Isolation_Forest.ipynb       # Train IF on embeddings, compute anomaly scores
-  → Alert_Object_Builder.ipynb   # Merge scores + features → alert_table_3.parquet
+  → CERT_Preprocessing.ipynb     # Feature engineering → ueba_dataset_4/ (train/test split, 108 features)
+  → Autoencoder.ipynb            # Train autoencoder on insider-filtered normal data, extract 16-dim embeddings + scaler
+  → Isolation_Forest.ipynb       # Train IF on normal-behavior embeddings, compute anomaly scores
+  → Alert_Object_Builder.ipynb   # Merge scores + features → alert_table_4.parquet
 ```
+
+`prepare_data.py` provides shared utilities for the notebooks: `chronological_split` (90/10 train/test), `get_insiders`, `build_insider_mask`, and `get_scores`.
 
 ### Model Artifacts
 
-- `encoders/encoder_model_1/` — primary encoder used in production (encoder_model.keras, autoencoder_model.keras, feature_scaler.pkl, latent_embeddings.npy)
-- `isolation_forests/iforest_model_1/` — primary IF model (iforest_model.pkl, anomaly_scores.npy for percentile ranking)
-- Numbered suffixes (2, 3, 3a) are experimental variants
+- `encoders/encoder_model_1/` — used by `live_simulation.py` (trained on ueba_dataset v1, 54 features)
+- `encoders/encoder_model_4/` — latest offline model; trained on insider-filtered normal behavior from ueba_dataset_4; adds dropout (0.2), linear latent activation, early stopping (patience=10); 90/10 chronological split; 85/15 train/val split on normal data
+- `encoders/encoder_model_4a/` — variant of 4 with learning rate 0.001 (vs 0.0005 in model 4)
+- `isolation_forests/iforest_model_1/` — used by `live_simulation.py` (contamination=0.05)
+- `isolation_forests/iforest_model_4/` — latest offline IF; trained on model 4's normal-behavior embeddings; contamination=0.001; separation ratio 1.27 (mean insider score 0.503 vs normal 0.396)
+- Numbered suffixes (2, 3, 3a) are older experimental variants
 
 ### Risk Scoring
 
 - Anomaly score → percentile rank against `anomaly_scores.npy` (training distribution)
-- Percentile ≥ 95 → HIGH, ≥ 80 → MEDIUM, otherwise LOW
-- Risk color palette: HIGH = `#e84545` (red), MEDIUM = `#d4a017` (gold), LOW = `#3a86a8` (steel blue)
+- Four risk bands (assigned by `AlertObjectBuilder.assign_risk_band`):
+  - CRITICAL: ≥ 95th percentile → `#ff1744` (bright red)
+  - HIGH: ≥ 90th percentile → `#e84545` (red)
+  - MEDIUM: ≥ 80th percentile → `#d4a017` (gold)
+  - LOW: below 80th percentile → `#3a86a8` (steel blue)
+- Both AE reconstruction error and IF anomaly score get independent risk bands (`ae_risk_band`, `if_risk_band`); dashboard primarily surfaces `ae_risk_band`
 
 ### Key Design Patterns
 
@@ -88,4 +97,9 @@ Raw CERT logs (logon/file/device/email/http CSVs)
 
 - v1 (`ueba_dataset.csv`): 54 features
 - v2 (`ueba_dataset_2.csv`): 78 features, adds PC-related signals
-- v3b (`ueba_dataset_3b.csv/parquet`): 108 features, adds HTTP behavioral data — **currently active version**
+- v3b (`ueba_dataset_3b.csv/parquet`): 108 features, adds HTTP behavioral data
+- v4 (`processed_datasets/ueba_dataset_4/`): 108 features — **currently active version**; introduces chronological 90/10 train/test split at preprocessing time, producing:
+  - `ueba_dataset_4a.csv` — (user, pc, day) level for drill-down
+  - `ueba_dataset_4b.csv` — (user, day) level for model training
+  - `ueba_dataset_4_train.csv/parquet` — first 90% chronologically (model training)
+  - `ueba_dataset_4_test_stream.csv` — last 10% chronologically (live simulation / inference)
