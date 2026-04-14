@@ -9,10 +9,11 @@ from scripts.Preprocessing import chronological_split  # re-export for backward 
 
 __all__ = ["chronological_split", "get_insiders", "build_insider_mask", "get_scores"]
 
-# CONSTANTS 
-SCALER_PATH = os.path.join(r"encoders\encoder_model_1\feature_scaler.pkl")
-ENCODER_PATH = os.path.join(r"encoders\encoder_model_1\encoder_model.keras")
-IF_PATH  = os.path.join(r"isolation_forests\iforest_model_1\iforest_model.pkl")
+# CONSTANTS
+ACTIVE_MODEL_VERSION = "4"
+SCALER_PATH = os.path.join(f"encoders/encoder_model_{ACTIVE_MODEL_VERSION}/feature_scaler.pkl")
+ENCODER_PATH = os.path.join(f"encoders/encoder_model_{ACTIVE_MODEL_VERSION}/encoder_model.keras")
+IF_PATH = os.path.join(f"isolation_forests/iforest_model_{ACTIVE_MODEL_VERSION}/iforest_model.pkl")
 
 
 def get_insiders(path: str, version: str | float, return_all: bool=False) -> pd.DataFrame:

@@ -92,7 +92,8 @@ def load_raw_logs(cert_path: str) -> dict:
             logs[source_name] = pd.read_csv(
                 full_path,
                 usecols=USECOLS_MAP[source_name],
-                dtype=applicable_dtype
+                dtype=applicable_dtype,
+                nrows=10_000
             )
             
     if missing_files:
@@ -146,6 +147,7 @@ def normalize_shared_columns(df: pd.DataFrame, remove_cols: list=["id"]) -> pd.D
     df.reset_index(drop=True, inplace=True)
     
     return df
+
 
 def validate_normalized_files(logs: dict[str, pd.DataFrame], required_cols: set={"user", "pc", "timestamp", "day"}) -> None:
     """
@@ -216,7 +218,7 @@ def load_log_in_chunks(filepath: str, usecols: list, dtype: dict, chunksize: int
         pd.io.parsers.TextFileReader: An iterable of DataFrames, one per chunk
     """
     applicable_dtype = {col: dtype[col] for col in usecols if col in dtype}
-    return pd.read_csv(filepath, usecols=usecols, dtype=applicable_dtype, chunksize=chunksize)
+    return pd.read_csv(filepath, usecols=usecols, dtype=applicable_dtype, chunksize=chunksize, nrows=10_000)
 
 
 def combine_partial_aggregations(partial_list: list, merge_cols: list) -> pd.DataFrame:
@@ -273,39 +275,55 @@ def extract_logon_features(norm_df: pd.DataFrame, work_hours: tuple=(9, 17)) -> 
     df["hour"] = df["timestamp"].dt.hour
     df["off_hours"] = (df["hour"] < work_hours[0]) | (df["hour"] > work_hours[1])
     
-    # Creating groups based on (user, pc, day)    
+    # Creating groups based on (user, pc, day)
     grouped = df.groupby(["user", "pc", "day"])
-    
+
+    # Computing off-hour logons
+    off_hours_logon = (
+        df[df["activity"] == "Logon"]
+        .groupby(["user", "pc", "day"])["off_hours"]
+        .sum()
+        .reset_index(name="off_hours_logon")
+    )
+
     # Deriving logon-related features
     features = grouped.agg(
-        logon_count = ("activity", lambda x: (x=="Logon").sum()),
-        logoff_count = ("activity", lambda x: (x=="Logoff").sum()),
-        off_hours_logon = ("off_hours", "sum")
+        logon_count  = ("activity", lambda x: (x == "Logon").sum()),
+        logoff_count = ("activity", lambda x: (x == "Logoff").sum()),
     ).reset_index()
-    
+
+    features = features.merge(off_hours_logon, on=["user", "pc", "day"], how="left")
+    features["off_hours_logon"] = features["off_hours_logon"].fillna(0).astype(int)
+
     return features
 
 
-def extract_file_features(norm_df: pd.DataFrame, work_hours: tuple=(9, 17)) -> pd.DataFrame:
+def extract_file_features(
+    norm_df: pd.DataFrame,
+    work_hours: tuple = (9, 17),
+    return_identity_frame: bool = False
+) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """
     Extracts daily file access behavior features to create an aggregated feature table.
-    
+
     Args:
         norm_df: Normalized file activity dataframe
         work_hours: The range describing regular work hours based on a 24-hour format
-        
+        return_identity_frame: When True, returns a deduplicated (user, day, filename) DataFrame
+
     Returns:
-        pd.DataFrame: Aggregated file behavior features per (user, pc, day)
+        pd.DataFrame: Aggregated file behavior features per (user, pc, day).
+        If `return_identity_frame` is True, returns a (features, identity_frame) tuple.
     """
     df = norm_df.copy()
-    
+
     # Defining off-hour logons
     df["hour"] = df["timestamp"].dt.hour
     df["off_hours"] = (df["hour"] < work_hours[0]) | (df["hour"] > work_hours[1])
-    
+
     # Creating groups based on (user, pc, day)
     grouped = df.groupby(["user", "pc", "day"])
-    
+
     # Deriving file-related features
     features = grouped.agg(
         file_open_count = ("activity", lambda x: (x=="File Open").sum()),
@@ -315,7 +333,12 @@ def extract_file_features(norm_df: pd.DataFrame, work_hours: tuple=(9, 17)) -> p
         unique_files_accessed = ("filename", "nunique"),
         off_hours_files_accessed = ("off_hours", "sum")
     ).reset_index()
-    
+
+    # Returns an additional frame consisting (user, day, filename) granularity
+    if return_identity_frame:
+        identity_frame = df[["user", "day", "filename"]].drop_duplicates()
+        return features, identity_frame
+
     return features
 
 
@@ -349,20 +372,27 @@ def extract_device_features(norm_df: pd.DataFrame, work_hours: tuple=(9, 17)) ->
     return features
 
 
-def extract_email_features_chunked(filepath: str, work_hours: tuple = (9, 17), chunksize: int=50_000) -> pd.DataFrame:
+def extract_email_features_chunked(
+    filepath: str,
+    work_hours: tuple = (9, 17),
+    chunksize: int = 50_000,
+    return_identity_frame: bool = False
+) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """
     Memory-efficient email feature extraction via chunked CSV reading.
-    
+
     Additive counts are accumulated per chunk then combined via `combine_partial_aggregations`.
     Unique recipients are tracked via `build_unique_count`.
-    
+
     Args:
         filepath: Absolute path to email.csv
         work_hours: The range describing regular work hours based on a 24-hour format
         chunksize: Number of rows per chunk
-        
+        return_identity_frame: When True, returns a deduplicated (user, day, to) DataFrame
+
     Returns:
-        pd.DataFrame: Aggregated email behavior features per (user, pc, day)
+        pd.DataFrame: Aggregated email behavior features per (user, pc, day).
+        If return_identity_frame is True, returns a (features, identity_frame) tuple.
     """
     MERGE_COLS = ["user", "pc", "day"]
     partial_aggs = []
@@ -370,11 +400,11 @@ def extract_email_features_chunked(filepath: str, work_hours: tuple = (9, 17), c
 
     for chunk in load_log_in_chunks(filepath, USECOLS_MAP["email"], DTYPE_MAP, chunksize):
         chunk = normalize_shared_columns(chunk)
-        
+
         # Defining off-hours emails
         chunk["hour"] = chunk["timestamp"].dt.hour
         chunk["off_hours"] = (chunk["hour"] < work_hours[0]) | (chunk["hour"] > work_hours[1])
-        
+
         # External email heuristic
         chunk["external_emails_sent"] = ~chunk["to"].str.contains(INTERNAL_EMAIL_DOMAIN, na=False)
 
@@ -393,25 +423,42 @@ def extract_email_features_chunked(filepath: str, work_hours: tuple = (9, 17), c
 
     # Computes aggregation and unique count operations across all chunks
     combined = combine_partial_aggregations(partial_aggs, MERGE_COLS)
-    unique_recipients  = build_unique_count(identity_frames, MERGE_COLS, "to", "unique_recipients")
+    unique_recipients = build_unique_count(identity_frames, MERGE_COLS, "to", "unique_recipients")
+    features = combined.merge(unique_recipients, on=MERGE_COLS, how="left")
 
-    return combined.merge(unique_recipients, on=MERGE_COLS, how="left")
+    # Returns an additional frame consisting of (user, day, to) granularity    
+    if return_identity_frame:
+        # Collapses identity frames
+        email_identity = (
+            pd.concat(identity_frames, ignore_index=True)[["user", "day", "to"]]
+            .drop_duplicates()
+        )
+        return features, email_identity
+
+    return features
 
 
-def extract_http_features_chunked(filepath: str, work_hours: tuple=(9, 17), chunksize: int=50_000) -> pd.DataFrame:
+def extract_http_features_chunked(
+    filepath: str,
+    work_hours: tuple = (9, 17),
+    chunksize: int = 50_000,
+    return_identity_frame: bool = False
+) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """
     Memory-efficient HTTP feature extraction via chunked CSV reading.
-    
+
     Additive counts are accumulated per chunk then combined via `combine_partial_aggregations`.
     Unique domains visited are tracked via `build_unique_count`.
-    
+
     Args:
         filepath: Absolute path to http.csv
         work_hours: The range describing regular work hours based on a 24-hour format
         chunksize: Number of rows per chunk
-        
+        return_identity_frame: When True, also returns a deduplicated (user, day, domain) DataFrame
+
     Returns:
-        pd.DataFrame: Aggregated web browsing features per (user, pc, day)
+        pd.DataFrame: Aggregated web browsing features per (user, pc, day).
+        If return_identity_frame is True, returns a (features, identity_frame) tuple.
     """
     MERGE_COLS = ["user", "pc", "day"]
     partial_aggs = []
@@ -428,11 +475,11 @@ def extract_http_features_chunked(filepath: str, work_hours: tuple=(9, 17), chun
         chunk["url"] = chunk["url"].astype(str).str.strip().str.lower()
         chunk["url_length"] = chunk["url"].str.len()
         chunk["domain"] = chunk["url"].apply(extract_domain)
-        
+
         chunk["is_www_visit"] = (chunk["activity"] == "WWW Visit").astype(int)
         chunk["is_www_download"] = (chunk["activity"] == "WWW Download").astype(int)
         chunk["is_www_upload"] = (chunk["activity"] == "WWW Upload").astype(int)
-               
+
         chunk["is_job_site"] = chunk["domain"].isin(JOB_DOMAINS).astype(int)
         chunk["is_cloud_storage"] = chunk["domain"].isin(CLOUD_STORAGE_DOMAINS).astype(int)
         chunk["is_suspicious_domain"] = chunk["domain"].isin(SUSPICIOUS_DOMAINS).astype(int)
@@ -440,7 +487,7 @@ def extract_http_features_chunked(filepath: str, work_hours: tuple=(9, 17), chun
 
         # Grouping chunk and aggregating features
         grouped_chunk = chunk.groupby(MERGE_COLS, dropna=False)
-        
+
         agg_chunk = grouped_chunk.agg(
             http_total_requests = ("url", "count"),
             http_visit_count = ("is_www_visit", "sum"),
@@ -461,8 +508,18 @@ def extract_http_features_chunked(filepath: str, work_hours: tuple=(9, 17), chun
     # Computes aggregation and unique count operations across all chunks
     combined = combine_partial_aggregations(partial_aggs, MERGE_COLS)
     unique_domains = build_unique_count(identity_frames, MERGE_COLS, "domain", "unique_domains_visited")
+    features = combined.merge(unique_domains, on=MERGE_COLS, how="left")
 
-    return combined.merge(unique_domains, on=MERGE_COLS, how="left")
+    # Returns an additional frame consisting of (user, day, domain) granularity
+    if return_identity_frame:
+        # Collapsing identity frames
+        http_identity = (
+            pd.concat(identity_frames, ignore_index=True)[["user", "day", "domain"]]
+            .drop_duplicates()
+        )
+        return features, http_identity
+
+    return features
 
 
 def merge_behavioral_features(feature_tables: list[pd.DataFrame], merge_cols: list=["user", "pc", "day"]) -> pd.DataFrame:
@@ -570,42 +627,70 @@ def add_pc_features(df: pd.DataFrame, min_history: int=10) -> pd.DataFrame:
     return df
 
 
-def build_layer_a(cert_path: str, work_hours: tuple=(9, 17)) -> pd.DataFrame:
+def build_layer_a(cert_path: str, work_hours: tuple = (9, 17), return_nunique_frames: bool = False) -> pd.DataFrame | tuple[pd.DataFrame, dict]:
     """
     Builds the complete layer A drill-down-ready dataset at the (user, pc, day) level.
-    
+
     Args:
         cert_path: The base path containing the CERT dataset
         work_hours: The range describing regular work hours based on a 24-hour format
+        return_nunique_frames: When True, also returns a dict of identity frames needed
+            by collapse_layer() to compute true per-(user, day) nunique values at Layer B.
+            Keys are the output column names; values are (source_df, value_col) tuples.
+
+    Returns:
+        pd.DataFrame: Layer A dataset at the (user, pc, day) level.
+        If return_nunique_frames is True, returns a (layer_a_df, nunique_frames) tuple.
     """
     # Loading the raw log files from the CERT dataset
     raw_logs = load_raw_logs(cert_path)
-    
+
     # Normalizing and validating files
     normalized_logs = {}
-    
+
     for name, df in raw_logs.items():
         if isinstance(df, dict) and df.get("chunked"):
             print(f"{name}.csv will be normalized when loaded per-chunk")
             normalized_logs[name] = df["path"]
         else:
             normalized_logs[name] = normalize_shared_columns(df)
-    
-    # Feature engineering each log file respectively
-    feature_tables = [
-        extract_logon_features(normalized_logs["logon"], work_hours),
-        extract_file_features(normalized_logs["file"], work_hours),
-        extract_device_features(normalized_logs["device"], work_hours),
-        extract_email_features_chunked(normalized_logs["email"], work_hours),
-        extract_http_features_chunked(normalized_logs["http"], work_hours)
-    ]
-    
+
+    if return_nunique_frames:
+        file_features, file_id = extract_file_features(normalized_logs["file"], work_hours, return_identity_frame=True)
+        email_features, email_id = extract_email_features_chunked(normalized_logs["email"], work_hours, return_identity_frame=True)
+        http_features, http_id = extract_http_features_chunked(normalized_logs["http"], work_hours, return_identity_frame=True)
+
+        feature_tables = [
+            extract_logon_features(normalized_logs["logon"], work_hours),
+            file_features,
+            extract_device_features(normalized_logs["device"], work_hours),
+            email_features,
+            http_features,
+        ]
+    else:
+        print("Creating feature tables")
+        feature_tables = [
+            extract_logon_features(normalized_logs["logon"], work_hours),
+            extract_file_features(normalized_logs["file"], work_hours),
+            extract_device_features(normalized_logs["device"], work_hours),
+            extract_email_features_chunked(normalized_logs["email"], work_hours),
+            extract_http_features_chunked(normalized_logs["http"], work_hours),
+        ]
+
     # Merging the feature tables
     behavioral_matrix = merge_behavioral_features(feature_tables)
-    
+
     # Adding pc behavioral features
     layer_a_matrix = add_pc_features(behavioral_matrix)
-    
+
+    if return_nunique_frames:
+        nunique_frames = {
+            "unique_files_accessed":  (file_id,  "filename"),
+            "unique_recipients":      (email_id, "to"),
+            "unique_domains_visited": (http_id,  "domain"),
+        }
+        return layer_a_matrix, nunique_frames
+
     return layer_a_matrix
 
 
@@ -686,7 +771,6 @@ LAYER_B_SUM_COLS = [
     "file_write_count",
     "file_copy_count",
     "file_delete_count",
-    "unique_files_accessed",
     "off_hours_files_accessed",
     "usb_insert_count",
     "usb_remove_count",
@@ -695,7 +779,6 @@ LAYER_B_SUM_COLS = [
     "external_emails_sent",
     "attachments_sent",
     "off_hours_emails",
-    "unique_recipients",
     "http_total_requests",
     "http_visit_count",
     "http_download_count",
@@ -705,7 +788,6 @@ LAYER_B_SUM_COLS = [
     "http_suspicious_site_visits",
     "off_hours_http_requests",
     "http_long_url_count",
-    "unique_domains_visited"
 ]
 
 LAYER_B_MAX_COLS = [
@@ -758,14 +840,22 @@ LAYER_B_UEBA_BASE_FEATURES = [
 ]
 
 # Functions
-def collapse_layer(layer_a_dataset: pd.DataFrame, required_cols: list=["user", "pc", "day"]) -> pd.DataFrame:
+def collapse_layer(
+    layer_a_dataset: pd.DataFrame,
+    required_cols: list = ["user", "pc", "day"],
+    nunique_frames: dict[str, tuple[pd.DataFrame, str]] | None = None
+) -> pd.DataFrame:
     """
     Collapses the layer A (user, pc, day) behavioral matrix into a layer B (user, day) matrix.
-    
+
     Args:
         layer_a_dataset: Layer A DataFrame at the (user, day, pc) level
-        require_cols: Required key columns in the inputted dataset
-        
+        required_cols: Required key columns in the inputted dataset
+        nunique_frames: Optional mapping of output column name → (source_df, value_col).
+            For each entry, computes the true per-(user, day) nunique of value_col from
+            the raw event DataFrame rather than summing per-PC nunique values, which would
+            overcount items appearing on multiple PCs.
+
     Returns:
         pd.DataFrame: Layer B dataframe at the (user, day) level
     """
@@ -852,7 +942,19 @@ def collapse_layer(layer_a_dataset: pd.DataFrame, required_cols: list=["user", "
     layer_b_df = layer_b_df.merge(non_primary_http, on=["user", "day"], how="left")
     layer_b_df = layer_b_df.merge(non_primary_usb, on=["user", "day"], how="left")
     layer_b_df = layer_b_df.merge(non_primary_file_copy, on=["user", "day"], how="left")
-    
+
+    # Recompute nunique columns as true user-day uniqueness from raw event frames.
+    # Summing per-PC nunique values (the Layer A default) inflates the count when the same
+    # file/recipient/domain appears on multiple PCs for the same user on the same day.
+    if nunique_frames:
+        for col_name, (source_df, value_col) in nunique_frames.items():
+            true_nunique = (
+                source_df.groupby(["user", "day"])[value_col]
+                .nunique()
+                .reset_index(name=col_name)
+            )
+            layer_b_df = layer_b_df.merge(true_nunique, on=["user", "day"], how="left")
+
     # Renaming primary PC column
     if "pc_is_primary" in layer_b_df.columns:
         layer_b_df.rename(columns={"pc_is_primary": "primary_pc_activity_ratio"}, inplace=True)
@@ -952,18 +1054,25 @@ def apply_ueba_enhancements(df: pd.DataFrame, feature_cols: list, rolling_window
     return df
 
 
-def build_layer_b(layer_a_df: pd.DataFrame, rolling_window: int=5) -> pd.DataFrame:
+def build_layer_b(
+    layer_a_df: pd.DataFrame,
+    rolling_window: int = 5,
+    nunique_frames: dict[str, tuple[pd.DataFrame, str]] | None = None
+) -> pd.DataFrame:
     """
     Builds the final layer B user-day UEBA modeling matrix.
-    
+
     Args:
         layer_a_df: The behavioral matrix produced in layer A
         rolling_window: The window size in days to compute the rolling delta
-        
+        nunique_frames: Passed through to collapse_layer(). Maps output column name →
+            (source_df, value_col) for features that require true per-(user, day) nunique
+            computed from raw event data rather than summing per-PC nunique values.
+
     Returns:
         pd.DataFrame: A model-ready UEBA dataset at the (user, day) level
     """
-    layer_b_df = collapse_layer(layer_a_df)
+    layer_b_df = collapse_layer(layer_a_df, nunique_frames=nunique_frames)
     feature_cols = get_layer_b_features(layer_b_df)
     layer_b_df = apply_ueba_enhancements(layer_b_df, feature_cols=feature_cols, rolling_window=rolling_window)
     
