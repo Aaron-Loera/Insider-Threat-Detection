@@ -93,7 +93,6 @@ def load_raw_logs(cert_path: str) -> dict:
                 full_path,
                 usecols=USECOLS_MAP[source_name],
                 dtype=applicable_dtype,
-                nrows=10_000
             )
             
     if missing_files:
@@ -102,14 +101,15 @@ def load_raw_logs(cert_path: str) -> dict:
     return logs
 
 
-def normalize_shared_columns(df: pd.DataFrame, remove_cols: list=["id"]) -> pd.DataFrame:
+def normalize_shared_columns(df: pd.DataFrame, remove_cols: list=["id"], sort: bool=True) -> pd.DataFrame:
     """
     Normalizes CERT log files across commonly shared columns. Additionally drops columns that are deemed irrelevant.
-    
+
     Args:
         df: The raw CERT dataframe (logon, file, device, or email)
         remove_cols: The columns to drop from the original CERT file
-        
+        sort: When False, skips the final (user, pc, timestamp) sort.
+
     Returns:
         pd.Dataframe: A normalized dataframe with consistent identifiers and fields
     """
@@ -134,18 +134,19 @@ def normalize_shared_columns(df: pd.DataFrame, remove_cols: list=["id"]) -> pd.D
     df["day"] = df["timestamp"].dt.floor("D")
     
     # Normalizing identifiers
-    df["user"] = df["user"].astype(str).str.lower().str.strip()
-    df["pc"] = df["pc"].astype(str).str.lower().str.strip()
+    df["user"] = df["user"].astype(str).str.lower().str.strip().astype("category")
+    df["pc"] = df["pc"].astype(str).str.lower().str.strip().astype("category")
     
     # Dropping unusable columns
     remove_cols = [col.lower().strip() for col in remove_cols]
     cols_to_drop = [col for col in remove_cols if col in df.columns]
     df.drop(axis=1, columns=cols_to_drop, inplace=True)
     
-    # Sorting rows for consistency
-    df.sort_values(by=["user", "pc", "timestamp"], inplace=True)
-    df.reset_index(drop=True, inplace=True)
-    
+    # Sorting rows if specified
+    if sort:
+        df.sort_values(by=["user", "pc", "timestamp"], inplace=True)
+        df.reset_index(drop=True, inplace=True)
+
     return df
 
 
@@ -218,7 +219,7 @@ def load_log_in_chunks(filepath: str, usecols: list, dtype: dict, chunksize: int
         pd.io.parsers.TextFileReader: An iterable of DataFrames, one per chunk
     """
     applicable_dtype = {col: dtype[col] for col in usecols if col in dtype}
-    return pd.read_csv(filepath, usecols=usecols, dtype=applicable_dtype, chunksize=chunksize, nrows=10_000)
+    return pd.read_csv(filepath, usecols=usecols, dtype=applicable_dtype, chunksize=chunksize)
 
 
 def combine_partial_aggregations(partial_list: list, merge_cols: list) -> pd.DataFrame:
@@ -233,7 +234,7 @@ def combine_partial_aggregations(partial_list: list, merge_cols: list) -> pd.Dat
         pd.DataFrame: Combined aggregation with counts correctly summed across all chunks
     """
     combined = pd.concat(partial_list, ignore_index=True)
-    return combined.groupby(merge_cols, as_index=False).sum()
+    return combined.groupby(merge_cols, as_index=False, observed=True, sort=False).sum()
 
 
 def build_unique_count(identity_frames: list, merge_cols: list, value_col: str, output_col: str) -> pd.DataFrame:
@@ -251,7 +252,7 @@ def build_unique_count(identity_frames: list, merge_cols: list, value_col: str, 
     """
     combined = pd.concat(identity_frames, ignore_index=True).drop_duplicates()
     return (
-        combined.groupby(merge_cols)[value_col]
+        combined.groupby(merge_cols, observed=True, sort=False)[value_col]
         .nunique()
         .reset_index()
         .rename(columns={value_col: output_col})
@@ -269,31 +270,26 @@ def extract_logon_features(norm_df: pd.DataFrame, work_hours: tuple=(9, 17)) -> 
     Returns:
         pd.DataFrame: Aggregated logon behavior features per (user, pc, day)
     """
-    df = norm_df.copy()
-    
-    # Defining off-hour logons
-    df["hour"] = df["timestamp"].dt.hour
-    df["off_hours"] = (df["hour"] < work_hours[0]) | (df["hour"] > work_hours[1])
-    
-    # Creating groups based on (user, pc, day)
-    grouped = df.groupby(["user", "pc", "day"])
+    hour = norm_df["timestamp"].dt.hour
+    off_hours = (hour < work_hours[0]) | (hour > work_hours[1])
+    is_logon = (norm_df["activity"] == "Logon")
+    is_logoff = (norm_df["activity"] == "Logoff")
 
-    # Computing off-hour logons
-    off_hours_logon = (
-        df[df["activity"] == "Logon"]
-        .groupby(["user", "pc", "day"])["off_hours"]
-        .sum()
-        .reset_index(name="off_hours_logon")
+    df = norm_df.assign(
+        is_logon=is_logon,
+        is_logoff=is_logoff,
+        off_hours_logon_flag=(is_logon & off_hours),
     )
 
-    # Deriving logon-related features
-    features = grouped.agg(
-        logon_count  = ("activity", lambda x: (x == "Logon").sum()),
-        logoff_count = ("activity", lambda x: (x == "Logoff").sum()),
-    ).reset_index()
-
-    features = features.merge(off_hours_logon, on=["user", "pc", "day"], how="left")
-    features["off_hours_logon"] = features["off_hours_logon"].fillna(0).astype(int)
+    features = (
+        df.groupby(["user", "pc", "day"], observed=True, sort=False)
+          .agg(
+              logon_count=("is_logon", "sum"),
+              logoff_count=("is_logoff", "sum"),
+              off_hours_logon=("off_hours_logon_flag", "sum"),
+          )
+          .reset_index()
+    )
 
     return features
 
@@ -315,24 +311,30 @@ def extract_file_features(
         pd.DataFrame: Aggregated file behavior features per (user, pc, day).
         If `return_identity_frame` is True, returns a (features, identity_frame) tuple.
     """
-    df = norm_df.copy()
+    hour = norm_df["timestamp"].dt.hour
+    off_hours = (hour < work_hours[0]) | (hour > work_hours[1])
+    activity = norm_df["activity"]
 
-    # Defining off-hour logons
-    df["hour"] = df["timestamp"].dt.hour
-    df["off_hours"] = (df["hour"] < work_hours[0]) | (df["hour"] > work_hours[1])
+    df = norm_df.assign(
+        is_open=(activity == "File Open"),
+        is_write=(activity == "File Write"),
+        is_copy=(activity == "File Copy"),
+        is_delete=(activity == "File Delete"),
+        off_hours=off_hours,
+    )
 
-    # Creating groups based on (user, pc, day)
-    grouped = df.groupby(["user", "pc", "day"])
-
-    # Deriving file-related features
-    features = grouped.agg(
-        file_open_count = ("activity", lambda x: (x=="File Open").sum()),
-        file_write_count = ("activity", lambda x: (x=="File Write").sum()),
-        file_copy_count = ("activity", lambda x: (x=="File Copy").sum()),
-        file_delete_count = ("activity", lambda x: (x=="File Delete").sum()),
-        unique_files_accessed = ("filename", "nunique"),
-        off_hours_files_accessed = ("off_hours", "sum")
-    ).reset_index()
+    features = (
+        df.groupby(["user", "pc", "day"], observed=True, sort=False)
+          .agg(
+              file_open_count=("is_open", "sum"),
+              file_write_count=("is_write", "sum"),
+              file_copy_count=("is_copy", "sum"),
+              file_delete_count=("is_delete", "sum"),
+              unique_files_accessed=("filename", "nunique"),
+              off_hours_files_accessed=("off_hours", "sum"),
+          )
+          .reset_index()
+    )
 
     # Returns an additional frame consisting (user, day, filename) granularity
     if return_identity_frame:
@@ -353,22 +355,26 @@ def extract_device_features(norm_df: pd.DataFrame, work_hours: tuple=(9, 17)) ->
     Returns:
         pd.DataFrame: Aggregated removable media behavior features per (user, pc, day)
     """
-    df = norm_df.copy()
-    
-    # Defining off-hour logons
-    df["hour"] = df["timestamp"].dt.hour
-    df["off_hours"] = (df["hour"] < work_hours[0]) | (df["hour"] > work_hours[1])
-    
-    # Creating groups based on (user, pc, day)
-    grouped = df.groupby(["user", "pc", "day"])
-    
-    # Deriving media-related features
-    features = grouped.agg(
-        usb_insert_count = ("activity", lambda x: (x=="Connect").sum()),
-        usb_remove_count = ("activity", lambda x: (x=="Disconnect").sum()),
-        off_hours_usb_usage = ("off_hours", "sum")
-    ).reset_index()
-    
+    hour = norm_df["timestamp"].dt.hour
+    off_hours = (hour < work_hours[0]) | (hour > work_hours[1])
+    activity = norm_df["activity"]
+
+    df = norm_df.assign(
+        is_connect=(activity == "Connect"),
+        is_disconnect=(activity == "Disconnect"),
+        off_hours=off_hours,
+    )
+
+    features = (
+        df.groupby(["user", "pc", "day"], observed=True, sort=False)
+          .agg(
+              usb_insert_count=("is_connect", "sum"),
+              usb_remove_count=("is_disconnect", "sum"),
+              off_hours_usb_usage=("off_hours", "sum"),
+          )
+          .reset_index()
+    )
+
     return features
 
 
@@ -399,21 +405,24 @@ def extract_email_features_chunked(
     identity_frames = []
 
     for chunk in load_log_in_chunks(filepath, USECOLS_MAP["email"], DTYPE_MAP, chunksize):
-        chunk = normalize_shared_columns(chunk)
+        chunk = normalize_shared_columns(chunk, sort=False)
 
-        # Defining off-hours emails
-        chunk["hour"] = chunk["timestamp"].dt.hour
-        chunk["off_hours"] = (chunk["hour"] < work_hours[0]) | (chunk["hour"] > work_hours[1])
+        # Defining off-hour emails
+        hour = chunk["timestamp"].dt.hour
+        chunk["off_hours"] = (hour < work_hours[0]) | (hour > work_hours[1])
 
         # External email heuristic
         chunk["external_emails_sent"] = ~chunk["to"].str.contains(INTERNAL_EMAIL_DOMAIN, na=False)
 
+        # Pre-computing attachment presence
+        chunk["has_attachment"] = chunk["attachments"].notnull()
+
         # Deriving email-related features per chunk
-        partial = chunk.groupby(MERGE_COLS).agg(
-            emails_sent = ("to", "count"),
-            external_emails_sent = ("external_emails_sent", "sum"),
-            attachments_sent = ("attachments", lambda x: x.notnull().sum()),
-            off_hours_emails = ("off_hours", "sum")
+        partial = chunk.groupby(MERGE_COLS, observed=True, sort=False).agg(
+            emails_sent=("to", "count"),
+            external_emails_sent=("external_emails_sent", "sum"),
+            attachments_sent=("has_attachment", "sum"),
+            off_hours_emails=("off_hours", "sum"),
         ).reset_index()
 
         # Accumulating deduplicated tuples (user, pc, day, to) for unique recipient counting
@@ -465,39 +474,44 @@ def extract_http_features_chunked(
     identity_frames = []
 
     for chunk in load_log_in_chunks(filepath, USECOLS_MAP["http"], DTYPE_MAP, chunksize):
-        chunk = normalize_shared_columns(chunk)
+        chunk = normalize_shared_columns(chunk, sort=False)
 
         # Defining off-hours web activity
-        chunk["hour"] = chunk["timestamp"].dt.hour
-        chunk["off_hours"] = (chunk["hour"] < work_hours[0]) | (chunk["hour"] > work_hours[1])
+        hour = chunk["timestamp"].dt.hour
+        chunk["off_hours"] = (hour < work_hours[0]) | (hour > work_hours[1])
 
-        # Deriving http-related features per chunk
-        chunk["url"] = chunk["url"].astype(str).str.strip().str.lower()
-        chunk["url_length"] = chunk["url"].str.len()
-        chunk["domain"] = chunk["url"].apply(extract_domain)
+        # Vectorized URL normalization and domain extraction
+        url = chunk["url"].fillna("").astype(str).str.strip().str.lower()
+        chunk["url"] = url
+        chunk["url_length"] = url.str.len()
+        chunk["domain"] = (
+            url.str.replace(r"^https?://", "", regex=True)
+               .str.split("/", n=1).str[0]
+        )
 
-        chunk["is_www_visit"] = (chunk["activity"] == "WWW Visit").astype(int)
-        chunk["is_www_download"] = (chunk["activity"] == "WWW Download").astype(int)
-        chunk["is_www_upload"] = (chunk["activity"] == "WWW Upload").astype(int)
+        # Boolean flags
+        activity = chunk["activity"]
+        chunk["is_www_visit"] = (activity == "WWW Visit")
+        chunk["is_www_download"] = (activity == "WWW Download")
+        chunk["is_www_upload"] = (activity == "WWW Upload")
 
-        chunk["is_job_site"] = chunk["domain"].isin(JOB_DOMAINS).astype(int)
-        chunk["is_cloud_storage"] = chunk["domain"].isin(CLOUD_STORAGE_DOMAINS).astype(int)
-        chunk["is_suspicious_domain"] = chunk["domain"].isin(SUSPICIOUS_DOMAINS).astype(int)
-        chunk["is_long_url"] = (chunk["url_length"] >= LONG_URL_THRESHOLD).astype(int)
+        domain = chunk["domain"]
+        chunk["is_job_site"] = domain.isin(JOB_DOMAINS)
+        chunk["is_cloud_storage"] = domain.isin(CLOUD_STORAGE_DOMAINS)
+        chunk["is_suspicious_domain"] = domain.isin(SUSPICIOUS_DOMAINS)
+        chunk["is_long_url"] = (chunk["url_length"] >= LONG_URL_THRESHOLD)
 
         # Grouping chunk and aggregating features
-        grouped_chunk = chunk.groupby(MERGE_COLS, dropna=False)
-
-        agg_chunk = grouped_chunk.agg(
-            http_total_requests = ("url", "count"),
-            http_visit_count = ("is_www_visit", "sum"),
-            http_download_count = ("is_www_download", "sum"),
-            http_upload_count = ("is_www_upload", "sum"),
-            http_jobsite_visits = ("is_job_site", "sum"),
-            http_cloud_storage_visits = ("is_cloud_storage", "sum"),
-            http_suspicious_site_visits = ("is_suspicious_domain", "sum"),
-            off_hours_http_requests = ("off_hours", "sum"),
-            http_long_url_count = ("is_long_url", "sum"),
+        agg_chunk = chunk.groupby(MERGE_COLS, observed=True, sort=False, dropna=False).agg(
+            http_total_requests=("url", "count"),
+            http_visit_count=("is_www_visit", "sum"),
+            http_download_count=("is_www_download", "sum"),
+            http_upload_count=("is_www_upload", "sum"),
+            http_jobsite_visits=("is_job_site", "sum"),
+            http_cloud_storage_visits=("is_cloud_storage", "sum"),
+            http_suspicious_site_visits=("is_suspicious_domain", "sum"),
+            off_hours_http_requests=("off_hours", "sum"),
+            http_long_url_count=("is_long_url", "sum"),
         ).reset_index()
 
         # Accumulating deduplicated tuples (user, pc, day, domain) for unique domain counting
@@ -579,19 +593,19 @@ def add_pc_features(df: pd.DataFrame, min_history: int=10) -> pd.DataFrame:
     df.reset_index(drop=True, inplace=True)
     
     # Tracking historical PC usage counts
-    df["pc_prior_use_count"] = df.groupby(["user", "pc"]).cumcount()
-    df["user_total_prior_days"] = df.groupby("user").cumcount()
+    df["pc_prior_use_count"] = df.groupby(["user", "pc"], observed=True, sort=False).cumcount()
+    df["user_total_prior_days"] = df.groupby("user", observed=True, sort=False).cumcount()
     df["pc_seen_before"]  = (df["pc_prior_use_count"] > 0).astype(int)
-    
+
     df["pc_prior_use_ratio"] = np.where(
         df["user_total_prior_days"] > 0,
         df["pc_prior_use_count"] / df["user_total_prior_days"],
         0.0
     )
-    
+
     # Identifying a user's primary PC (i.e., most-used PC)
     primary_pc_map = (
-        df.groupby(["user", "pc"])
+        df.groupby(["user", "pc"], observed=True, sort=False)
         .size()
         .reset_index(name="count")
         .sort_values(["user", "count", "pc"], ascending=[True, False, True])
@@ -599,18 +613,18 @@ def add_pc_features(df: pd.DataFrame, min_history: int=10) -> pd.DataFrame:
         .set_index("user")["pc"]
         .to_dict()
     )
-    
+
     df["pc_is_primary"] = (df["pc"] == df["user"].map(primary_pc_map)).astype(int)
-    
+
     # Tracking the number of distinct PC's previously used
     df["distinct_pcs_used_prior"] = (
-        df.groupby(["user"])["pc"]
+        df.groupby(["user"], observed=True, sort=False)["pc"]
         .transform(lambda s: [len(set(s.iloc[:i])) for i in range(len(s))])
     )
-    
+
     # Tracking the number of unique PC's used on a given day
     same_day_counts = (
-        df.groupby(["user", "day"])["pc"]
+        df.groupby(["user", "day"], observed=True, sort=False)["pc"]
         .transform("nunique")
     )
     
@@ -887,51 +901,51 @@ def collapse_layer(
         if col in df.columns:
             agg_map[col] = "max"
             
-    layer_b_df = df.groupby(by=["user", "day"], as_index=False).agg(agg_map)
-    
+    layer_b_df = df.groupby(by=["user", "day"], as_index=False, observed=True, sort=False).agg(agg_map)
+
     # Deriving number of unique PCs used
     pcs_used = (
-        df.groupby(["user", "day"])["pc"]
+        df.groupby(["user", "day"], observed=True, sort=False)["pc"]
         .nunique()
         .reset_index(name="pcs_used_count")
     )
-        
+
     # Defining non-primary PC column
     if "pc_is_primary" in df.columns:
         non_primary_mask = (df["pc_is_primary"] == 0).astype(int)
     else:
         non_primary_mask = pd.Series(0, index=df.index)
-        
+
     non_primary_rows = (
         df.assign(non_primary_pc_used=non_primary_mask)
-        .groupby(["user", "day"])["non_primary_pc_used"]
+        .groupby(["user", "day"], observed=True, sort=False)["non_primary_pc_used"]
         .sum()
         .reset_index(name="non_primary_pc_used_flag")
     )
-    
+
     # Extracting counts from different logs
     http_source = df["http_total_requests"] if "http_total_requests" in df.columns else 0
     usb_source = df["usb_insert_count"] if "usb_insert_count" in df.columns else 0
     file_copy_source = df["file_copy_count"] if "file_copy_count" in df.columns else 0
-    
+
     # Deriving cross-channel flags
     non_primary_http = (
         df.assign(non_primary_http=non_primary_mask * http_source)
-        .groupby(["user", "day"])["non_primary_http"]
+        .groupby(["user", "day"], observed=True, sort=False)["non_primary_http"]
         .sum()
         .reset_index(name="non_primary_pc_http_requests_flag")
     )
-    
+
     non_primary_usb = (
         df.assign(non_primary_usb=non_primary_mask * usb_source)
-        .groupby(["user", "day"])["non_primary_usb"]
+        .groupby(["user", "day"], observed=True, sort=False)["non_primary_usb"]
         .sum()
         .reset_index(name="non_primary_pc_usb_flag")
     )
-    
+
     non_primary_file_copy = (
         df.assign(non_primary_file_copy=non_primary_mask * file_copy_source)
-        .groupby(["user", "day"])["non_primary_file_copy"]
+        .groupby(["user", "day"], observed=True, sort=False)["non_primary_file_copy"]
         .sum()
         .reset_index(name="non_primary_pc_file_copy_flag")
     )
@@ -949,7 +963,7 @@ def collapse_layer(
     if nunique_frames:
         for col_name, (source_df, value_col) in nunique_frames.items():
             true_nunique = (
-                source_df.groupby(["user", "day"])[value_col]
+                source_df.groupby(["user", "day"], observed=True, sort=False)[value_col]
                 .nunique()
                 .reset_index(name=col_name)
             )
@@ -1005,22 +1019,22 @@ def apply_ueba_enhancements(df: pd.DataFrame, feature_cols: list, rolling_window
     
     # Defining per-user causal z-score deviations
     for col in feature_cols:
-        grouped = df.groupby("user")[col]
-        
+        grouped = df.groupby("user", observed=True, sort=False)[col]
+
         # Building baselines from prior observations
         prior_mean = grouped.transform(lambda x: x.shift(1).expanding(min_periods=1).mean())
         prior_std = grouped.transform(lambda x: x.shift(1).expanding(min_periods=2).std())
-        
+
         # Avoiding division by zero
         prior_std.replace(0, np.nan, inplace=True)
-        
+
         # Computing z-scores
         df[f"{col}_zscore"] = ((df[col] - prior_mean) / prior_std).fillna(0.0)
-        
+
     # Defining causal rolling temporal deltas
     for col in feature_cols:
         prior_rolling_mean = (
-            df.groupby("user")[col]
+            df.groupby("user", observed=True, sort=False)[col]
             .transform(lambda x: x.shift(1).rolling(window=rolling_window, min_periods=1).mean())
         )
         # First observations have no prior window, so the delta defaults to 0.
