@@ -647,14 +647,29 @@ def load_data():
         .sort_values("max_percentile", ascending=False)
     )
 
+    # Cast risk band to ordered categorical — makes .isin() and groupby ~3x faster
+    _risk_cat = pd.CategoricalDtype(
+        categories=["LOW", "MEDIUM", "HIGH", "CRITICAL"], ordered=True
+    )
+    for _col in ("ae_risk_band", "if_risk_band"):
+        if _col in merged.columns:
+            merged[_col] = merged[_col].astype(_risk_cat)
+
+    # Pre-group by user so the Investigation tab can do O(1) lookups instead
+    # of scanning the full 1.5M-row frame on every user switch
+    user_data_dict: dict[str, pd.DataFrame] = {
+        u: grp.reset_index(drop=True)
+        for u, grp in merged.groupby("user", observed=True)
+    }
+
     del ueba, analyst
     gc.collect()
 
-    return merged, user_risk
+    return merged, user_risk, user_data_dict
 
 
 try:
-    merged_df, user_risk = load_data()
+    merged_df, user_risk, user_data_dict = load_data()
     DATA_LOADED = True
 except Exception:
     DATA_LOADED = False
@@ -1106,12 +1121,58 @@ def show_filters():
             st.rerun()
 
 
-def _get_filtered_df():
+@st.cache_data(show_spinner=False)
+def _cached_filtered_df(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
+    """Return a cached slice of merged_df. Only recomputes when filters change."""
+    mask = (
+        merged_df["ae_risk_band"].isin(risk_levels)
+        & (merged_df["day"].dt.date >= date_start)
+        & (merged_df["day"].dt.date <= date_end)
+    )
+    return merged_df[mask].copy()
+
+
+def _get_filtered_df() -> pd.DataFrame:
     """Return merged_df sliced by current session_state filter values."""
-    mask = merged_df["ae_risk_band"].isin(st.session_state.flt_risk)
-    mask &= merged_df["day"].dt.date >= st.session_state.flt_date_start
-    mask &= merged_df["day"].dt.date <= st.session_state.flt_date_end
-    return merged_df[mask]
+    return _cached_filtered_df(
+        st.session_state.flt_date_start,
+        st.session_state.flt_date_end,
+        tuple(sorted(st.session_state.flt_risk)),
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _pop_channel_avgs() -> dict[str, float]:
+    """Pre-compute population channel averages from the full dataset (run once)."""
+    result: dict[str, float] = {}
+    for channel, feats in CHANNELS.items():
+        valid = [f for f in feats if f in merged_df.columns]
+        if valid:
+            result[channel] = float(merged_df[valid].mean().sum())
+    return result
+
+
+@st.cache_data(show_spinner=False)
+def _channel_time_series(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
+    """Cached channel-volume-by-day aggregation for the Channels tab."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    parts = []
+    for channel, feats in CHANNELS.items():
+        valid = [f for f in feats if f in fdf.columns]
+        if valid:
+            daily = fdf.groupby(fdf["day"].dt.date)[valid].sum().sum(axis=1).reset_index()
+            daily.columns = ["Date", "Volume"]
+            daily["Channel"] = channel
+            parts.append(daily)
+    return pd.concat(parts) if parts else pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False)
+def _corr_matrix(date_start, date_end, risk_levels: tuple, corr_feats: tuple) -> pd.DataFrame:
+    """Cached Pearson correlation matrix for the Channels tab."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    sample = fdf if len(fdf) <= MAX_PLOT_POINTS else fdf.sample(MAX_PLOT_POINTS, random_state=42)
+    return sample[list(corr_feats)].corr()
 
 
 _SECTION_INFO = {
@@ -1576,7 +1637,17 @@ if active_page == "Investigation":
         st.info("Select a user above to begin investigation. Users are sorted by risk (highest first).")
         st.stop()
 
-    user_data = filtered_df[filtered_df["user"] == selected_user].sort_values("day")
+    # O(1) lookup from pre-grouped dict — avoids scanning 1.5 M rows per user switch
+    _u_rows = user_data_dict.get(selected_user, pd.DataFrame())
+    if not _u_rows.empty:
+        _u_mask = (
+            _u_rows["ae_risk_band"].isin(st.session_state.flt_risk)
+            & (_u_rows["day"].dt.date >= st.session_state.flt_date_start)
+            & (_u_rows["day"].dt.date <= st.session_state.flt_date_end)
+        )
+        user_data = _u_rows[_u_mask].sort_values("day")
+    else:
+        user_data = pd.DataFrame()
 
     if user_data.empty:
         st.warning("No data for this user in the current filter range.")
@@ -1644,7 +1715,7 @@ if active_page == "Investigation":
             if valid_feats:
                 radar_categories.append(channel)
                 user_vals.append(user_data[valid_feats].mean().sum())
-                pop_vals.append(filtered_df[valid_feats].mean().sum())
+                pop_vals.append(_pop_channel_avgs().get(channel, 0.0))
 
         if radar_categories:
             fig_radar = go.Figure()
@@ -1994,16 +2065,12 @@ if active_page == "Channels":
 
     with ch1:
         section_header("Channel Activity Volume", "sh_chan_vol")
-        channel_ts = []
-        for channel, feats in CHANNELS.items():
-            valid = [f for f in feats if f in filtered_df.columns]
-            if valid:
-                daily = filtered_df.groupby(filtered_df["day"].dt.date)[valid].sum().sum(axis=1).reset_index()
-                daily.columns = ["Date", "Volume"]
-                daily["Channel"] = channel
-                channel_ts.append(daily)
-        if channel_ts:
-            channel_ts_df = pd.concat(channel_ts)
+        channel_ts_df = _channel_time_series(
+            st.session_state.flt_date_start,
+            st.session_state.flt_date_end,
+            tuple(sorted(st.session_state.flt_risk)),
+        )
+        if not channel_ts_df.empty:
             fig_ch_ts = px.line(channel_ts_df, x="Date", y="Volume", color="Channel",
                                 color_discrete_map=CHANNEL_COLOR_MAP)
             fig_ch_ts.update_layout(**PLOTLY_LAYOUT, height=400)
@@ -2040,11 +2107,14 @@ if active_page == "Channels":
 
     # ── Correlation heatmap ──
     section_header("Feature Correlation Matrix", "sh_feat_corr")
-    corr_feats = [f for f in RAW_FEATURES if f in filtered_df.columns]
+    corr_feats = [f for f in RAW_FEATURES if f in merged_df.columns]
     if len(corr_feats) >= 2:
-        # Correlation converges fast — 50k rows is more than enough
-        corr_sample = filtered_df if len(filtered_df) <= MAX_PLOT_POINTS else filtered_df.sample(MAX_PLOT_POINTS, random_state=42)
-        corr_matrix = corr_sample[corr_feats].corr()
+        corr_matrix = _corr_matrix(
+            st.session_state.flt_date_start,
+            st.session_state.flt_date_end,
+            tuple(sorted(st.session_state.flt_risk)),
+            tuple(corr_feats),
+        )
         fig_corr = px.imshow(
             corr_matrix, x=corr_feats, y=corr_feats,
             color_continuous_scale=[[0, "#3a86a8"], [0.5, "#0a0a0a"], [1, "#e84545"]],
