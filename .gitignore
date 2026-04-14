@@ -20,5 +20,8 @@ __pycache__/
 # Local path overrides (each contributor maintains their own copy)
 paths.local.py
 
+# Local-only utility scripts
+scripts/build_alert_table_v1.py
+
 # CLAUDE
 .claude/settings.local.json
