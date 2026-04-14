@@ -536,6 +536,8 @@ ANALYST_TABLE_PARQUET = os.path.join(BASE_DIR, "explainability", "alert_table", 
 ANALYST_TABLE_CSV = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_3.csv")
 UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.parquet")
 UEBA_CSV = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.csv")
+UEBA_3A_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3a.parquet")
+UEBA_3A_CSV     = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3a.csv")
 LIVE_OUTPUT = os.path.join(BASE_DIR, "processed_datasets", "live_results.jsonl")
 LIVE_SIM_SCRIPT = os.path.join(BASE_DIR, "live_simulation.py")
 
@@ -564,6 +566,21 @@ UEBA_COLS = [
     "jobsite_usb_activity_flag", "suspicious_upload_flag", "cloud_upload_flag",
     "non_primary_pc_risk_flag",
 ]
+
+
+@st.cache_data(show_spinner=False)
+def load_ueba_3a():
+    """Load UEBA Table A — (user, pc, day) granular rows used for PC-level drill-down."""
+    if os.path.exists(UEBA_3A_PARQUET):
+        df = pd.read_parquet(UEBA_3A_PARQUET)
+    elif os.path.exists(UEBA_3A_CSV):
+        df = pd.read_csv(UEBA_3A_CSV)
+        if "Unnamed: 0" in df.columns:
+            df = df.drop(columns=["Unnamed: 0"])
+    else:
+        return None
+    df["day"] = pd.to_datetime(df["day"], errors="coerce")
+    return df
 
 
 @st.cache_data(show_spinner="Loading dataset...")
@@ -638,8 +655,10 @@ def load_data():
 
 try:
     merged_df, user_risk = load_data()
+    ueba_3a_df = load_ueba_3a()
     DATA_LOADED = True
 except Exception:
+    ueba_3a_df = None
     DATA_LOADED = False
 
 
@@ -1597,7 +1616,7 @@ if active_page == "Investigation":
             f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
             f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 20px 0;'>"
             f"<div style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-            f"text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;'>Alert Summary</div>"
+            f"text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px;'>Alert Summary</div>"
             f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;color:#888;margin-bottom:6px;'>"
             f"<span style='background:{_ctx_risk_color}22;color:{_ctx_risk_color};font-size:9px;"
             f"letter-spacing:1px;padding:2px 6px;border:1px solid {_ctx_risk_color}55;"
@@ -1619,7 +1638,7 @@ if active_page == "Investigation":
         _ALERT_RECORD_FIELDS = [
             ("user",               "User"),
             ("day",                "Day"),
-            ("risk_levels",        "Severity"),
+            ("risk_levels",        "AE Risk Band"),
             ("percentile_rank",    "AE Percentile"),
             ("anomaly_scores",     "IF Score"),
             ("if_percentile_rank", "IF Percentile"),
@@ -1637,7 +1656,8 @@ if active_page == "Investigation":
                 return str(int(fv)) if fv == int(fv) else f"{fv:.2f}"
             except (TypeError, ValueError, OverflowError):
                 return str(val)
-
+            
+        _BADGE_COLS = {"risk_levels", "if_risk_band"}
         _kv_parts = []
         if not _raw_row.empty:
             _rec0 = _raw_row.iloc[0]
@@ -1647,9 +1667,29 @@ if active_page == "Investigation":
                 _v = _rec0[_c]
                 if not isinstance(_v, str) and pd.isnull(_v):
                     continue
+                _val_str = _fmt_alert_val(_c, _v)
+                if _c in _BADGE_COLS:
+                    _bc = RISK_COLORS.get(str(_val_str).upper(), "#666666")
+                    _val_html = (
+                        f"<span style='background:{_bc}22;color:{_bc};font-size:10px;"
+                        f"font-family:JetBrains Mono,monospace;letter-spacing:1px;"
+                        f"padding:2px 8px;border:1px solid {_bc}55;'>{_val_str}</span>"
+                    )
+                elif _c == "explanation":
+                    _val_html = (
+                        f"<span style='font-family:Inter,sans-serif;font-size:12px;"
+                        f"color:#bbb;line-height:1.6;'>{_val_str}</span>"
+                    )
+                else:
+                    _val_html = (
+                        f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                        f"color:#ccc;'>{_val_str}</span>"
+                    )
                 _kv_parts.append(
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:10px;color:#555;'>{_l}</span>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:10px;color:#aaa;'>{_fmt_alert_val(_c, _v)}</span>"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:9px;"
+                    f"color:#555;text-transform:uppercase;letter-spacing:1px;"
+                    f"padding:5px 0 3px 0;align-self:center;'>{_l}</span>"
+                    f"<span style='padding:5px 0 3px 0;align-self:center;'>{_val_html}</span>"
                 )
 
         _kv_grid = "".join(_kv_parts) if _kv_parts else (
@@ -1657,11 +1697,11 @@ if active_page == "Investigation":
             "grid-column:1/-1;'>Raw alert record unavailable.</span>"
         )
         st.markdown(
-            "<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
-            "border-left:3px solid #1a1a1a;padding:14px 18px;margin:0 0 12px 0;'>"
+            f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+            f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 12px 0;'>"
             "<div style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-            "text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;'>Raw Alert Record</div>"
-            f"<div style='display:grid;grid-template-columns:160px 1fr;gap:4px 16px;'>{_kv_grid}</div>"
+            "text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px;'>Raw Alert Record</div>"
+            f"<div style='display:grid;grid-template-columns:140px 1fr;gap:2px 16px;'>{_kv_grid}</div>"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -1688,52 +1728,113 @@ if active_page == "Investigation":
                 return None
 
             _tc_table_rows = []
-            _seen_bases: set = set()
+            _seen_feats: set = set()
             for _feat in _tc_features:
-                _base = _resolve_ueba_base(_feat)
-                if not _base or _base in _seen_bases:
+                # Deduplicate on the original feature name only — not on the
+                # resolved base column. Two contributors like
+                # file_copy_count_zscore and file_copy_count_rolling_delta
+                # resolve to the same base but are distinct contributors.
+                if _feat in _seen_feats:
                     continue
-                _seen_bases.add(_base)
-                if not _raw_row.empty and _base in _raw_row.columns:
+                _seen_feats.add(_feat)
+                _base = _resolve_ueba_base(_feat)
+                if _base is not None and not _raw_row.empty and _base in _raw_row.columns:
                     _rv = _raw_row.iloc[0][_base]
                     _rv_str = "—" if (not isinstance(_rv, str) and pd.isnull(_rv)) else _fmt_alert_val(_base, _rv)
                 else:
                     _rv_str = "unavailable"
-                _tc_table_rows.append((_base, prettify_feature_name(_feat), _rv_str))
+                _tc_table_rows.append((_feat, prettify_feature_name(_feat), _rv_str))
 
             if _tc_table_rows:
                 _tc_tbody_html = "".join(
                     f"<tr>"
-                    f"<td style='font-family:JetBrains Mono,monospace;font-size:10px;color:#555;"
-                    f"padding:4px 16px 4px 0;border-bottom:1px solid #111;'>{_f}</td>"
-                    f"<td style='font-family:Inter,sans-serif;font-size:10px;color:#888;"
-                    f"padding:4px 16px 4px 0;border-bottom:1px solid #111;'>{_l}</td>"
-                    f"<td style='font-family:JetBrains Mono,monospace;font-size:10px;color:#e0e0e0;"
-                    f"padding:4px 0;border-bottom:1px solid #111;'>{_r}</td>"
+                    f"<td style='font-family:JetBrains Mono,monospace;font-size:10px;color:#444;"
+                    f"padding:7px 16px 7px 0;border-bottom:1px solid #111;vertical-align:middle;'>{_f}</td>"
+                    f"<td style='font-family:Inter,sans-serif;font-size:12px;color:#999;"
+                    f"padding:7px 16px 7px 0;border-bottom:1px solid #111;vertical-align:middle;'>{_l}</td>"
+                    f"<td style='font-family:JetBrains Mono,monospace;font-size:12px;color:#e0e0e0;"
+                    f"padding:7px 0;border-bottom:1px solid #111;vertical-align:middle;font-weight:600;'>{_r}</td>"
                     f"</tr>"
                     for _f, _l, _r in _tc_table_rows
                 )
                 st.markdown(
-                    "<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
-                    "border-left:3px solid #1a1a1a;padding:14px 18px;margin:0 0 20px 0;'>"
+                    f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+                    f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 20px 0;'>"
                     "<div style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                    "text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;'>Top Contributor Raw Values</div>"
+                    "text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px;'>Top Contributor Raw Values</div>"
                     "<table style='width:100%;border-collapse:collapse;'>"
                     "<thead><tr>"
                     "<th style='font-family:JetBrains Mono,monospace;font-size:8px;color:#333;"
-                    "text-align:left;padding-bottom:6px;text-transform:uppercase;letter-spacing:1px;"
+                    "text-align:left;padding-bottom:8px;text-transform:uppercase;letter-spacing:1px;"
                     "padding-right:16px;border-bottom:1px solid #1a1a1a;'>Feature</th>"
                     "<th style='font-family:JetBrains Mono,monospace;font-size:8px;color:#333;"
-                    "text-align:left;padding-bottom:6px;text-transform:uppercase;letter-spacing:1px;"
+                    "text-align:left;padding-bottom:8px;text-transform:uppercase;letter-spacing:1px;"
                     "padding-right:16px;border-bottom:1px solid #1a1a1a;'>Description</th>"
                     "<th style='font-family:JetBrains Mono,monospace;font-size:8px;color:#333;"
-                    "text-align:left;padding-bottom:6px;text-transform:uppercase;letter-spacing:1px;"
+                    "text-align:left;padding-bottom:8px;text-transform:uppercase;letter-spacing:1px;"
                     "border-bottom:1px solid #1a1a1a;'>Raw Value (v3B)</th>"
                     "</tr></thead>"
                     f"<tbody>{_tc_tbody_html}</tbody>"
                     "</table></div>",
                     unsafe_allow_html=True,
                 )
+
+        # ── PC-Level Drill-Down (UEBA Table A) ──
+        if ueba_3a_df is not None:
+            _drill = ueba_3a_df[
+                (ueba_3a_df["user"] == selected_user) &
+                (ueba_3a_df["day"] == _ctx_day_ts)
+            ].copy()
+            _drop_cols = [c for c in ("user", "day") if c in _drill.columns]
+            if _drop_cols:
+                _drill = _drill.drop(columns=_drop_cols)
+            if "pc" in _drill.columns:
+                _drill = _drill.sort_values("pc").reset_index(drop=True)
+            else:
+                _drill = _drill.reset_index(drop=True)
+            st.markdown(
+                "<div style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+                "text-transform:uppercase;letter-spacing:1.5px;margin:0 0 8px 0;'>"
+                "PC-Level Drill-Down &mdash; UEBA Table A</div>",
+                unsafe_allow_html=True,
+            )
+            if _drill.empty:
+                st.markdown(
+                    f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+                    f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 20px 0;'>"
+                    "<div style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+                    "text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;'>"
+                    "PC-Level Drill-Down &mdash; UEBA Table A</div>"
+                    "<div style='font-family:Inter,sans-serif;font-size:11px;color:#555;'>"
+                    "No PC-level UEBA Table A rows found for this user/day.</div>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                # Header cap — open top/left/right borders, no bottom border
+                st.markdown(
+                    f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+                    f"border-bottom:none;border-left:3px solid {_ctx_risk_color};"
+                    f"padding:14px 18px 10px 18px;margin:0;'>"
+                    "<div style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+                    "text-transform:uppercase;letter-spacing:1.5px;'>"
+                    "PC-Level Drill-Down &mdash; UEBA Table A</div>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+                st.dataframe(
+                    _drill,
+                    use_container_width=True,
+                    height=min(38 + len(_drill) * 35, 320),
+                )
+                # Closing cap — bottom border to seal the section
+                st.markdown(
+                    f"<div style='border:1px solid #1a1a1a;border-top:none;"
+                    f"border-left:3px solid {_ctx_risk_color};height:6px;"
+                    f"background:#0a0a0a;margin:0 0 20px 0;'></div>",
+                    unsafe_allow_html=True,
+                )
+
 
     # ── Anomaly Timeline ──
     section_header("Anomaly Score Timeline", "sh_score_timeline")
