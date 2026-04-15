@@ -344,6 +344,52 @@ st.markdown("""
         letter-spacing: 2px;
         font-family: 'JetBrains Mono', monospace;
     }
+            
+    /* ── Investigation card labels (Alert Summary, Raw Alert Record, etc.) ── */
+    .inv-card-label {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 15px;
+        font-weight: 900;
+        color: #bbbbbb;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        margin-bottom: 14px;
+    }
+
+    /* ── Investigation field labels (User, Day, AE Risk Band …) ── */
+    .inv-field-label {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+        font-weight: 600;
+        color: #999999;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        padding: 6px 0 4px 0;
+        align-self: center;
+    }
+
+    /* ── Investigation table: column headers ── */
+    .inv-th {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+        font-weight: 600;
+        color: #999999;
+        text-align: left;
+        padding: 0 16px 10px 0;
+        text-transform: uppercase;
+        letter-spacing: 1.2px;
+        border-bottom: 1px solid #1a1a1a;
+    }
+
+    /* ── Investigation table: feature-name cells ── */
+    .inv-feat-name {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+        color: #888888;
+        padding: 8px 16px 8px 0;
+        border-bottom: 1px solid #111;
+        vertical-align: middle;
+    }
 
     /* ── Risk badges ── */
     .risk-high   { color: #e84545; font-weight: 600; }
@@ -928,6 +974,35 @@ def parse_top_contributors(raw) -> list[str]:
             parsed = _ast.literal_eval(raw)
             if isinstance(parsed, list):
                 return parse_top_contributors(parsed)
+        except Exception:
+            pass
+    return []
+
+
+def parse_top_contributors_with_values(raw) -> list[tuple]:
+    """Return list of (feature_name, contribution_value) tuples from top_contributors."""
+    if raw is None:
+        return []
+    if isinstance(raw, float):
+        return []  # NaN from a left-join miss
+    if isinstance(raw, list):
+        pairs = []
+        for item in raw:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                pairs.append((str(item[0]), item[1]))
+            elif isinstance(item, (list, tuple)) and len(item) == 1:
+                pairs.append((str(item[0]), None))
+            elif isinstance(item, str):
+                pairs.append((item, None))
+        return pairs
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return []
+        try:
+            parsed = _ast.literal_eval(raw)
+            if isinstance(parsed, list):
+                return parse_top_contributors_with_values(parsed)
         except Exception:
             pass
     return []
@@ -1615,8 +1690,7 @@ if active_page == "Investigation":
         st.markdown(
             f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
             f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 20px 0;'>"
-            f"<div style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-            f"text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px;'>Alert Summary</div>"
+            "<div class='inv-card-label'>Alert Summary</div>"
             f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;color:#888;margin-bottom:6px;'>"
             f"<span style='background:{_ctx_risk_color}22;color:{_ctx_risk_color};font-size:9px;"
             f"letter-spacing:1px;padding:2px 6px;border:1px solid {_ctx_risk_color}55;"
@@ -1686,98 +1760,76 @@ if active_page == "Investigation":
                         f"color:#ccc;'>{_val_str}</span>"
                     )
                 _kv_parts.append(
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:9px;"
-                    f"color:#555;text-transform:uppercase;letter-spacing:1px;"
-                    f"padding:5px 0 3px 0;align-self:center;'>{_l}</span>"
+                    f"<span class='inv-field-label'>{_l}</span>"
                     f"<span style='padding:5px 0 3px 0;align-self:center;'>{_val_html}</span>"
                 )
 
         _kv_grid = "".join(_kv_parts) if _kv_parts else (
-            "<span style='font-family:Inter,sans-serif;font-size:11px;color:#555;"
+            "<span style='font-family:Inter,sans-serif;font-size:12px;color:#666;"
             "grid-column:1/-1;'>Raw alert record unavailable.</span>"
         )
         st.markdown(
             f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
             f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 12px 0;'>"
-            "<div style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-            "text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px;'>Raw Alert Record</div>"
+            "<div class='inv-card-label'>Raw Alert Record</div>"
             f"<div style='display:grid;grid-template-columns:140px 1fr;gap:2px 16px;'>{_kv_grid}</div>"
             "</div>",
             unsafe_allow_html=True,
         )
 
-        # ── Top Contributor Raw Values ──
+        # ── Top Reconstruction Error Contributors ──
         _tc_raw = (
             _raw_row.iloc[0]["top_contributors"]
             if not _raw_row.empty and "top_contributors" in _raw_row.columns
             else None
         )
-        _tc_features = parse_top_contributors(_tc_raw)
+        _tc_pairs = parse_top_contributors_with_values(_tc_raw)
 
-        if _tc_features:
-            _avail_cols = set(merged_df.columns)
-
-            def _resolve_ueba_base(feat: str):
-                c = feat.strip().replace("contribution_", "")
-                if c in _avail_cols:
-                    return c
-                if c.endswith("_zscore") and c[:-7] in _avail_cols:
-                    return c[:-7]
-                if c.endswith("_rolling_delta") and c[:-14] in _avail_cols:
-                    return c[:-14]
-                return None
-
+        if _tc_pairs:
             _tc_table_rows = []
             _seen_feats: set = set()
-            for _feat in _tc_features:
+            for _feat, _contrib_val in _tc_pairs:
                 # Deduplicate on the original feature name only — not on the
                 # resolved base column. Two contributors like
                 # file_copy_count_zscore and file_copy_count_rolling_delta
-                # resolve to the same base but are distinct contributors.
+                # are distinct contributors even if they share a base feature.
                 if _feat in _seen_feats:
                     continue
                 _seen_feats.add(_feat)
-                _base = _resolve_ueba_base(_feat)
-                if _base is not None and not _raw_row.empty and _base in _raw_row.columns:
-                    _rv = _raw_row.iloc[0][_base]
-                    _rv_str = "—" if (not isinstance(_rv, str) and pd.isnull(_rv)) else _fmt_alert_val(_base, _rv)
-                else:
-                    _rv_str = "unavailable"
+                try:
+                    _rv_str = f"{float(_contrib_val) * 100:.1f}%" if _contrib_val is not None else "—"
+                except (TypeError, ValueError):
+                    _rv_str = "—"
                 _tc_table_rows.append((_feat, prettify_feature_name(_feat), _rv_str))
 
             if _tc_table_rows:
                 _tc_tbody_html = "".join(
                     f"<tr>"
-                    f"<td style='font-family:JetBrains Mono,monospace;font-size:10px;color:#444;"
-                    f"padding:7px 16px 7px 0;border-bottom:1px solid #111;vertical-align:middle;'>{_f}</td>"
+                    f"<td class='inv-feat-name'>{_f}</td>"
                     f"<td style='font-family:Inter,sans-serif;font-size:12px;color:#999;"
-                    f"padding:7px 16px 7px 0;border-bottom:1px solid #111;vertical-align:middle;'>{_l}</td>"
+                    f"padding:8px 16px 8px 0;text-align:left;border-bottom:1px solid #111;"
+                    f"vertical-align:middle;'>{_l}</td>"
                     f"<td style='font-family:JetBrains Mono,monospace;font-size:12px;color:#e0e0e0;"
-                    f"padding:7px 0;border-bottom:1px solid #111;vertical-align:middle;font-weight:600;'>{_r}</td>"
+                    f"padding:8px 0;border-bottom:1px solid #111;vertical-align:middle;"
+                    f"font-weight:600;text-align:right;white-space:nowrap;'>{_r}</td>"
                     f"</tr>"
                     for _f, _l, _r in _tc_table_rows
                 )
                 st.markdown(
                     f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
                     f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 20px 0;'>"
-                    "<div style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                    "text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px;'>Top Contributor Raw Values</div>"
+                    "<div class='inv-card-label'>Top Reconstruction Error Contributors</div>"
                     "<table style='width:100%;border-collapse:collapse;'>"
                     "<thead><tr>"
-                    "<th style='font-family:JetBrains Mono,monospace;font-size:8px;color:#333;"
-                    "text-align:left;padding-bottom:8px;text-transform:uppercase;letter-spacing:1px;"
-                    "padding-right:16px;border-bottom:1px solid #1a1a1a;'>Feature</th>"
-                    "<th style='font-family:JetBrains Mono,monospace;font-size:8px;color:#333;"
-                    "text-align:left;padding-bottom:8px;text-transform:uppercase;letter-spacing:1px;"
-                    "padding-right:16px;border-bottom:1px solid #1a1a1a;'>Description</th>"
-                    "<th style='font-family:JetBrains Mono,monospace;font-size:8px;color:#333;"
-                    "text-align:left;padding-bottom:8px;text-transform:uppercase;letter-spacing:1px;"
-                    "border-bottom:1px solid #1a1a1a;'>Raw Value (v3B)</th>"
+                    "<th class='inv-th' style='width:44%;text-align:left;'>Feature</th>"
+                    "<th class='inv-th' style='width:38%;text-align:left;padding-left:0;'>Description</th>"
+                    "<th class='inv-th' style='width:18%;text-align:right;padding-right:0;white-space:nowrap;'>Error Contribution</th>"
                     "</tr></thead>"
                     f"<tbody>{_tc_tbody_html}</tbody>"
                     "</table></div>",
                     unsafe_allow_html=True,
                 )
+
 
         # ── PC-Level Drill-Down (UEBA Table A) ──
         if ueba_3a_df is not None:
@@ -1792,46 +1844,49 @@ if active_page == "Investigation":
                 _drill = _drill.sort_values("pc").reset_index(drop=True)
             else:
                 _drill = _drill.reset_index(drop=True)
-            st.markdown(
-                "<div style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                "text-transform:uppercase;letter-spacing:1.5px;margin:0 0 8px 0;'>"
-                "PC-Level Drill-Down &mdash; UEBA Table A</div>",
-                unsafe_allow_html=True,
-            )
+            
             if _drill.empty:
                 st.markdown(
                     f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
                     f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 20px 0;'>"
-                    "<div style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                    "text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;'>"
-                    "PC-Level Drill-Down &mdash; UEBA Table A</div>"
+                    "<div class='inv-card-label'>PC-Level Drill-Down &mdash; UEBA Table A</div>"
                     "<div style='font-family:Inter,sans-serif;font-size:11px;color:#555;'>"
                     "No PC-level UEBA Table A rows found for this user/day.</div>"
                     "</div>",
                     unsafe_allow_html=True,
                 )
             else:
-                # Header cap — open top/left/right borders, no bottom border
+               
+                _drill_display = _drill.drop(columns=["pc"], errors="ignore")
+                _drill_cols = list(_drill_display.columns)
+                _drill_last = _drill_cols[-1] if _drill_cols else None
+                _drill_th_html = "".join(
+                    f"<th style='font-family:JetBrains Mono,monospace;font-size:11px;font-weight:600;"
+                    f"color:#aaaaaa;text-align:left;text-transform:uppercase;letter-spacing:1.2px;"
+                    f"white-space:nowrap;padding:0 28px 12px 0;border-bottom:1px solid #1a1a1a;"
+                    f"border-right:{'none' if col == _drill_last else '1px solid #1e1e1e'};"
+                    f"min-width:130px;'>{col.replace('_', ' ')}</th>"
+                    for col in _drill_cols
+                )
+                _drill_tbody_html = "".join(
+                    "<tr>" + "".join(
+                        f"<td style='font-family:JetBrains Mono,monospace;font-size:12px;color:#cccccc;"
+                        f"padding:10px 28px 10px 0;border-bottom:1px solid #111;vertical-align:middle;"
+                        f"white-space:nowrap;border-right:{'none' if col == _drill_last else '1px solid #1e1e1e'};"
+                        f"min-width:130px;'>{_fmt_alert_val(col, row[col])}</td>"
+                        for col in _drill_cols
+                    ) + "</tr>"
+                    for _, row in _drill_display.iterrows()
+                )
                 st.markdown(
                     f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
-                    f"border-bottom:none;border-left:3px solid {_ctx_risk_color};"
-                    f"padding:14px 18px 10px 18px;margin:0;'>"
-                    "<div style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                    "text-transform:uppercase;letter-spacing:1.5px;'>"
-                    "PC-Level Drill-Down &mdash; UEBA Table A</div>"
-                    "</div>",
-                    unsafe_allow_html=True,
-                )
-                st.dataframe(
-                    _drill,
-                    use_container_width=True,
-                    height=min(38 + len(_drill) * 35, 320),
-                )
-                # Closing cap — bottom border to seal the section
-                st.markdown(
-                    f"<div style='border:1px solid #1a1a1a;border-top:none;"
-                    f"border-left:3px solid {_ctx_risk_color};height:6px;"
-                    f"background:#0a0a0a;margin:0 0 20px 0;'></div>",
+                    f"border-left:3px solid {_ctx_risk_color};padding:14px 18px 18px 18px;margin:0 0 20px 0;'>"
+                    "<div class='inv-card-label'>PC-Level Drill-Down &mdash; UEBA Table A</div>"
+                    "<div style='overflow-x:auto;-webkit-overflow-scrolling:touch;'>"
+                    "<table style='border-collapse:collapse;width:max-content;min-width:100%;'>"
+                    f"<thead><tr>{_drill_th_html}</tr></thead>"
+                    f"<tbody>{_drill_tbody_html}</tbody>"
+                    "</table></div></div>",
                     unsafe_allow_html=True,
                 )
 
