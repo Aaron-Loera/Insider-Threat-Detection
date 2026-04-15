@@ -1381,51 +1381,6 @@ if active_page == "Overview":
     _filter_bar("ov_flt")
     filtered_df = _get_filtered_df()
 
-    # ── Critical Alert Notice ──────────────────────────────────
-    _high_df = filtered_df[filtered_df["ae_risk_band"].isin(["CRITICAL", "HIGH"])]
-    _high_user_count = _high_df["user"].nunique()
-    _high_record_count = len(_high_df)
-
-    if _high_user_count > 0:
-        # Top 5 users by peak percentile (or anomaly score fallback)
-        _top_alert_users = (
-            _high_df.groupby("user", observed=True)
-            .agg(
-                peak_pct=("ae_percentile_rank", "max") if "ae_percentile_rank" in _high_df.columns else ("if_anomaly_score", "max"),
-                high_days=("ae_risk_band", "count"),
-            )
-            .sort_values("peak_pct", ascending=False)
-            .head(5)
-            .reset_index()
-        )
-
-        _user_pills = ""
-        for _, _row in _top_alert_users.iterrows():
-            _user_pills += (
-                f"<div class='alert-notice-row-item'>"
-                f"<span class='u-id'>{_row['user']}</span>"
-                f"<span class='u-pct'>P{_row['peak_pct']:.0f}</span>"
-                f"<span class='u-days'>{int(_row['high_days'])} critical/high-risk day{'s' if _row['high_days'] != 1 else ''}</span>"
-                f"</div>"
-            )
-
-        _notice_html = (
-            "<div class='alert-notice-banner'>"
-            "<div class='alert-notice-header'>"
-            f"<span class='alert-notice-title'>Active Alerts Requiring Immediate Attention</span>"
-            f"<span class='alert-notice-count'>{_high_user_count:,} critical/high-risk user{'s' if _high_user_count != 1 else ''} &nbsp;&middot;&nbsp; {_high_record_count:,} flagged record{'s' if _high_record_count != 1 else ''}</span>"
-            "</div>"
-            f"<div class='alert-notice-rows'>{_user_pills}</div>"
-            "</div>"
-        )
-        st.markdown(_notice_html, unsafe_allow_html=True)
-
-        if st.button("View All Alerts \u2192", key="ov_goto_alerts", type="primary"):
-            st.session_state._nav_request = "Alerts"
-            st.rerun()
-
-        st.markdown("<div style='margin-bottom:4px;'></div>", unsafe_allow_html=True)
-
     total_users = filtered_df["user"].nunique()
     total_records = len(filtered_df)
     critical_risk_users = filtered_df[filtered_df["ae_risk_band"] == "CRITICAL"]["user"].nunique()
@@ -1866,6 +1821,45 @@ if active_page == "Alerts":
     else:
         _filter_bar("al_flt")
         filtered_df = _get_filtered_df()
+
+        # ── Critical Alert Notice ──────────────────────────────────
+        _high_df = filtered_df[filtered_df["ae_risk_band"].isin(["CRITICAL", "HIGH"])]
+        _high_user_count = _high_df["user"].nunique()
+        _high_record_count = len(_high_df)
+
+        if _high_user_count > 0:
+            _top_alert_users = (
+                _high_df.groupby("user", observed=True)
+                .agg(
+                    peak_pct=("ae_percentile_rank", "max") if "ae_percentile_rank" in _high_df.columns else ("if_anomaly_score", "max"),
+                    high_days=("ae_risk_band", "count"),
+                )
+                .sort_values("peak_pct", ascending=False)
+                .head(5)
+                .reset_index()
+            )
+
+            _user_pills = ""
+            for _, _row in _top_alert_users.iterrows():
+                _user_pills += (
+                    f"<div class='alert-notice-row-item'>"
+                    f"<span class='u-id'>{_row['user']}</span>"
+                    f"<span class='u-pct'>P{_row['peak_pct']:.0f}</span>"
+                    f"<span class='u-days'>{int(_row['high_days'])} critical/high-risk day{'s' if _row['high_days'] != 1 else ''}</span>"
+                    f"</div>"
+                )
+
+            _notice_html = (
+                "<div class='alert-notice-banner'>"
+                "<div class='alert-notice-header'>"
+                f"<span class='alert-notice-title'>Active Alerts Requiring Immediate Attention</span>"
+                f"<span class='alert-notice-count'>{_high_user_count:,} critical/high-risk user{'s' if _high_user_count != 1 else ''} &nbsp;&middot;&nbsp; {_high_record_count:,} flagged record{'s' if _high_record_count != 1 else ''}</span>"
+                "</div>"
+                f"<div class='alert-notice-rows'>{_user_pills}</div>"
+                "</div>"
+            )
+            st.markdown(_notice_html, unsafe_allow_html=True)
+            st.markdown("<div style='margin-bottom:4px;'></div>", unsafe_allow_html=True)
 
         # ── Top 10 Riskiest Users in Alerts ──
         section_header("Top 10 Riskiest Users", "sh_top_users")
