@@ -1580,9 +1580,13 @@ if active_page == "Overview":
     if CROSS_FLAGS:
         section_header("Cross-Channel Risk Flags (Global)", "sh_cross_flags")
         _flag_info = [
-            ("usb_file_activity_flag",     "USB + File Write",      "#e84545"),
-            ("off_hours_activity_flag",    "Off-Hours Activity",    "#d4a017"),
-            ("external_comm_activity_flag","External Communication","#3a86a8"),
+            ("usb_file_activity_flag",      "USB + File Write",      "#e84545"),
+            ("off_hours_activity_flag",     "Off-Hours Activity",    "#d4a017"),
+            ("external_comm_activity_flag", "External Communication","#3a86a8"),
+            ("jobsite_usb_activity_flag",   "Job Site + USB",        "#9b59b6"),
+            ("suspicious_upload_flag",      "Suspicious Upload",     "#e67e22"),
+            ("cloud_upload_flag",           "Cloud Upload",          "#00b4d8"),
+            ("non_primary_pc_risk_flag",    "Non-Primary PC",        "#7f8c8d"),
         ]
         _cards_html = ""
         for flag, label, color in _flag_info:
@@ -1763,9 +1767,13 @@ if active_page == "Investigation":
     if CROSS_FLAGS:
         section_header("Cross-Channel Risk Indicators", "sh_cross_ind")
         _flag_detail = [
-            ("usb_file_activity_flag",     "USB + File Write",   "USB + file write on same day", "#e84545"),
-            ("off_hours_activity_flag",    "Off-Hours Activity", "Outside 9 AM \u2013 5 PM",     "#d4a017"),
-            ("external_comm_activity_flag","External Comms",     "Emails to external domains",   "#3a86a8"),
+            ("usb_file_activity_flag",      "USB + File Write",   "USB + file write on same day",           "#e84545"),
+            ("off_hours_activity_flag",     "Off-Hours Activity", "Outside 9 AM \u2013 5 PM",               "#d4a017"),
+            ("external_comm_activity_flag", "External Comms",     "Emails to external domains",             "#3a86a8"),
+            ("jobsite_usb_activity_flag",   "Job Site + USB",     "Job-site browsing + USB on same day",    "#9b59b6"),
+            ("suspicious_upload_flag",      "Suspicious Upload",  "HTTP upload to suspicious domain",       "#e67e22"),
+            ("cloud_upload_flag",           "Cloud Upload",       "HTTP upload to cloud storage",           "#00b4d8"),
+            ("non_primary_pc_risk_flag",    "Non-Primary PC",     "Sensitive activity from atypical endpoint", "#7f8c8d"),
         ]
         _total = len(user_data)
         _ucards = ""
@@ -2023,7 +2031,7 @@ if active_page == "Alerts":
 
                 with c_btn:
                     if st.button("Investigate →", key=f"al_inv_{i}", use_container_width=True):
-                        st.session_state["inv_user_search"] = user
+                        st.session_state["inv_user_select"] = user
                         st.session_state["_nav_request"] = "Investigation"
                         st.rerun()
 
