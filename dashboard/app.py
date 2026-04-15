@@ -1504,75 +1504,17 @@ if active_page == "Overview":
         fig_trend.update_layout(**PLOTLY_LAYOUT, height=340, xaxis_title="", yaxis_title="Alert Count")
         st.plotly_chart(fig_trend, use_container_width=True)
 
-    # ── Row 3: Top Risky Users + Score Distribution ──
-    col_left2, col_right2 = st.columns(2)
-
-    with col_left2:
-        section_header("Top 10 Riskiest Users", "sh_top_users")
-        st.markdown(
-            "<p style='font-family:Inter,sans-serif;font-size:12px;color:#555;margin:0 0 12px 0;'>"
-            "Click a user to open their investigation profile.</p>",
-            unsafe_allow_html=True,
-        )
-        top_users = user_risk.head(10).copy()
-        for rank, row in enumerate(top_users.itertuples(), start=1):
-            uid = row.user
-            score = row.max_percentile
-            days = row.critical_count + row.high_count
-            # Color badge based on score
-            if score >= 95:
-                badge_color = "#ff1744"
-                badge_label = "CRITICAL"
-            elif score >= 90:
-                badge_color = "#e84545"
-                badge_label = "HIGH"
-            elif score >= 80:
-                badge_color = "#d4a017"
-                badge_label = "MEDIUM"
-            else:
-                badge_color = "#3a86a8"
-                badge_label = "LOW"
-
-            col_rank, col_info, col_btn = st.columns([1, 5, 3])
-            with col_rank:
-                st.markdown(
-                    f"<div style='font-family:JetBrains Mono,monospace;font-size:12px;"
-                    f"color:#444;font-weight:600;padding-top:4px;text-align:center;'>#{rank}</div>",
-                    unsafe_allow_html=True,
-                )
-            with col_info:
-                st.markdown(
-                    f"<div style='padding:2px 0 1px 0;'>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
-                    f"color:#e0e0e0;font-weight:600;'>{uid}</span>"
-                    f"&nbsp;&nbsp;<span style='background:{badge_color}22;color:{badge_color};font-size:9px;"
-                    f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 5px;"
-                    f"border:1px solid {badge_color}55;'>{badge_label}</span>"
-                    f"<br><span style='font-family:Inter,sans-serif;font-size:10px;"
-                    f"color:#555;line-height:1.5;'>"
-                    f"Percentile {score:.1f} &middot; {days} high-risk day{'s' if days != 1 else ''}</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-            with col_btn:
-                if st.button("Investigate →", key=f"inv_btn_{uid}", use_container_width=True):
-                    st.session_state["inv_user_select"] = uid
-                    st.session_state["_nav_request"] = "Investigation"
-                    st.rerun()
-            st.markdown("<div style='border-bottom:1px solid #111;margin:0;'></div>", unsafe_allow_html=True)
-
-    with col_right2:
-        section_header("Anomaly Score Distribution", "sh_score_dist")
-        # Sample for histogram to avoid sending 2M+ points to Plotly
-        hist_df = filtered_df if len(filtered_df) <= MAX_PLOT_POINTS else filtered_df.sample(MAX_PLOT_POINTS, random_state=42)
-        fig_hist = px.histogram(
-            hist_df, x="if_anomaly_score", nbins=80,
-            color="ae_risk_band", color_discrete_map=RISK_COLORS,
-            labels={"if_anomaly_score": "Anomaly Score", "ae_risk_band": "Risk Level"},
-        )
-        fig_hist.update_layout(**PLOTLY_LAYOUT, height=440, barmode="overlay")
-        fig_hist.update_traces(opacity=0.75)
-        st.plotly_chart(fig_hist, use_container_width=True)
+    section_header("Anomaly Score Distribution", "sh_score_dist")
+    # Sample for histogram to avoid sending 2M+ points to Plotly
+    hist_df = filtered_df if len(filtered_df) <= MAX_PLOT_POINTS else filtered_df.sample(MAX_PLOT_POINTS, random_state=42)
+    fig_hist = px.histogram(
+        hist_df, x="if_anomaly_score", nbins=80,
+        color="ae_risk_band", color_discrete_map=RISK_COLORS,
+        labels={"if_anomaly_score": "Anomaly Score", "ae_risk_band": "Risk Level"},
+    )
+    fig_hist.update_layout(**PLOTLY_LAYOUT, height=440, barmode="overlay")
+    fig_hist.update_traces(opacity=0.75)
+    st.plotly_chart(fig_hist, use_container_width=True)
 
     # ── Row 4: Cross-Channel Risk Flags Summary ──
     if CROSS_FLAGS:
@@ -1924,6 +1866,73 @@ if active_page == "Alerts":
     else:
         _filter_bar("al_flt")
         filtered_df = _get_filtered_df()
+
+        # ── Top 10 Riskiest Users in Alerts ──
+        section_header("Top 10 Riskiest Users", "sh_top_users")
+        st.markdown(
+            "<p style='font-family:Inter,sans-serif;font-size:12px;color:#555;margin:0 0 12px 0;'>"
+            "Click a user to open their investigation profile.</p>",
+            unsafe_allow_html=True,
+        )
+        top_users = (
+            filtered_df.groupby("user", observed=True)
+            .agg(
+                max_percentile=("ae_percentile_rank", "max"),
+                critical_count=("ae_risk_band", lambda x: (x == "CRITICAL").sum()),
+                high_count=("ae_risk_band", lambda x: (x == "HIGH").sum()),
+            )
+            .reset_index()
+            .sort_values("max_percentile", ascending=False)
+            .head(10)
+        )
+
+        if top_users.empty:
+            st.info("No users available in the current filter range.")
+        else:
+            for rank, row in enumerate(top_users.itertuples(), start=1):
+                uid = row.user
+                score = row.max_percentile
+                days = int(row.critical_count + row.high_count)
+                if score >= 95:
+                    badge_color = "#ff1744"
+                    badge_label = "CRITICAL"
+                elif score >= 90:
+                    badge_color = "#e84545"
+                    badge_label = "HIGH"
+                elif score >= 80:
+                    badge_color = "#d4a017"
+                    badge_label = "MEDIUM"
+                else:
+                    badge_color = "#3a86a8"
+                    badge_label = "LOW"
+
+                col_rank, col_info, col_btn = st.columns([1, 5, 3])
+                with col_rank:
+                    st.markdown(
+                        f"<div style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                        f"color:#444;font-weight:600;padding-top:4px;text-align:center;'>#{rank}</div>",
+                        unsafe_allow_html=True,
+                    )
+                with col_info:
+                    st.markdown(
+                        f"<div style='padding:2px 0 1px 0;'>"
+                        f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                        f"color:#e0e0e0;font-weight:600;'>{uid}</span>"
+                        f"&nbsp;&nbsp;<span style='background:{badge_color}22;color:{badge_color};font-size:9px;"
+                        f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 5px;"
+                        f"border:1px solid {badge_color}55;'>{badge_label}</span>"
+                        f"<br><span style='font-family:Inter,sans-serif;font-size:10px;"
+                        f"color:#555;line-height:1.5;'>"
+                        f"Percentile {score:.1f} &middot; {days} high-risk day{'s' if days != 1 else ''}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                with col_btn:
+                    if st.button("Investigate →", key=f"al_top_inv_{uid}", use_container_width=True):
+                        st.session_state["inv_user_select"] = uid
+                        st.session_state["_nav_request"] = "Investigation"
+                        st.rerun()
+                st.markdown("<div style='border-bottom:1px solid #111;margin:0;'></div>", unsafe_allow_html=True)
 
         # Alert severity filter within this tab
         alert_cols = st.columns([2, 2, 2, 6])
