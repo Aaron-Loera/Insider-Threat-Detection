@@ -968,9 +968,9 @@ def build_alert_summary(top_contributors_raw) -> str:
 # ──────────────────────────────────────────────────────────────
 
 NAV_PAGES = [
+    "Alerts",
     "Overview",
     "Investigation",
-    "Alerts",
     "Channels",
 ]
 
