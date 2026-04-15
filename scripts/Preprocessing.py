@@ -237,7 +237,7 @@ def combine_partial_aggregations(partial_list: list, merge_cols: list) -> pd.Dat
     return combined.groupby(merge_cols, as_index=False, observed=True, sort=False).sum()
 
 
-def build_unique_count(identity_frames: list, merge_cols: list, value_col: str, output_col: str) -> pd.DataFrame:
+def build_unique_count(identity_frames: list, merge_cols: list, value_col: str, output_col: str, batch_size: int=20) -> pd.DataFrame:
     """
     Computes an exact per-group nunique count from accumulated per-chunk DataFrames.
     
@@ -246,11 +246,16 @@ def build_unique_count(identity_frames: list, merge_cols: list, value_col: str, 
         merge_cols: The groupby key columns (user, pc, day)
         value_col: The column whose distinct values are being counted
         output_col: Name for the resulting count column
+        batch_size: Number of identity frames to concat per batch before deduplication
         
     Returns:
         pd.DataFrame: (merge_cols + output_col) with exact nunique counts
     """
-    combined = pd.concat(identity_frames, ignore_index=True).drop_duplicates()
+    deduped_batches = []
+    for i in range(0, len(identity_frames), batch_size):
+        batch = pd.concat(identity_frames[i:i + batch_size], ignore_index=True).drop_duplicates()
+        deduped_batches.append(batch)
+    combined = pd.concat(deduped_batches, ignore_index=True).drop_duplicates()
     return (
         combined.groupby(merge_cols, observed=True, sort=False)[value_col]
         .nunique()
@@ -404,7 +409,8 @@ def extract_email_features_chunked(
     partial_aggs = []
     identity_frames = []
 
-    for chunk in load_log_in_chunks(filepath, USECOLS_MAP["email"], DTYPE_MAP, chunksize):
+    for i, chunk in enumerate(load_log_in_chunks(filepath, USECOLS_MAP["email"], DTYPE_MAP, chunksize), start=1):
+        print(f"  Email chunk {i}...")
         chunk = normalize_shared_columns(chunk, sort=False)
 
         # Defining off-hour emails
@@ -431,6 +437,7 @@ def extract_email_features_chunked(
         del chunk, partial
 
     # Computes aggregation and unique count operations across all chunks
+    print(f"  Combining {len(partial_aggs)} email chunks...")
     combined = combine_partial_aggregations(partial_aggs, MERGE_COLS)
     unique_recipients = build_unique_count(identity_frames, MERGE_COLS, "to", "unique_recipients")
     features = combined.merge(unique_recipients, on=MERGE_COLS, how="left")
@@ -473,7 +480,8 @@ def extract_http_features_chunked(
     partial_aggs = []
     identity_frames = []
 
-    for chunk in load_log_in_chunks(filepath, USECOLS_MAP["http"], DTYPE_MAP, chunksize):
+    for i, chunk in enumerate(load_log_in_chunks(filepath, USECOLS_MAP["http"], DTYPE_MAP, chunksize), start=1):
+        print(f"  HTTP chunk {i}...")
         chunk = normalize_shared_columns(chunk, sort=False)
 
         # Defining off-hours web activity
@@ -520,7 +528,9 @@ def extract_http_features_chunked(
         del chunk, agg_chunk
 
     # Computes aggregation and unique count operations across all chunks
+    print(f"  Combining {len(partial_aggs)} HTTP chunks...")
     combined = combine_partial_aggregations(partial_aggs, MERGE_COLS)
+    print(f"  Building unique count domains...")
     unique_domains = build_unique_count(identity_frames, MERGE_COLS, "domain", "unique_domains_visited")
     features = combined.merge(unique_domains, on=MERGE_COLS, how="left")
 
@@ -553,18 +563,15 @@ def merge_behavioral_features(feature_tables: list[pd.DataFrame], merge_cols: li
     if not valid_tables:
         raise ValueError("No valid feature tables provided for merging")
 
-    merged_df = valid_tables[0].copy()
-    
-    # Iteratively merging tables
-    for df in valid_tables[1:]:
-        merged_df = merged_df.merge(df, on=merge_cols, how="outer")
-        
+    # N-way concatenation on shared index
+    indexed = [t.set_index(merge_cols) for t in valid_tables]
+    merged_df = pd.concat(indexed, axis=1).reset_index()
+
     # Identifying feature columns, excluding identifiers
     feature_cols = [col for col in merged_df.columns if col not in merge_cols]
-    
+
     # Filling missing feature values with zero
     merged_df[feature_cols] = merged_df[feature_cols].fillna(0).astype("int32")
-    merged_df[feature_cols] = merged_df[feature_cols].astype("int32")
     
     # Sorting dataframe for consistency
     merged_df.sort_values(by=merge_cols, inplace=True)
@@ -614,12 +621,12 @@ def add_pc_features(df: pd.DataFrame, min_history: int=10) -> pd.DataFrame:
         .to_dict()
     )
 
-    df["pc_is_primary"] = (df["pc"] == df["user"].map(primary_pc_map)).astype(int)
+    df["pc_is_primary"] = (df["pc"] == df["user"].map(primary_pc_map).astype(df["pc"].dtype)).astype(int)
 
-    # Tracking the number of distinct PC's previously used
+    # Tracking the number of distinct PCs previously used
+    first_seen = ~df.duplicated(subset=["user", "pc"], keep="first")
     df["distinct_pcs_used_prior"] = (
-        df.groupby(["user"], observed=True, sort=False)["pc"]
-        .transform(lambda s: [len(set(s.iloc[:i])) for i in range(len(s))])
+        first_seen.groupby(df["user"], observed=True).cumsum() - first_seen.astype(int)
     )
 
     # Tracking the number of unique PC's used on a given day
@@ -657,50 +664,60 @@ def build_layer_a(cert_path: str, work_hours: tuple = (9, 17), return_nunique_fr
         If return_nunique_frames is True, returns a (layer_a_df, nunique_frames) tuple.
     """
     # Loading the raw log files from the CERT dataset
+    print("Loading raw CERT logs...")
     raw_logs = load_raw_logs(cert_path)
 
     # Normalizing and validating files
     normalized_logs = {}
 
+    print("Normalizing CERT logs...")
     for name, df in raw_logs.items():
         if isinstance(df, dict) and df.get("chunked"):
-            print(f"{name}.csv will be normalized when loaded per-chunk")
+            print(f"  {name}.csv: deferred (will normalize per-chunk)")
             normalized_logs[name] = df["path"]
         else:
+            print(f"  Normalizing {name}.csv...")
             normalized_logs[name] = normalize_shared_columns(df)
 
     if return_nunique_frames:
+        print("Extracting logon features...")
+        logon_ft = extract_logon_features(normalized_logs["logon"], work_hours)
+        print("Extracting file features...")
         file_features, file_id = extract_file_features(normalized_logs["file"], work_hours, return_identity_frame=True)
+        print("Extracting device (USB) features...")
+        device_ft = extract_device_features(normalized_logs["device"], work_hours)
+        print("Extracting email features (chunked)...")
         email_features, email_id = extract_email_features_chunked(normalized_logs["email"], work_hours, return_identity_frame=True)
+        print("Extracting HTTP features (chunked)...")
         http_features, http_id = extract_http_features_chunked(normalized_logs["http"], work_hours, return_identity_frame=True)
 
-        feature_tables = [
-            extract_logon_features(normalized_logs["logon"], work_hours),
-            file_features,
-            extract_device_features(normalized_logs["device"], work_hours),
-            email_features,
-            http_features,
-        ]
+        feature_tables = [logon_ft, file_features, device_ft, email_features, http_features]
     else:
-        print("Creating feature tables")
-        feature_tables = [
-            extract_logon_features(normalized_logs["logon"], work_hours),
-            extract_file_features(normalized_logs["file"], work_hours),
-            extract_device_features(normalized_logs["device"], work_hours),
-            extract_email_features_chunked(normalized_logs["email"], work_hours),
-            extract_http_features_chunked(normalized_logs["http"], work_hours),
-        ]
+        print("Extracting logon features...")
+        logon_ft = extract_logon_features(normalized_logs["logon"], work_hours)
+        print("Extracting file features...")
+        file_ft = extract_file_features(normalized_logs["file"], work_hours)
+        print("Extracting device (USB) features...")
+        device_ft = extract_device_features(normalized_logs["device"], work_hours)
+        print("Extracting email features (chunked)...")
+        email_ft = extract_email_features_chunked(normalized_logs["email"], work_hours)
+        print("Extracting HTTP features (chunked)...")
+        http_ft = extract_http_features_chunked(normalized_logs["http"], work_hours)
+        feature_tables = [logon_ft, file_ft, device_ft, email_ft, http_ft]
 
     # Merging the feature tables
+    print("Merging behavioral feature tables...")
     behavioral_matrix = merge_behavioral_features(feature_tables)
 
     # Adding pc behavioral features
+    print("Adding PC behavioral features...")
     layer_a_matrix = add_pc_features(behavioral_matrix)
+    print(f"Layer A complete — {len(layer_a_matrix):,} rows, {len(layer_a_matrix.columns)} features.")
 
     if return_nunique_frames:
         nunique_frames = {
-            "unique_files_accessed":  (file_id,  "filename"),
-            "unique_recipients":      (email_id, "to"),
+            "unique_files_accessed": (file_id,  "filename"),
+            "unique_recipients": (email_id, "to"),
             "unique_domains_visited": (http_id,  "domain"),
         }
         return layer_a_matrix, nunique_frames
@@ -734,7 +751,11 @@ def save_dataset(dataset: pd.DataFrame, filename: str, output_dir: str=DEFAULT_O
     return file_path
 
 
-def chronological_split(csv_path: str | None=None, df: pd.DataFrame | None=None, split_ratio: float=0.9) -> tuple[pd.DataFrame, pd.DataFrame]:
+def chronological_split(
+    csv_path: str | None=None,
+    df: pd.DataFrame | None=None,
+    split_ratio: float=0.9
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Loads and creates a chronological split for a UEBA-enhanced dataset.
 
@@ -901,14 +922,8 @@ def collapse_layer(
         if col in df.columns:
             agg_map[col] = "max"
             
+    print("  Aggregating per-PC behavioral features...")
     layer_b_df = df.groupby(by=["user", "day"], as_index=False, observed=True, sort=False).agg(agg_map)
-
-    # Deriving number of unique PCs used
-    pcs_used = (
-        df.groupby(["user", "day"], observed=True, sort=False)["pc"]
-        .nunique()
-        .reset_index(name="pcs_used_count")
-    )
 
     # Defining non-primary PC column
     if "pc_is_primary" in df.columns:
@@ -916,51 +931,36 @@ def collapse_layer(
     else:
         non_primary_mask = pd.Series(0, index=df.index)
 
-    non_primary_rows = (
-        df.assign(non_primary_pc_used=non_primary_mask)
-        .groupby(["user", "day"], observed=True, sort=False)["non_primary_pc_used"]
-        .sum()
-        .reset_index(name="non_primary_pc_used_flag")
-    )
-
     # Extracting counts from different logs
     http_source = df["http_total_requests"] if "http_total_requests" in df.columns else 0
     usb_source = df["usb_insert_count"] if "usb_insert_count" in df.columns else 0
     file_copy_source = df["file_copy_count"] if "file_copy_count" in df.columns else 0
 
     # Deriving cross-channel flags
-    non_primary_http = (
-        df.assign(non_primary_http=non_primary_mask * http_source)
-        .groupby(["user", "day"], observed=True, sort=False)["non_primary_http"]
-        .sum()
-        .reset_index(name="non_primary_pc_http_requests_flag")
+    print("  Computing cross-channel flags...")
+    derived = (
+        df.assign(
+            non_primary_pc_used=non_primary_mask,
+            non_primary_http=non_primary_mask * http_source,
+            non_primary_usb=non_primary_mask * usb_source,
+            non_primary_file_copy=non_primary_mask * file_copy_source,
+        )
+        .groupby(["user", "day"], observed=True, sort=False)
+        .agg(
+            pcs_used_count=("pc", "nunique"),
+            non_primary_pc_used_flag=("non_primary_pc_used", "sum"),
+            non_primary_pc_http_requests_flag=("non_primary_http", "sum"),
+            non_primary_pc_usb_flag=("non_primary_usb", "sum"),
+            non_primary_pc_file_copy_flag=("non_primary_file_copy", "sum"),
+        )
+        .reset_index()
     )
 
-    non_primary_usb = (
-        df.assign(non_primary_usb=non_primary_mask * usb_source)
-        .groupby(["user", "day"], observed=True, sort=False)["non_primary_usb"]
-        .sum()
-        .reset_index(name="non_primary_pc_usb_flag")
-    )
+    layer_b_df = layer_b_df.merge(derived, on=["user", "day"], how="left")
 
-    non_primary_file_copy = (
-        df.assign(non_primary_file_copy=non_primary_mask * file_copy_source)
-        .groupby(["user", "day"], observed=True, sort=False)["non_primary_file_copy"]
-        .sum()
-        .reset_index(name="non_primary_pc_file_copy_flag")
-    )
-    
-    # Merging derived behavioral features
-    layer_b_df = layer_b_df.merge(pcs_used, on=["user", "day"], how="left")
-    layer_b_df = layer_b_df.merge(non_primary_rows, on=["user", "day"], how="left")
-    layer_b_df = layer_b_df.merge(non_primary_http, on=["user", "day"], how="left")
-    layer_b_df = layer_b_df.merge(non_primary_usb, on=["user", "day"], how="left")
-    layer_b_df = layer_b_df.merge(non_primary_file_copy, on=["user", "day"], how="left")
-
-    # Recompute nunique columns as true user-day uniqueness from raw event frames.
-    # Summing per-PC nunique values (the Layer A default) inflates the count when the same
-    # file/recipient/domain appears on multiple PCs for the same user on the same day.
+    # Recompute nunique columns from raw event frames
     if nunique_frames:
+        print("  Recomputing true nunique counts from raw event frames...")
         for col_name, (source_df, value_col) in nunique_frames.items():
             true_nunique = (
                 source_df.groupby(["user", "day"], observed=True, sort=False)[value_col]
@@ -1017,30 +1017,37 @@ def apply_ueba_enhancements(df: pd.DataFrame, feature_cols: list, rolling_window
     df.sort_values(by=["user", "day"], inplace=True)
     df.reset_index(drop=True, inplace=True)
     
-    # Defining per-user causal z-score deviations
-    for col in feature_cols:
-        grouped = df.groupby("user", observed=True, sort=False)[col]
+    # Shifting all feature columns within each user group in one pass
+    print("  Computing per-user causal z-score deviations...")
+    shifted = df.groupby("user", observed=True, sort=False)[feature_cols].shift(1)
+    user_shifted = shifted.groupby(df["user"], observed=True, sort=False)
 
-        # Building baselines from prior observations
-        prior_mean = grouped.transform(lambda x: x.shift(1).expanding(min_periods=1).mean())
-        prior_std = grouped.transform(lambda x: x.shift(1).expanding(min_periods=2).std())
+    # Expanding mean/std across all columns at once
+    prior_mean = user_shifted.expanding(min_periods=1).mean().reset_index(level=0, drop=True)
+    prior_std = (
+        user_shifted.expanding(min_periods=2).std()
+        .reset_index(level=0, drop=True)
+        .replace(0, np.nan)
+    )
 
-        # Avoiding division by zero
-        prior_std.replace(0, np.nan, inplace=True)
+    # Computing bounded z-scores
+    z_scores = ((df[feature_cols] - prior_mean) / prior_std).fillna(0.0)
+    z_scores = z_scores.clip(-10, 10)
+    z_scores.columns = [f"{col}_zscore" for col in feature_cols]
 
-        # Computing z-scores
-        df[f"{col}_zscore"] = ((df[col] - prior_mean) / prior_std).fillna(0.0)
+    # Computing temporal rolling deltas
+    print("  Computing causal rolling mean deltas...")
+    prior_rolling = (
+        user_shifted.rolling(window=rolling_window, min_periods=1).mean()
+        .reset_index(level=0, drop=True)
+    )
+    rolling_deltas = (df[feature_cols] - prior_rolling).fillna(0.0)
+    rolling_deltas.columns = [f"{col}_rolling_delta" for col in feature_cols]
 
-    # Defining causal rolling temporal deltas
-    for col in feature_cols:
-        prior_rolling_mean = (
-            df.groupby("user", observed=True, sort=False)[col]
-            .transform(lambda x: x.shift(1).rolling(window=rolling_window, min_periods=1).mean())
-        )
-        # First observations have no prior window, so the delta defaults to 0.
-        df[f"{col}_rolling_delta"] = (df[col] - prior_rolling_mean).fillna(0.0)
+    df = pd.concat([df, z_scores, rolling_deltas], axis=1)
         
     # Extracting off-hour columns
+    print("  Adding cross-channel risk flags...")
     off_hours_cols = [col for col in feature_cols if col.startswith("off_hours")]
     
     if off_hours_cols:
@@ -1086,10 +1093,12 @@ def build_layer_b(
     Returns:
         pd.DataFrame: A model-ready UEBA dataset at the (user, day) level
     """
+    print("Collapsing Layer A to (user, day) granularity...")
     layer_b_df = collapse_layer(layer_a_df, nunique_frames=nunique_frames)
     feature_cols = get_layer_b_features(layer_b_df)
+    print("Applying UEBA enhancements (z-scores, rolling deltas, risk flags)...")
     layer_b_df = apply_ueba_enhancements(layer_b_df, feature_cols=feature_cols, rolling_window=rolling_window)
-    
+    print(f"Layer B complete — {len(layer_b_df):,} rows, {len(layer_b_df.columns)} features.")
     return layer_b_df
 
 

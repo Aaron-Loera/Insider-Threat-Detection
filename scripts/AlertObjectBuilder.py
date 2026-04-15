@@ -133,16 +133,20 @@ class AlertObjectBuilder:
         return top_contributors
         
         
-    def build_alert_from_row(self, row: pd.Series) -> dict:
+    def build_alert_from_row(self, row: pd.Series, w1: float=0.5, w2: float=0.5) -> dict:
         """
         Builds an alert dictionary for a single sample using both AE and IF signals.
         
         Args:
             row: A row consisting of metadata, reconstruction error data, and IF anomaly score
-            
+            w1: The weight to assign to AE percentile
+            w2: The weight to assign to IF percentile
         Returns:
             dict: A structured alert object
         """
+        if w1 + w2 > 1.0:
+            raise ValueError(f"w1 and 2 must add up to 1.0. Sum is {w1+w2}")
+        
         # Computing AE percentile and risk band
         ae_error = row["total_reconstruction_error"]
         ae_percentile = self.compute_ae_percentile(ae_error)
@@ -153,14 +157,20 @@ class AlertObjectBuilder:
         if_score = row["if_anomaly_score"]
         if_percentile = self.compute_if_percentile(if_score)
         if_risk_band = self.assign_risk_band(if_percentile)
-        
+
+        # Computing composite signal (equal-weight fusion of AE and IF percentile ranks)
+        composite_score = w1 * ae_percentile + w2 * if_percentile
+        composite_risk_band = self.assign_risk_band(composite_score)
+        both_signals_high = ae_risk_band in ("HIGH", "CRITICAL") and if_risk_band in ("HIGH", "CRITICAL")
+
         # Creating explanation statement
         explanation = (
             f"AE deviation at {ae_percentile:.2f}th percentile ({ae_risk_band}); "
             f"IF anomaly at {if_percentile:.2f}th percentile ({if_risk_band}). "
+            f"Composite risk: {composite_risk_band} ({composite_score:.1f}th percentile). "
             f"Top features: " + ", ".join([f"{feat} ({val:.2f})" for feat, val in top_features])
         )
-        
+
         # Creating alert dictionary
         alert = {
             "user": row["user"],
@@ -171,19 +181,24 @@ class AlertObjectBuilder:
             "if_anomaly_score": if_score,
             "if_percentile_rank": if_percentile,
             "if_risk_band": if_risk_band,
+            "composite_score": composite_score,
+            "composite_risk_band": composite_risk_band,
+            "both_signals_high": both_signals_high,
             "explanation": explanation
         }
         
         return alert
         
         
-    def build_alert_df(self, explanation_df: pd.DataFrame) -> pd.DataFrame:
+    def build_alert_df(self, explanation_df: pd.DataFrame, w1: float=0.5, w2: float=0.5) -> pd.DataFrame:
         """
         Generates an alert DataFrame from an aggregated table consisting of reconstruction errors
         and anomaly scores.
         
         Args:
             explanation_df: The enriched DataFrame containing AE reconstruction errors and IF anomaly scores
+            w1: The weight to assign to AE percentile
+            w2: The weight to assign to IF percentile
             
         Returns:
             pd.DataFrame: An alert-ready structured DataFrame
@@ -191,7 +206,7 @@ class AlertObjectBuilder:
         alerts = []
         
         for _, row in explanation_df.iterrows():
-            alert = self.build_alert_from_row(row)
+            alert = self.build_alert_from_row(row, w1, w2)
             alerts.append(alert)
             
         return pd.DataFrame(alerts)
