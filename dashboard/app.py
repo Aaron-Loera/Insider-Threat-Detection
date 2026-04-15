@@ -118,7 +118,7 @@ st.markdown("""
     /* ── Sidebar section labels ── */
     .sidebar-section-label {
         font-family: 'JetBrains Mono', monospace;
-        font-size: 9px;
+        font-size: 11px;
         color: #444;
         text-transform: uppercase;
         letter-spacing: 2px;
@@ -144,7 +144,7 @@ st.markdown("""
     }
     .page-subtitle {
         font-family: 'Inter', sans-serif;
-        font-size: 13px;
+        font-size: 15px;
         color: #555;
         margin: 3px 0 0 0 !important;
         padding: 0 !important;
@@ -223,7 +223,7 @@ st.markdown("""
     }
     .alert-notice-title {
         font-family: 'JetBrains Mono', monospace;
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 700;
         letter-spacing: 2.5px;
         text-transform: uppercase;
@@ -240,7 +240,7 @@ st.markdown("""
     }
     .alert-notice-count {
         font-family: 'JetBrains Mono', monospace;
-        font-size: 11px;
+        font-size: 12px;
         color: #999;
         letter-spacing: 1px;
     }
@@ -255,7 +255,7 @@ st.markdown("""
         border: 1px solid #3a0000;
         padding: 6px 12px;
         font-family: 'JetBrains Mono', monospace;
-        font-size: 11px;
+        font-size: 12px;
         color: #cccccc;
         display: flex;
         align-items: center;
@@ -263,7 +263,7 @@ st.markdown("""
     }
     .alert-notice-row-item .u-id  { color: #ffffff; font-weight: 600; }
     .alert-notice-row-item .u-pct { color: #e84545; }
-    .alert-notice-row-item .u-days { color: #888; font-size: 10px; }
+    .alert-notice-row-item .u-days { color: #888; font-size: 11px; }
 
     /* ── KPI Cards ── */
     .kpi-scroll-wrapper {
@@ -314,7 +314,7 @@ st.markdown("""
         box-sizing: border-box;
     }
     .kpi-card h3 {
-        margin: 0; font-size: 11px; color: #666666; font-weight: 500;
+        margin: 0; font-size: 12px; color: #666666; font-weight: 500;
         text-transform: uppercase; letter-spacing: 1.5px;
         font-family: 'JetBrains Mono', monospace;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -326,7 +326,7 @@ st.markdown("""
         font-size: clamp(16px, 2.2vw, 28px);
     }
     .kpi-card p {
-        margin: 6px 0 0 0; font-size: 11px; color: #555555;
+        margin: 6px 0 0 0; font-size: 12px; color: #555555;
         font-family: 'JetBrains Mono', monospace;
         text-transform: uppercase; letter-spacing: 0.5px;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -334,10 +334,10 @@ st.markdown("""
 
     /* ── Section Headers ── */
     .section-header {
-        font-size: 13px;
+        font-size: 16px;
         font-weight: 600;
         color: #999999;
-        margin: 32px 0 16px 0;
+        margin: 32px 0 8px 0;
         padding-bottom: 10px;
         border-bottom: 1px solid #1a1a1a;
         text-transform: uppercase;
@@ -352,14 +352,14 @@ st.markdown("""
 
     /* ── Metric tweaks ── */
     [data-testid="stMetricValue"] {
-        font-size: 24px;
+        font-size: 26px;
         font-family: 'JetBrains Mono', monospace !important;
         font-weight: 600;
     }
     [data-testid="stMetricLabel"] {
         text-transform: uppercase;
         letter-spacing: 1px;
-        font-size: 11px !important;
+        font-size: 12px !important;
         font-family: 'JetBrains Mono', monospace !important;
         color: #666666 !important;
     }
@@ -443,17 +443,17 @@ st.markdown("""
     /* ── Responsive: Large screens (>1400px) ── */
     @media (min-width: 1401px) {
         .kpi-card h1 { font-size: 28px; }
-        .kpi-card h3 { font-size: 11px; }
-        .kpi-card p  { font-size: 11px; }
+        .kpi-card h3 { font-size: 12px; }
+        .kpi-card p  { font-size: 12px; }
     }
 
     /* ── Responsive: Medium screens (1024–1400px) ── */
     @media (max-width: 1400px) {
         .kpi-card { padding: 16px 18px; min-height: 110px; }
         .kpi-card h1 { font-size: 22px; }
-        .kpi-card h3 { font-size: 10px; letter-spacing: 1px; }
-        .kpi-card p  { font-size: 10px; }
-        .section-header { font-size: 12px; letter-spacing: 1.5px; }
+        .kpi-card h3 { font-size: 11px; letter-spacing: 1px; }
+        .kpi-card p  { font-size: 11px; }
+        .section-header { font-size: 14px; letter-spacing: 1.5px; }
     }
 
     /* ── Responsive: Small screens (768–1023px) ── */
@@ -461,11 +461,11 @@ st.markdown("""
         .block-container { padding-left: 1rem; padding-right: 1rem; }
         .kpi-card { padding: 14px 14px; min-height: 100px; }
         .kpi-card h1 { font-size: 20px; }
-        .kpi-card h3 { font-size: 9px; letter-spacing: 0.8px; }
-        .kpi-card p  { font-size: 9px; }
-        .section-header { font-size: 11px; margin: 20px 0 10px 0; }
-        [data-testid="stMetricValue"] { font-size: 20px; }
-        [data-testid="stMetricLabel"] { font-size: 10px !important; }
+        .kpi-card h3 { font-size: 10px; letter-spacing: 0.8px; }
+        .kpi-card p  { font-size: 10px; }
+        .section-header { font-size: 13px; margin: 20px 0 10px 0; }
+        [data-testid="stMetricValue"] { font-size: 22px; }
+        [data-testid="stMetricLabel"] { font-size: 11px !important; }
     }
 
     /* ── Responsive: Extra small (<768px) ── */
@@ -473,11 +473,11 @@ st.markdown("""
         .block-container { padding-left: 0.5rem; padding-right: 0.5rem; }
         .kpi-card { padding: 12px 12px; min-height: 90px; border-left-width: 2px; }
         .kpi-card h1 { font-size: 18px; }
-        .kpi-card h3 { font-size: 8px; }
-        .kpi-card p  { font-size: 8px; }
-        .section-header { font-size: 10px; letter-spacing: 1px; }
-        [data-testid="stMetricValue"] { font-size: 18px; }
-        [data-testid="stMetricLabel"] { font-size: 9px !important; }
+        .kpi-card h3 { font-size: 9px; }
+        .kpi-card p  { font-size: 9px; }
+        .section-header { font-size: 12px; letter-spacing: 1px; }
+        [data-testid="stMetricValue"] { font-size: 20px; }
+        [data-testid="stMetricLabel"] { font-size: 10px !important; }
     }
 
     /* ── Info popover button ── */
@@ -1302,15 +1302,17 @@ _SECTION_INFO = {
 
 
 def section_header(title: str, key: str) -> None:
-    """Render a section header with a right-aligned ⓘ info popover."""
-    c_title, c_info = st.columns([12, 1])
-    c_title.markdown(f"<div class='section-header'>{title}</div>", unsafe_allow_html=True)
-    with c_info:
-        st.markdown("<div style='padding-top:28px;'>", unsafe_allow_html=True)
-        with st.popover("ⓘ", use_container_width=True):
-            body = _SECTION_INFO.get(title, "No description available.")
-            st.markdown(body)
-        st.markdown("</div>", unsafe_allow_html=True)
+    """Render a section header with an optional ⓘ info popover."""
+    info = _SECTION_INFO.get(title, "")
+    if info:
+        _hdr_left, _hdr_right = st.columns([9, 1], vertical_alignment="bottom")
+        with _hdr_left:
+            st.markdown(f"<div class='section-header'>{title}</div>", unsafe_allow_html=True)
+        with _hdr_right:
+            with st.popover("ⓘ", use_container_width=True):
+                st.markdown(info, unsafe_allow_html=True)
+    else:
+        st.markdown(f"<div class='section-header'>{title}</div>", unsafe_allow_html=True)
 
 
 def _filter_bar(key: str):
@@ -1510,7 +1512,7 @@ if active_page == "Overview":
     with col_left2:
         section_header("Top 10 Riskiest Users", "sh_top_users")
         st.markdown(
-            "<p style='font-family:Inter,sans-serif;font-size:12px;color:#555;margin:0 0 12px 0;'>"
+            "<p style='font-family:Inter,sans-serif;font-size:13px;color:#555;margin:0 0 12px 0;'>"
             "Click a user to open their investigation profile.</p>",
             unsafe_allow_html=True,
         )
@@ -1536,19 +1538,19 @@ if active_page == "Overview":
             col_rank, col_info, col_btn = st.columns([1, 5, 3])
             with col_rank:
                 st.markdown(
-                    f"<div style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:13px;"
                     f"color:#444;font-weight:600;padding-top:4px;text-align:center;'>#{rank}</div>",
                     unsafe_allow_html=True,
                 )
             with col_info:
                 st.markdown(
                     f"<div style='padding:2px 0 1px 0;'>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:13px;"
                     f"color:#e0e0e0;font-weight:600;'>{uid}</span>"
-                    f"&nbsp;&nbsp;<span style='background:{badge_color}22;color:{badge_color};font-size:9px;"
+                    f"&nbsp;&nbsp;<span style='background:{badge_color}22;color:{badge_color};font-size:10px;"
                     f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 5px;"
                     f"border:1px solid {badge_color}55;'>{badge_label}</span>"
-                    f"<br><span style='font-family:Inter,sans-serif;font-size:10px;"
+                    f"<br><span style='font-family:Inter,sans-serif;font-size:11px;"
                     f"color:#555;line-height:1.5;'>"
                     f"Percentile {score:.1f} &middot; {days} high-risk day{'s' if days != 1 else ''}</span>"
                     f"</div>",
@@ -1590,12 +1592,12 @@ if active_page == "Overview":
                 _cards_html += (
                     f"<div style='flex:1;background:#0a0a0a;border:1px solid #1a1a1a;"
                     f"border-left:3px solid {color};padding:14px 18px;min-width:160px;'>"
-                    f"<div style='font-family:JetBrains Mono,monospace;font-size:10px;color:#555;"
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;color:#555;"
                     f"text-transform:uppercase;letter-spacing:1.5px;'>{label}</div>"
                     f"<div style='display:flex;align-items:baseline;gap:8px;margin-top:8px;'>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:22px;"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:24px;"
                     f"color:{color};font-weight:600;'>{count:,}</span>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
                     f"color:#444;'>{pct:.1f}%</span>"
                     f"</div></div>"
                 )
@@ -1774,15 +1776,15 @@ if active_page == "Investigation":
                 _ucards += (
                     f"<div style='flex:1;background:#0a0a0a;border:1px solid #1a1a1a;"
                     f"border-left:3px solid {color};padding:14px 18px;min-width:160px;'>"
-                    f"<div style='font-family:JetBrains Mono,monospace;font-size:10px;color:#555;"
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;color:#555;"
                     f"text-transform:uppercase;letter-spacing:1.5px;'>{label}</div>"
                     f"<div style='display:flex;align-items:baseline;gap:8px;margin-top:8px;'>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:20px;"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:22px;"
                     f"color:{color};font-weight:600;'>{triggered}</span>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
                     f"color:#444;'>/ {_total} days &middot; {pct:.0f}%</span>"
                     f"</div>"
-                    f"<div style='font-family:Inter,sans-serif;font-size:10px;color:#333;"
+                    f"<div style='font-family:Inter,sans-serif;font-size:11px;color:#333;"
                     f"margin-top:6px;'>{desc}</div>"
                     f"</div>"
                 )
@@ -1987,7 +1989,7 @@ if active_page == "Alerts":
                 with c_risk:
                     st.markdown(
                         f"<div style='padding-top:5px;'>"
-                        f"<span style='background:{risk_color}22;color:{risk_color};font-size:9px;"
+                        f"<span style='background:{risk_color}22;color:{risk_color};font-size:10px;"
                         f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:2px 6px;"
                         f"border:1px solid {risk_color}55;display:inline-block;'>{risk}</span>"
                         f"</div>",
@@ -1997,9 +1999,9 @@ if active_page == "Alerts":
                 with c_info:
                     st.markdown(
                         f"<div style='padding:2px 0 4px 0;'>"
-                        f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                        f"<span style='font-family:JetBrains Mono,monospace;font-size:13px;"
                         f"color:#e0e0e0;font-weight:600;'>{user}</span>"
-                        f"<br><span style='font-family:Inter,sans-serif;font-size:11px;"
+                        f"<br><span style='font-family:Inter,sans-serif;font-size:12px;"
                         f"color:#666;line-height:1.5;'>{summary}</span>"
                         f"</div>",
                         unsafe_allow_html=True,
@@ -2007,14 +2009,14 @@ if active_page == "Alerts":
 
                 with c_day:
                     st.markdown(
-                        f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                        f"<div style='font-family:JetBrains Mono,monospace;font-size:12px;"
                         f"color:#888;padding-top:5px;'>{day_str}</div>",
                         unsafe_allow_html=True,
                     )
 
                 with c_pctl:
                     st.markdown(
-                        f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                        f"<div style='font-family:JetBrains Mono,monospace;font-size:12px;"
                         f"color:{risk_color};padding-top:5px;'>P{pctl:.1f}</div>",
                         unsafe_allow_html=True,
                     )
@@ -2130,21 +2132,3 @@ if active_page == "Channels":
 # ──────────────────────────────────────────────────────────────
 
 st.markdown("---")
-with st.expander("DATA GAPS & RECOMMENDED ENHANCEMENTS"):
-    st.markdown("""
-    The following features appear on industry UEBA dashboards but are **not yet available** in our current CERT dataset.  
-    If we want to bring these in, the preprocessing pipeline would need to be updated:
-
-    | Feature | Why It Matters | Status |
-    |---------|---------------|--------|
-    | **User Department / Role** | Contextualize risk — a DBA accessing databases is normal, a marketing user is not | Not in dataset |
-    | **Incident Response Status** | Track alert lifecycle (New → Investigating → Resolved) | No workflow layer |
-    | **IP / Geo-location** | Detect impossible travel or unusual network source | Not in CERT r6.2 |
-    | **Data Volume Transferred** | Flag large exfiltrations (MB/GB moved) | Not in current features |
-    | **Application Usage** | Which apps a user opened (especially sensitive ones) | Not in CERT r6.2 |
-    | **Peer Group Comparison** | Compare user to their department/role peers | No department info |
-    | **Historical Baseline Trends** | 30/60/90 day rolling baselines with drift detection | Partially available via rolling deltas |
-    | **Alert Acknowledge / Dismiss** | Analyst feedback loop to reduce false positives | No persistence layer |
-    
-    *Bring these up with the team to decide which are feasible for our scope.*
-    """)
