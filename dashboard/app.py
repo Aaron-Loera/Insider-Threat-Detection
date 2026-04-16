@@ -1017,6 +1017,14 @@ NAV_PAGES = [
     "Channels",
 ]
 
+# Live simulation state is shared across all pages.
+if "live_mode" not in st.session_state:
+    st.session_state.live_mode = False
+if "live_proc" not in st.session_state:
+    st.session_state.live_proc = None  # subprocess.Popen or None
+if "live_paused" not in st.session_state:
+    st.session_state.live_paused = False
+
 # Consume any programmatic navigation request NOW — before any widget is
 # instantiated — so we can write session_state.nav_page freely.
 if st.session_state.get("_nav_request"):
@@ -1058,6 +1066,50 @@ with st.sidebar:
     )
 
     st.markdown("<div style='border-top:1px solid #1a1a1a; margin:8px 0 0 0;'></div>", unsafe_allow_html=True)
+
+    # ── Global live status (visible on every page) ──
+    _live_rows_received = 0
+    _stream_done = False
+    _live_session_active = bool(st.session_state.live_mode or st.session_state.live_paused)
+    if _live_session_active and os.path.exists(LIVE_OUTPUT):
+        with open(LIVE_OUTPUT, "r", encoding="utf-8") as _fh:
+            for _line in _fh:
+                _line = _line.strip()
+                if not _line:
+                    continue
+                try:
+                    _obj = json.loads(_line)
+                except json.JSONDecodeError:
+                    continue
+                if _obj.get("_eos"):
+                    _stream_done = True
+                else:
+                    _live_rows_received += 1
+
+    _proc = st.session_state.live_proc
+    _proc_running = _proc is not None and _proc.poll() is None
+    if not _live_session_active:
+        _status_color = "#666"
+        _status_label = "IDLE"
+    elif st.session_state.live_paused:
+        _status_color = "#f5a623"
+        _status_label = "PAUSED"
+    elif _proc_running:
+        _status_color = "#3c9"
+        _status_label = "RUNNING"
+    else:
+        _status_color = "#e84545"
+        _status_label = "COMPLETE" if _stream_done else "STOPPED"
+
+    st.markdown(
+        f"<div style='margin:12px 0 6px 0;'>"
+        f"<span style='font-family:JetBrains Mono,monospace; font-size:11px; "
+        f"color:{_status_color}; letter-spacing:1.5px;'>● {_status_label}</span>"
+        f"<span style='font-family:JetBrains Mono,monospace; font-size:10px; "
+        f"color:#555; margin-left:10px;'>{_live_rows_received:,} rows received</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
     st.markdown("<div style='border-top:1px solid #1a1a1a; margin:16px 0;'></div>", unsafe_allow_html=True)
     st.markdown(
@@ -1816,14 +1868,6 @@ if active_page == "Investigation":
 # PAGE: Alerts
 # ══════════════════════════════════════════════════════════════
 
-# ── Initialise live-mode session state ────────────────────────
-if "live_mode" not in st.session_state:
-    st.session_state.live_mode = False
-if "live_proc" not in st.session_state:
-    st.session_state.live_proc = None  # subprocess.Popen or None
-if "live_paused" not in st.session_state:
-    st.session_state.live_paused = False
-
 if active_page == "Alerts":
     st.markdown(
         "<div class='page-header-block'>"
@@ -2184,6 +2228,15 @@ if active_page == "Channels":
         )
         fig_corr.update_layout(**PLOTLY_LAYOUT, height=500)
         st.plotly_chart(fig_corr, use_container_width=True)
+
+
+# Keep live row counter and status fresh while browsing non-Alerts pages.
+if active_page != "Alerts" and st.session_state.live_mode:
+    _proc = st.session_state.live_proc
+    _proc_running = _proc is not None and _proc.poll() is None
+    if _proc_running and not st.session_state.live_paused:
+        time.sleep(1)
+        st.rerun()
 
 
 # ──────────────────────────────────────────────────────────────
