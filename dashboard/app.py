@@ -11,6 +11,14 @@ import subprocess
 import sys
 import time
 import ast as _ast
+import hmac
+import hashlib
+
+try:
+    import pyrebase
+    _PYREBASE_AVAILABLE = True
+except ImportError:
+    _PYREBASE_AVAILABLE = False
 
 # ──────────────────────────────────────────────────────────────
 # Page Config & Custom CSS
@@ -73,6 +81,51 @@ st.markdown("""
     section[data-testid="stSidebar"] > div > div {
         padding-top: 0 !important;
         margin-top: 0 !important;
+    }
+    /* Give sidebar content enough bottom padding so nothing hides behind the fixed panel */
+    [data-testid="stSidebarUserContent"] {
+        padding-bottom: 120px !important;
+    }
+    /* Fixed sign-out panel at sidebar bottom */
+    .signout-panel {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: var(--sidebar-width, 280px);
+        background: #0a0a0a;
+        border-top: 1px solid #1a1a1a;
+        padding: 14px 16px;
+        z-index: 999;
+    }
+    .signout-panel .so-email {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 9px;
+        color: #555;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        word-break: break-all;
+        margin: 0 0 8px 0;
+    }
+    .signout-panel .so-btn {
+        display: block;
+        width: 100%;
+        background: #0e0e0e;
+        border: 1px solid #2a2a2a;
+        color: #888;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        text-decoration: none;
+        text-align: center;
+        padding: 12px 0;
+        transition: border-color 0.15s, color 0.15s;
+    }
+    .signout-panel .so-btn:hover {
+        border-color: #e84545;
+        color: #e84545;
+        background: #1a0000;
     }
     /* Logo branding block: negative margin pulls it past any remaining offset */
     .sidebar-branding {
@@ -518,6 +571,319 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+
+# ──────────────────────────────────────────────────────────────
+# Firebase Authentication
+# ──────────────────────────────────────────────────────────────
+
+def _make_auth_token(email: str) -> str:
+    secret = st.secrets["firebase"]["apiKey"].encode()
+    return hmac.new(secret, email.lower().encode(), hashlib.sha256).hexdigest()
+
+def _set_auth_cookie(email: str):
+    token = _make_auth_token(email)
+    components.html(
+        f"""<script>
+        document.cookie = "auth_email={email}; path=/; max-age=86400; SameSite=Strict";
+        document.cookie = "auth_token={token}; path=/; max-age=86400; SameSite=Strict";
+        </script>""",
+        height=0,
+    )
+
+def _clear_auth_cookie():
+    components.html(
+        """<script>
+        document.cookie = "auth_email=; path=/; max-age=0";
+        document.cookie = "auth_token=; path=/; max-age=0";
+        </script>""",
+        height=0,
+    )
+
+
+def _get_firebase_auth():
+    """Return a Pyrebase Auth object initialised from st.secrets."""
+    if not _PYREBASE_AVAILABLE:
+        st.error(
+            "**Missing dependency:** `pyrebase4` is required for authentication. "
+            "Run `pip install pyrebase4` then restart the app."
+        )
+        st.stop()
+    firebase_cfg = st.secrets.get("firebase", None)
+    if firebase_cfg is None:
+        st.error(
+            "**Firebase config missing.** Add a `[firebase]` section to "
+            "`.streamlit/secrets.toml`. See the dashboard README for setup instructions."
+        )
+        st.stop()
+    app = pyrebase.initialize_app(dict(firebase_cfg))
+    return app.auth()
+
+
+def _render_login():
+    """Render a full-page login form. Authenticates via Firebase Email/Password."""
+    st.markdown("""
+    <style>
+    /* ── Hide sidebar entirely on the login page ── */
+    [data-testid="stSidebar"],
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stExpandSidebarButton"] { display: none !important; }
+
+    /* ── Full-bleed black background ── */
+    html, body, [data-testid="stAppViewContainer"],
+    [data-testid="stMain"], .main {
+        background-color: #000000 !important;
+    }
+    /* Vertically + horizontally centre the login card */
+    [data-testid="stMain"] {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        min-height: 100vh !important;
+    }
+    .block-container {
+        padding: 24px 40px 36px 40px !important;
+        max-width: 460px !important;
+        width: 100% !important;
+        margin: 0 auto !important;
+        flex: none !important;
+        background: #0a0a0a;
+        border: 1px solid #1a1a1a;
+        border-top: 2px solid #e84545;
+    }
+
+    /* ── Input labels ── */
+    .block-container [data-testid="stTextInput"] label p {
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 10px !important;
+        font-weight: 600 !important;
+        letter-spacing: 2px !important;
+        text-transform: uppercase !important;
+        color: #555 !important;
+    }
+
+    /* ── Input fields ── */
+    .block-container [data-testid="stTextInput"] input {
+        background-color: #000000 !important;
+        border: 1px solid #2a2a2a !important;
+        border-radius: 0 !important;
+        color: #ffffff !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 13px !important;
+        padding: 10px 14px !important;
+        caret-color: #e84545 !important;
+        transition: border-color 0.15s ease !important;
+    }
+    .block-container [data-testid="stTextInput"] input:focus {
+        border-color: #e84545 !important;
+        box-shadow: none !important;
+        outline: none !important;
+    }
+    .block-container [data-testid="stTextInput"] input::placeholder {
+        color: #333 !important;
+    }
+    /* Hide "Press Enter to apply" helper on login inputs */
+    .block-container [data-testid="InputInstructions"] {
+        display: none !important;
+    }
+
+    /* ── Sign-in button ── */
+    div[data-testid="stColumn"]:nth-child(2) [data-testid="stButton"] button {
+        background-color: #e84545 !important;
+        border: none !important;
+        border-radius: 0 !important;
+        color: #ffffff !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 11px !important;
+        font-weight: 700 !important;
+        letter-spacing: 3px !important;
+        padding: 12px 0 !important;
+        width: 100% !important;
+        transition: background-color 0.15s ease !important;
+    }
+    .block-container [data-testid="stButton"] button:hover {
+        background-color: #c73333 !important;
+    }
+
+    /* ── Error alert ── */
+    .block-container [data-testid="stNotificationContentError"],
+    .block-container .stAlert {
+        background-color: #1a0000 !important;
+        border: 1px solid #e84545 !important;
+        border-radius: 0 !important;
+        color: #ee8888 !important;
+        font-size: 12px !important;
+    }
+
+    /* ── Logo heading ── */
+    .login-logo-row {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 22px;
+    }
+    .login-logo-dsk {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 28px;
+        font-weight: 700;
+        letter-spacing: 6px;
+        color: #ffffff;
+        display: block;
+        line-height: 1;
+    }
+    .login-logo-sub {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 8px;
+        letter-spacing: 2px;
+        color: #444;
+        text-transform: uppercase;
+        margin-top: 5px;
+        display: block;
+    }
+    .login-divider {
+        border: none;
+        border-top: 1px solid #1a1a1a;
+        margin: 0 0 22px 0;
+    }
+    .login-heading {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        color: #444;
+        margin: 0 0 20px 0;
+    }
+    .login-footer {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 8px;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        color: #2a2a2a;
+        text-align: center;
+        margin-top: 24px;
+    }
+
+    /* ── Responsive: phones / small screens ── */
+    @media (max-width: 640px) {
+        .block-container {
+            max-width: 100% !important;
+            padding: 24px 18px 22px 18px !important;
+        }
+        .login-logo-row svg { width: 36px; height: 36px; }
+        .login-logo-dsk { font-size: 22px; letter-spacing: 3px; }
+        .login-logo-sub { font-size: 7px; letter-spacing: 1.5px; }
+        .login-heading  { font-size: 8px; letter-spacing: 2px; margin-bottom: 14px; }
+        .login-divider  { margin: 16px 0 18px 0; }
+        .login-footer   { font-size: 7px; margin-top: 18px; }
+        .block-container [data-testid="stTextInput"] input {
+            font-size: 12px !important;
+            padding: 9px 12px !important;
+        }
+        .block-container [data-testid="stButton"] button {
+            font-size: 10px !important;
+            padding: 10px 0 !important;
+        }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown(
+        "<div class='login-logo-row'>"
+        "<svg width='48' height='48' viewBox='0 0 100 100' fill='none' xmlns='http://www.w3.org/2000/svg' style='flex-shrink:0;'>"
+        "<path d='M25 85 L25 40 L15 15 L30 30 L50 25 L70 30 L85 15 L75 40 L75 85 Z' "
+        "fill='#e84545' opacity='0.9'/>"
+        "<circle cx='38' cy='50' r='5' fill='#000'/>"
+        "<circle cx='62' cy='50' r='5' fill='#000'/>"
+        "<path d='M45 60 Q50 65 55 60' stroke='#000' stroke-width='2' fill='none'/>"
+        "<line x1='20' y1='55' x2='38' y2='52' stroke='#000' stroke-width='1.5'/>"
+        "<line x1='20' y1='60' x2='38' y2='58' stroke='#000' stroke-width='1.5'/>"
+        "<line x1='62' y1='52' x2='80' y2='55' stroke='#000' stroke-width='1.5'/>"
+        "<line x1='62' y1='58' x2='80' y2='60' stroke='#000' stroke-width='1.5'/>"
+        "</svg>"
+        "<div>"
+        "<span class='login-logo-dsk'>DSK</span>"
+        "<span class='login-logo-sub'>Data Structure Kittens</span>"
+        "</div>"
+        "</div>"
+        "<hr class='login-divider'>"
+        "<p class='login-heading'>Analyst Portal &mdash; Sign In</p>",
+        unsafe_allow_html=True,
+    )
+
+    email = st.text_input(
+        "Email address",
+        placeholder="analyst@organisation.com",
+        key="login_email",
+    )
+    password = st.text_input(
+        "Password",
+        type="password",
+        placeholder="••••••••",
+        key="login_password",
+    )
+
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+    if st.session_state.get("_login_error"):
+        st.error(st.session_state["_login_error"])
+
+    if st.button("SIGN IN", use_container_width=True, type="primary"):
+        if not email or not password:
+            st.session_state["_login_error"] = "Email and password are required."
+            st.rerun()
+        else:
+            try:
+                auth = _get_firebase_auth()
+                user = auth.sign_in_with_email_and_password(email, password)
+                st.session_state["authenticated"] = True
+                st.session_state["auth_user_email"] = user.get("email", email)
+                st.session_state["auth_id_token"] = user.get("idToken", "")
+                st.session_state["_set_cookie"] = True
+                st.session_state.pop("_login_error", None)
+                st.rerun()
+            except Exception as exc:
+                msg = str(exc)
+                if any(k in msg for k in ("INVALID_PASSWORD", "EMAIL_NOT_FOUND", "INVALID_LOGIN_CREDENTIALS")):
+                    st.session_state["_login_error"] = "Invalid email or password."
+                elif "TOO_MANY_ATTEMPTS_TRY_LATER" in msg:
+                    st.session_state["_login_error"] = "Too many failed attempts. Try again later."
+                elif "USER_DISABLED" in msg:
+                    st.session_state["_login_error"] = "This account has been disabled."
+                else:
+                    st.session_state["_login_error"] = "Sign-in failed. Please check your credentials."
+                st.rerun()
+
+    st.markdown(
+        "<p class='login-footer'>UEBA Insider Threat Detection &mdash; Senior Design Project &middot; 2026</p>",
+        unsafe_allow_html=True,
+    )
+
+
+# ── Handle logout via query param (set by the fixed sidebar button) ──
+_is_logout = st.query_params.get("logout") == "true"
+if _is_logout:
+    st.session_state.clear()
+    st.query_params.clear()
+    _clear_auth_cookie()
+
+# ── Restore session from auth cookie (survives page refresh) ──
+if not _is_logout and not st.session_state.get("authenticated", False):
+    _cookies = st.context.cookies
+    _c_email = _cookies.get("auth_email", "")
+    _c_token = _cookies.get("auth_token", "")
+    if _c_email and _c_token and hmac.compare_digest(_c_token, _make_auth_token(_c_email)):
+        st.session_state["authenticated"] = True
+        st.session_state["auth_user_email"] = _c_email
+
+# ── Auth gate — show login and stop until the user has signed in ──
+if not st.session_state.get("authenticated", False):
+    _render_login()
+    st.stop()
+
+# ── Set auth cookie after first successful login ──
+if st.session_state.pop("_set_cookie", False):
+    _set_auth_cookie(st.session_state.get("auth_user_email", ""))
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1056,13 +1422,17 @@ with st.sidebar:
         key="nav_page",
     )
 
-    st.markdown("<div style='border-top:1px solid #1a1a1a; margin:8px 0 0 0;'></div>", unsafe_allow_html=True)
-
-    st.markdown("<div style='border-top:1px solid #1a1a1a; margin:16px 0;'></div>", unsafe_allow_html=True)
+    # ── Signed-in user + logout (fixed to bottom of sidebar) ──
+    _signed_in_email = st.session_state.get("auth_user_email", "")
+    _email_html = (
+        f"<p class='so-email'>{_signed_in_email}</p>"
+        if _signed_in_email else ""
+    )
     st.markdown(
-        "<div style='font-family:JetBrains Mono,monospace; font-size:9px; color:#333; "
-        "text-transform:uppercase; letter-spacing:1.5px; line-height:1.8;'>"
-        "DSK &mdash; Data Structure Kittens<br>Senior Design Project &middot; 2026</div>",
+        f"<div class='signout-panel'>"
+        f"{_email_html}"
+        f"<a class='so-btn' href='?logout=true' target='_self'>SIGN OUT</a>"
+        f"</div>",
         unsafe_allow_html=True,
     )
 
