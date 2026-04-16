@@ -37,7 +37,7 @@
 
 
 - Autoencoder Model 4 (encoders\encoder_model_4):
-    * This model was trained on "ueba_dataset_3b"
+    * This model was trained on "ueba_dataset_4b"
         - A 90/10 chronological split is applied to the UEBA dataset (i.e., train_df, test_df)
         - Insider rows were removed from the `train_df` (i.e., train_normal, train_insider)
         - A 85/15 chronological split is applied to `train_normal` to create training and validation sets (i.e., train_normal_fit, train_normal_val)
@@ -53,12 +53,12 @@
         - Epochs: 100
         - Batch Size: 256
     * Loss (Best Epoch):
-        - Training Loss: 29.94%
-        - Validation Loss: 19.09%
+        - Training Loss: 27.96%
+        - Validation Loss: 18.30%
 
 
-- Autoencoder Model 4a (encoders\encoder_model_4a):
-    * This model was trained on "ueba_dataset_3b"
+- Autoencoder Model 5 (encoders\encoder_model_5):
+    * This model was trained on "ueba_dataset_5b"
         - A 90/10 chronological split is applied to the UEBA dataset (i.e., train_df, test_df)
         - Insider rows were removed from the `train_df` (i.e., train_normal, train_insider)
         - A 85/15 chronological split is applied to `train_normal` to create training and validation sets (i.e., train_normal_fit, train_normal_val)
@@ -74,47 +74,5 @@
         - Epochs: 100
         - Batch Size: 256
     * Loss (Best Epoch):
-        - Training Loss: 29.59%
-        - Validation Loss: 20.23%
-
-
-- Autoencoder Model 4b (encoders\encoder_model_4b):
-    * This model was trained on "ueba_dataset_3b"
-        - A 90/10 chronological split is applied to the UEBA dataset (i.e., train_df, test_df)
-        - Insider rows were removed from the `train_df` (i.e., train_normal, train_insider)
-        - A 85/15 chronological split is applied to `train_normal` to create training and validation sets (i.e., train_normal_fit, train_normal_val)
-    * Model Architecture:
-        - Hidden Layers (per side): 2
-        - Dropout: dropout layers are introduced to each hidden layer on the encoder side (ratio=0.3)
-        - Activation Function: for the latent space layer, activation is switched from ReLU to Linear
-        - Early Stopping: early stopping is implemented with a patient of 10
-    * Hyperparameters:
-        - Learning Rate: 0.0005
-        - Latent Dimension: 16
-        - Hidden Dimensions: 64 and 32
-        - Epochs: 100
-        - Batch Size: 256
-    * Loss (Best Epoch):
-        - Training Loss: 32.33%
-        - Validation Loss: 22.06%
-
-
-- Autoencoder Model 4c (encoders\encoder_model_4c):
-    * This model was trained on "ueba_dataset_3b"
-        - A 90/10 chronological split is applied to the UEBA dataset (i.e., train_df, test_df)
-        - Insider rows were removed from the `train_df` (i.e., train_normal, train_insider)
-        - A 85/15 chronological split is applied to `train_normal` to create training and validation sets (i.e., train_normal_fit, train_normal_val)
-    * Model Architecture:
-        - Hidden Layers (per side): 2
-        - Dropout: dropout layers were removed
-        - Activation Function: for the latent space layer, activation is switched from ReLU to Linear
-        - Early Stopping: early stopping is implemented with a patient of 10
-    * Hyperparameters:
-        - Learning Rate: 0.0005
-        - Latent Dimension: 16
-        - Hidden Dimensions: 64 and 32
-        - Epochs: 100
-        - Batch Size: 256
-    * Loss (Best Epoch):
-        - Training Loss: 11.72%
-        - Validation Loss: 14.77%
+        - Training Loss: 26.66%
+        - Validation Loss: 17.04%
