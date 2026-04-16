@@ -2012,6 +2012,63 @@ if active_page == "Alerts":
                 file_name="live_alerts.csv",
                 mime="text/csv",
             )
+
+            st.markdown("<div style='margin-top:14px;'></div>", unsafe_allow_html=True)
+
+            # ── Live charts (based solely on current live alerts table data) ──
+            live_chart_df = live_df.copy()
+
+            col_live_left, col_live_right = st.columns(2)
+
+            with col_live_left:
+                section_header("Risk Distribution", "sh_live_risk_dist")
+                if "if_risk_band" in live_chart_df.columns and not live_chart_df.empty:
+                    _risk_counts = (
+                        live_chart_df["if_risk_band"]
+                        .fillna("LOW")
+                        .value_counts()
+                        .rename_axis("Risk Level")
+                        .reset_index(name="Count")
+                    )
+                    fig_live_donut = px.pie(
+                        _risk_counts,
+                        values="Count",
+                        names="Risk Level",
+                        color="Risk Level",
+                        color_discrete_map=RISK_COLORS,
+                        hole=0.6,
+                    )
+                    fig_live_donut.update_layout(
+                        **PLOTLY_LAYOUT,
+                        showlegend=True,
+                        height=340,
+                        legend=dict(font=dict(size=10, family="JetBrains Mono")),
+                    )
+                    fig_live_donut.update_traces(
+                        textinfo="label+percent",
+                        textfont_size=11,
+                        textfont_family="JetBrains Mono",
+                    )
+                    st.plotly_chart(fig_live_donut, use_container_width=True)
+                else:
+                    st.info("Risk band data is not available in live alerts yet.")
+
+            with col_live_right:
+                section_header("Anomaly Score Distribution", "sh_live_score_dist")
+                if "if_anomaly_score" in live_chart_df.columns and "if_risk_band" in live_chart_df.columns:
+                    fig_live_hist = px.histogram(
+                        live_chart_df,
+                        x="if_anomaly_score",
+                        nbins=50,
+                        color="if_risk_band",
+                        color_discrete_map=RISK_COLORS,
+                        labels={"if_anomaly_score": "Anomaly Score", "if_risk_band": "Risk Level"},
+                    )
+                    fig_live_hist.update_layout(**PLOTLY_LAYOUT, height=340, barmode="overlay")
+                    fig_live_hist.update_traces(opacity=0.75)
+                    st.plotly_chart(fig_live_hist, use_container_width=True)
+                else:
+                    st.info("Anomaly-score or risk-band fields are not available in live alerts yet.")
         else:
             st.info("Waiting for first scored row… (models are loading)")
 
