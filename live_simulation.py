@@ -86,6 +86,12 @@ class LiveScorer:
             if col in row_df.columns:
                 meta[col] = str(row_df[col].iloc[0])
 
+        # Keep original CERT time context for downstream sorting/display.
+        for ts_col in ("timestamp", "datetime", "date", "day"):
+            if ts_col in row_df.columns:
+                meta["cert_timestamp"] = str(row_df[ts_col].iloc[0])
+                break
+
         # Feature matrix — drop metadata columns
         feat_df = row_df.drop(
             columns=[c for c in ("user", "pc", "day") if c in row_df.columns]
@@ -162,7 +168,9 @@ async def _run_simulation(
         _stop_event.set()
         return
 
+    # Preserve source order: stream rows exactly as they appear in the CSV.
     test_df = pd.read_csv(input_path, index_col=0)
+
     total   = len(test_df)
     print(f"[live_simulation] Streaming {total:,} rows from {os.path.basename(input_path)}", flush=True)
 

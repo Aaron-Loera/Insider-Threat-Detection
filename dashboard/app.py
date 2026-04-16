@@ -1897,14 +1897,34 @@ if active_page == "Alerts":
 
         if live_rows:
             live_df = pd.DataFrame(live_rows)
-            # Keep only the columns users care about; drop the diagnostic field
-            live_df = live_df.drop(columns=[c for c in ("_score_ms", "event_index") if c in live_df.columns])
+            # Keep only the columns users care about; drop duplicate/diagnostic fields.
+            live_df = live_df.drop(columns=[c for c in ("day", "_score_ms") if c in live_df.columns])
 
-            # Most-recent rows first; cap at 500 to keep the table snappy
-            live_df = live_df.tail(500).iloc[::-1].reset_index(drop=True)
+            # Most-recent rows first using original CERT timestamp when available.
+            if "cert_timestamp" in live_df.columns:
+                live_df["_sort_ts"] = pd.to_datetime(live_df["cert_timestamp"], errors="coerce")
+                _sort_cols = ["_sort_ts"]
+                _sort_dirs = [False]
+                if "event_index" in live_df.columns:
+                    # Tie-break equal timestamps by latest arrival first.
+                    _sort_cols.append("event_index")
+                    _sort_dirs.append(False)
+                elif "if_percentile_rank" in live_df.columns:
+                    _sort_cols.append("if_percentile_rank")
+                    _sort_dirs.append(False)
+                live_df = live_df.sort_values(by=_sort_cols, ascending=_sort_dirs, kind="stable")
+                live_df = live_df.drop(columns=[c for c in ("_sort_ts", "event_index") if c in live_df.columns])
+            else:
+                # Fallback for older payloads that do not include source timestamps.
+                live_df = live_df.iloc[::-1]
+                live_df = live_df.drop(columns=[c for c in ("event_index",) if c in live_df.columns])
+
+            # Cap at 500 to keep the table snappy
+            live_df = live_df.head(500).reset_index(drop=True)
 
             # Column config for the live table
             _live_col_cfg = {
+                "cert_timestamp": st.column_config.TextColumn("CERT Timestamp"),
                 "risk_level":     st.column_config.TextColumn("Risk Level"),
                 "anomaly_score":  st.column_config.NumberColumn("Anomaly Score", format="%.6f"),
                 "ae_percentile_rank":st.column_config.ProgressColumn("Percentile", min_value=0, max_value=100, format="%.1f"),
