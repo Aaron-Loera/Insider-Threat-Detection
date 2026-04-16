@@ -559,7 +559,8 @@ if _ueba_override:
 else:
     UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_4", "ueba_dataset_4_train.parquet")
     UEBA_CSV     = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_4", "ueba_dataset_4_train.csv")
-LIVE_OUTPUT = os.path.join(BASE_DIR, "processed_datasets", "live_results.jsonl")
+LIVE_OUTPUT     = os.path.join(BASE_DIR, "processed_datasets", "live_results.jsonl")
+LIVE_PAUSE_FLAG = os.path.join(BASE_DIR, "processed_datasets", "live_pause.flag")
 LIVE_SIM_SCRIPT = os.path.join(BASE_DIR, "live_simulation.py")
 
 # Only load columns the dashboard actually uses
@@ -1820,6 +1821,8 @@ if "live_mode" not in st.session_state:
     st.session_state.live_mode = False
 if "live_proc" not in st.session_state:
     st.session_state.live_proc = None  # subprocess.Popen or None
+if "live_paused" not in st.session_state:
+    st.session_state.live_paused = False
 
 if active_page == "Alerts":
     st.markdown(
@@ -1831,13 +1834,15 @@ if active_page == "Alerts":
     )
 
     # ── Live-simulation control row ────────────────────────────
-    ctrl_left, ctrl_right = st.columns([3, 9])
-    with ctrl_left:
+    ctrl_start, ctrl_pause, ctrl_right = st.columns([3, 2, 7])
+    with ctrl_start:
         if not st.session_state.live_mode:
             if st.button("▶ START LIVE SIMULATION", key="start_live", use_container_width=True):
-                # Clear any previous output
+                # Clear any previous output and stale pause flag
                 if os.path.exists(LIVE_OUTPUT):
                     os.remove(LIVE_OUTPUT)
+                if os.path.exists(LIVE_PAUSE_FLAG):
+                    os.remove(LIVE_PAUSE_FLAG)
                 # Launch the unified simulation script as a subprocess
                 proc = subprocess.Popen(
                     [sys.executable, LIVE_SIM_SCRIPT, "--interval", "0.5"],
@@ -1845,6 +1850,7 @@ if active_page == "Alerts":
                 )
                 st.session_state.live_proc = proc
                 st.session_state.live_mode = True
+                st.session_state.live_paused = False
                 st.rerun()
         else:
             if st.button("⏹ STOP LIVE SIMULATION", key="stop_live", use_container_width=True):
@@ -1855,9 +1861,27 @@ if active_page == "Alerts":
                         proc.wait(timeout=3)
                     except subprocess.TimeoutExpired:
                         proc.kill()
+                # Remove pause flag so the process isn't blocked on next start
+                if os.path.exists(LIVE_PAUSE_FLAG):
+                    os.remove(LIVE_PAUSE_FLAG)
                 st.session_state.live_proc = None
                 st.session_state.live_mode = False
+                st.session_state.live_paused = False
                 st.rerun()
+    with ctrl_pause:
+        if st.session_state.live_mode:
+            if not st.session_state.live_paused:
+                if st.button("⏸ PAUSE", key="pause_live", use_container_width=True):
+                    with open(LIVE_PAUSE_FLAG, "w", encoding="utf-8") as _pf:
+                        pass  # existence of the file signals pause
+                    st.session_state.live_paused = True
+                    st.rerun()
+            else:
+                if st.button("▶ RESUME", key="resume_live", use_container_width=True):
+                    if os.path.exists(LIVE_PAUSE_FLAG):
+                        os.remove(LIVE_PAUSE_FLAG)
+                    st.session_state.live_paused = False
+                    st.rerun()
 
     # ── LIVE mode ─────────────────────────────────────────────
     if st.session_state.live_mode:
@@ -1884,8 +1908,15 @@ if active_page == "Alerts":
                         live_rows.append(obj)
 
         # Status strip
-        _status_color = "#3c9" if proc_running else "#e84545"
-        _status_label = "RUNNING" if proc_running else ("COMPLETE" if stream_done else "STOPPED")
+        if st.session_state.live_paused:
+            _status_color = "#f5a623"
+            _status_label = "PAUSED"
+        elif proc_running:
+            _status_color = "#3c9"
+            _status_label = "RUNNING"
+        else:
+            _status_color = "#e84545"
+            _status_label = "COMPLETE" if stream_done else "STOPPED"
         with ctrl_right:
             st.markdown(
                 f"<span style='font-family:JetBrains Mono,monospace; font-size:11px; "
@@ -1940,8 +1971,8 @@ if active_page == "Alerts":
         else:
             st.info("Waiting for first scored row… (models are loading)")
 
-        # Auto-refresh while the process is still running
-        if proc_running:
+        # Auto-refresh while the process is running and not paused
+        if proc_running and not st.session_state.live_paused:
             time.sleep(1)
             st.rerun()
         elif stream_done and st.session_state.live_mode:
