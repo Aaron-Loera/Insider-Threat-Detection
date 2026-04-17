@@ -559,7 +559,8 @@ if _ueba_override:
 else:
     UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_4", "ueba_dataset_4_train.parquet")
     UEBA_CSV     = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_4", "ueba_dataset_4_train.csv")
-LIVE_OUTPUT = os.path.join(BASE_DIR, "processed_datasets", "live_results.jsonl")
+LIVE_OUTPUT     = os.path.join(BASE_DIR, "processed_datasets", "live_results.jsonl")
+LIVE_PAUSE_FLAG = os.path.join(BASE_DIR, "processed_datasets", "live_pause.flag")
 LIVE_SIM_SCRIPT = os.path.join(BASE_DIR, "live_simulation.py")
 
 # Only load columns the dashboard actually uses
@@ -1016,6 +1017,14 @@ NAV_PAGES = [
     "Channels",
 ]
 
+# Live simulation state is shared across all pages.
+if "live_mode" not in st.session_state:
+    st.session_state.live_mode = False
+if "live_proc" not in st.session_state:
+    st.session_state.live_proc = None  # subprocess.Popen or None
+if "live_paused" not in st.session_state:
+    st.session_state.live_paused = False
+
 # Consume any programmatic navigation request NOW — before any widget is
 # instantiated — so we can write session_state.nav_page freely.
 if st.session_state.get("_nav_request"):
@@ -1057,6 +1066,50 @@ with st.sidebar:
     )
 
     st.markdown("<div style='border-top:1px solid #1a1a1a; margin:8px 0 0 0;'></div>", unsafe_allow_html=True)
+
+    # ── Global live status (visible on every page) ──
+    _live_rows_received = 0
+    _stream_done = False
+    _live_session_active = bool(st.session_state.live_mode or st.session_state.live_paused)
+    if _live_session_active and os.path.exists(LIVE_OUTPUT):
+        with open(LIVE_OUTPUT, "r", encoding="utf-8") as _fh:
+            for _line in _fh:
+                _line = _line.strip()
+                if not _line:
+                    continue
+                try:
+                    _obj = json.loads(_line)
+                except json.JSONDecodeError:
+                    continue
+                if _obj.get("_eos"):
+                    _stream_done = True
+                else:
+                    _live_rows_received += 1
+
+    _proc = st.session_state.live_proc
+    _proc_running = _proc is not None and _proc.poll() is None
+    if not _live_session_active:
+        _status_color = "#666"
+        _status_label = "IDLE"
+    elif st.session_state.live_paused:
+        _status_color = "#f5a623"
+        _status_label = "PAUSED"
+    elif _proc_running:
+        _status_color = "#3c9"
+        _status_label = "RUNNING"
+    else:
+        _status_color = "#e84545"
+        _status_label = "COMPLETE" if _stream_done else "STOPPED"
+
+    st.markdown(
+        f"<div style='margin:12px 0 6px 0;'>"
+        f"<span style='font-family:JetBrains Mono,monospace; font-size:11px; "
+        f"color:{_status_color}; letter-spacing:1.5px;'>● {_status_label}</span>"
+        f"<span style='font-family:JetBrains Mono,monospace; font-size:10px; "
+        f"color:#555; margin-left:10px;'>{_live_rows_received:,} rows received</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
     st.markdown("<div style='border-top:1px solid #1a1a1a; margin:16px 0;'></div>", unsafe_allow_html=True)
     st.markdown(
@@ -1770,12 +1823,6 @@ if active_page == "Investigation":
 # PAGE: Alerts
 # ══════════════════════════════════════════════════════════════
 
-# ── Initialise live-mode session state ────────────────────────
-if "live_mode" not in st.session_state:
-    st.session_state.live_mode = False
-if "live_proc" not in st.session_state:
-    st.session_state.live_proc = None  # subprocess.Popen or None
-
 if active_page == "Alerts":
     st.markdown(
         "<div class='page-header-block'>"
@@ -1786,13 +1833,15 @@ if active_page == "Alerts":
     )
 
     # ── Live-simulation control row ────────────────────────────
-    ctrl_left, ctrl_right = st.columns([3, 9])
-    with ctrl_left:
+    ctrl_start, ctrl_pause, ctrl_right = st.columns([3, 2, 7])
+    with ctrl_start:
         if not st.session_state.live_mode:
             if st.button("▶ START LIVE SIMULATION", key="start_live", use_container_width=True):
-                # Clear any previous output
+                # Clear any previous output and stale pause flag
                 if os.path.exists(LIVE_OUTPUT):
                     os.remove(LIVE_OUTPUT)
+                if os.path.exists(LIVE_PAUSE_FLAG):
+                    os.remove(LIVE_PAUSE_FLAG)
                 # Launch the unified simulation script as a subprocess
                 proc = subprocess.Popen(
                     [sys.executable, LIVE_SIM_SCRIPT, "--interval", "0.5"],
@@ -1800,6 +1849,7 @@ if active_page == "Alerts":
                 )
                 st.session_state.live_proc = proc
                 st.session_state.live_mode = True
+                st.session_state.live_paused = False
                 st.rerun()
         else:
             if st.button("⏹ STOP LIVE SIMULATION", key="stop_live", use_container_width=True):
@@ -1810,9 +1860,27 @@ if active_page == "Alerts":
                         proc.wait(timeout=3)
                     except subprocess.TimeoutExpired:
                         proc.kill()
+                # Remove pause flag so the process isn't blocked on next start
+                if os.path.exists(LIVE_PAUSE_FLAG):
+                    os.remove(LIVE_PAUSE_FLAG)
                 st.session_state.live_proc = None
                 st.session_state.live_mode = False
+                st.session_state.live_paused = False
                 st.rerun()
+    with ctrl_pause:
+        if st.session_state.live_mode:
+            if not st.session_state.live_paused:
+                if st.button("⏸ PAUSE", key="pause_live", use_container_width=True):
+                    with open(LIVE_PAUSE_FLAG, "w", encoding="utf-8") as _pf:
+                        pass  # existence of the file signals pause
+                    st.session_state.live_paused = True
+                    st.rerun()
+            else:
+                if st.button("▶ RESUME", key="resume_live", use_container_width=True):
+                    if os.path.exists(LIVE_PAUSE_FLAG):
+                        os.remove(LIVE_PAUSE_FLAG)
+                    st.session_state.live_paused = False
+                    st.rerun()
 
     # ── LIVE mode ─────────────────────────────────────────────
     if st.session_state.live_mode:
@@ -1839,8 +1907,15 @@ if active_page == "Alerts":
                         live_rows.append(obj)
 
         # Status strip
-        _status_color = "#3c9" if proc_running else "#e84545"
-        _status_label = "RUNNING" if proc_running else ("COMPLETE" if stream_done else "STOPPED")
+        if st.session_state.live_paused:
+            _status_color = "#f5a623"
+            _status_label = "PAUSED"
+        elif proc_running:
+            _status_color = "#3c9"
+            _status_label = "RUNNING"
+        else:
+            _status_color = "#e84545"
+            _status_label = "COMPLETE" if stream_done else "STOPPED"
         with ctrl_right:
             st.markdown(
                 f"<span style='font-family:JetBrains Mono,monospace; font-size:11px; "
@@ -1852,14 +1927,34 @@ if active_page == "Alerts":
 
         if live_rows:
             live_df = pd.DataFrame(live_rows)
-            # Keep only the columns users care about; drop the diagnostic field
-            live_df = live_df.drop(columns=[c for c in ("_score_ms", "event_index") if c in live_df.columns])
+            # Keep only the columns users care about; drop duplicate/diagnostic fields.
+            live_df = live_df.drop(columns=[c for c in ("day", "_score_ms") if c in live_df.columns])
 
-            # Most-recent rows first; cap at 500 to keep the table snappy
-            live_df = live_df.tail(500).iloc[::-1].reset_index(drop=True)
+            # Most-recent rows first using original CERT timestamp when available.
+            if "cert_timestamp" in live_df.columns:
+                live_df["_sort_ts"] = pd.to_datetime(live_df["cert_timestamp"], errors="coerce")
+                _sort_cols = ["_sort_ts"]
+                _sort_dirs = [False]
+                if "event_index" in live_df.columns:
+                    # Tie-break equal timestamps by latest arrival first.
+                    _sort_cols.append("event_index")
+                    _sort_dirs.append(False)
+                elif "if_percentile_rank" in live_df.columns:
+                    _sort_cols.append("if_percentile_rank")
+                    _sort_dirs.append(False)
+                live_df = live_df.sort_values(by=_sort_cols, ascending=_sort_dirs, kind="stable")
+                live_df = live_df.drop(columns=[c for c in ("_sort_ts", "event_index") if c in live_df.columns])
+            else:
+                # Fallback for older payloads that do not include source timestamps.
+                live_df = live_df.iloc[::-1]
+                live_df = live_df.drop(columns=[c for c in ("event_index",) if c in live_df.columns])
+
+            # Cap at 500 to keep the table snappy
+            live_df = live_df.head(500).reset_index(drop=True)
 
             # Column config for the live table
             _live_col_cfg = {
+                "cert_timestamp": st.column_config.TextColumn("CERT Timestamp"),
                 "risk_level":     st.column_config.TextColumn("Risk Level"),
                 "anomaly_score":  st.column_config.NumberColumn("Anomaly Score", format="%.6f"),
                 "ae_percentile_rank":st.column_config.ProgressColumn("Percentile", min_value=0, max_value=100, format="%.1f"),
@@ -1872,11 +1967,68 @@ if active_page == "Alerts":
                 file_name="live_alerts.csv",
                 mime="text/csv",
             )
+
+            st.markdown("<div style='margin-top:14px;'></div>", unsafe_allow_html=True)
+
+            # ── Live charts (based solely on current live alerts table data) ──
+            live_chart_df = live_df.copy()
+
+            col_live_left, col_live_right = st.columns(2)
+
+            with col_live_left:
+                section_header("Risk Distribution", "sh_live_risk_dist")
+                if "if_risk_band" in live_chart_df.columns and not live_chart_df.empty:
+                    _risk_counts = (
+                        live_chart_df["if_risk_band"]
+                        .fillna("LOW")
+                        .value_counts()
+                        .rename_axis("Risk Level")
+                        .reset_index(name="Count")
+                    )
+                    fig_live_donut = px.pie(
+                        _risk_counts,
+                        values="Count",
+                        names="Risk Level",
+                        color="Risk Level",
+                        color_discrete_map=RISK_COLORS,
+                        hole=0.6,
+                    )
+                    fig_live_donut.update_layout(
+                        **PLOTLY_LAYOUT,
+                        showlegend=True,
+                        height=340,
+                        legend=dict(font=dict(size=10, family="JetBrains Mono")),
+                    )
+                    fig_live_donut.update_traces(
+                        textinfo="label+percent",
+                        textfont_size=11,
+                        textfont_family="JetBrains Mono",
+                    )
+                    st.plotly_chart(fig_live_donut, use_container_width=True)
+                else:
+                    st.info("Risk band data is not available in live alerts yet.")
+
+            with col_live_right:
+                section_header("Anomaly Score Distribution", "sh_live_score_dist")
+                if "if_anomaly_score" in live_chart_df.columns and "if_risk_band" in live_chart_df.columns:
+                    fig_live_hist = px.histogram(
+                        live_chart_df,
+                        x="if_anomaly_score",
+                        nbins=50,
+                        color="if_risk_band",
+                        color_discrete_map=RISK_COLORS,
+                        labels={"if_anomaly_score": "Anomaly Score", "if_risk_band": "Risk Level"},
+                    )
+                    fig_live_hist.update_layout(**PLOTLY_LAYOUT, height=340, barmode="overlay")
+                    fig_live_hist.update_traces(opacity=0.75)
+                    st.plotly_chart(fig_live_hist, use_container_width=True)
+                else:
+                    st.info("Anomaly-score or risk-band fields are not available in live alerts yet.")
         else:
             st.info("Waiting for first scored row… (models are loading)")
 
-        # Auto-refresh while the process is still running
-        if proc_running:
+        # Auto-refresh while the process is running and not paused
+        if proc_running and not st.session_state.live_paused:
             time.sleep(1)
             st.rerun()
         elif stream_done and st.session_state.live_mode:
@@ -2194,6 +2346,15 @@ if active_page == "Channels":
         )
         fig_corr.update_layout(**PLOTLY_LAYOUT, height=500)
         st.plotly_chart(fig_corr, use_container_width=True)
+
+
+# Keep live row counter and status fresh while browsing non-Alerts pages.
+if active_page != "Alerts" and st.session_state.live_mode:
+    _proc = st.session_state.live_proc
+    _proc_running = _proc is not None and _proc.poll() is None
+    if _proc_running and not st.session_state.live_paused:
+        time.sleep(1)
+        st.rerun()
 
 
 # ──────────────────────────────────────────────────────────────
