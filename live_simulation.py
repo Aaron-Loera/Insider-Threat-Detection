@@ -36,6 +36,8 @@ IF_SCORES_PATH = os.path.join(BASE_DIR, "isolation_forests", "iforest_model_4", 
 DEFAULT_INPUT  = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_4", "ueba_dataset_4_test_stream.csv")
 # Live output (one JSON object per line, appended as rows arrive)
 DEFAULT_OUTPUT = os.path.join(BASE_DIR, "processed_datasets", "live_results.jsonl")
+# Pause sentinel: simulation spin-waits while this file exists
+PAUSE_FLAG     = os.path.join(BASE_DIR, "processed_datasets", "live_pause.flag")
 
 # Risk-band thresholds (percentile cutoffs, consistent with AlertObjectBuilder)
 CRITICAL_THRESH = 95.0
@@ -85,6 +87,12 @@ class LiveScorer:
         for col in ("user", "pc", "day"):
             if col in row_df.columns:
                 meta[col] = str(row_df[col].iloc[0])
+
+        # Keep original CERT time context for downstream sorting/display.
+        for ts_col in ("timestamp", "datetime", "date", "day"):
+            if ts_col in row_df.columns:
+                meta["cert_timestamp"] = str(row_df[ts_col].iloc[0])
+                break
 
         # Feature matrix — drop metadata columns
         feat_df = row_df.drop(
@@ -162,7 +170,13 @@ async def _run_simulation(
         _stop_event.set()
         return
 
+    # Remove any stale pause flag left by a previously interrupted run.
+    if os.path.exists(PAUSE_FLAG):
+        os.remove(PAUSE_FLAG)
+
+    # Preserve source order: stream rows exactly as they appear in the CSV.
     test_df = pd.read_csv(input_path, index_col=0)
+
     total   = len(test_df)
     print(f"[live_simulation] Streaming {total:,} rows from {os.path.basename(input_path)}", flush=True)
 
@@ -195,6 +209,14 @@ async def _run_simulation(
 
         # Throttle to simulate real-time arrival
         await asyncio.sleep(interval)
+
+        # Honour pause flag: spin-wait until the dashboard removes it or a stop is signalled.
+        if os.path.exists(PAUSE_FLAG):
+            print("[live_simulation] Paused — waiting for resume …", flush=True)
+            while os.path.exists(PAUSE_FLAG) and not _stop_event.is_set():
+                await asyncio.sleep(0.25)
+            if not _stop_event.is_set():
+                print("[live_simulation] Resumed.", flush=True)
 
     # Write end-of-stream sentinel so the dashboard can detect natural completion
     with open(output_path, "a", encoding="utf-8") as f:
