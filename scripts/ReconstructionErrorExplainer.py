@@ -39,7 +39,9 @@ class ReconstructionErrorExplainer:
         Returns:
             np.ndarray: The squared error per feature of shape: (n_samples, n_features)
         """
-        return np.square(input_data - reconstructed_data)
+        return np.square(
+            input_data.astype(np.float32, copy=False) - reconstructed_data.astype(np.float32, copy=False)
+        )
     
     
     def compute_total_error(self, feature_error: np.ndarray) -> np.ndarray:
@@ -97,18 +99,20 @@ class ReconstructionErrorExplainer:
         return np.vstack(group_errors).T
     
     
-    def explain(self, input_data: np.ndarray, model: tf.keras.Model) -> dict:
+    def explain(self, input_data: np.ndarray, model: tf.keras.Model, batch_size: int=4096) -> dict:
         """
         Generates a full reconstruction explanation.
-        
+
         Args:
             input_data: The input data
             model: A trained autoencoder model
-            
+            batch_size: Batch size for model predictions
+
         Returns:
-            dict: A dictionary containing feature error, total error, contribution ration, and group error
+            dict: A dictionary containing feature error, total error, contribution ratio, and group error
         """
-        x_pred = model.predict(input_data, verbose=0)
+        input_data = np.asarray(input_data, dtype=np.float32)
+        x_pred = model.predict(input_data, verbose=0, batch_size=batch_size)
         
         feature_error = self.compute_feature_error(input_data, x_pred)
         total_error = self.compute_total_error(feature_error)
@@ -125,71 +129,75 @@ class ReconstructionErrorExplainer:
         return error_dict
     
     
-    def explain_to_df(self, input_data: np.ndarray, model: tf.keras.Model, metadata: pd.DataFrame | None=None, include_feat_err: bool=True, include_contributions: bool=True) -> pd.DataFrame:
+    def explain_to_df(
+        self,
+        input_data: np.ndarray,
+        model: tf.keras.Model,
+        metadata: pd.DataFrame | None=None,
+        include_feat_err: bool=True,
+        include_contributions: bool=True,
+        batch_size: int=4096
+    ) -> pd.DataFrame:
         """
         Generates a structured Pandas DataFrame containing reconstruction explanations.
-        
+
         Args:
             input_data: The scaled input data
             model: A trained autoencoder model
             metadata: Optional metadata columns
             include_feat_err: Includes raw per-feature reconstruction errors
             include_contributions: Includes per-feature contribution ratios
-            
+            batch_size: Batch size for model predictions
+
         Returns:
             pd.DataFrame: A structured DataFrame containing metadata, total error, group-level errors, and optional feature-level details
         """
-        # Computing reconstruction explanations
-        results = self.explain(input_data, model)
-        
+        results = self.explain(input_data, model, batch_size=batch_size)
+
         feature_error = results["feature_error"]
         total_error = results["total_error"]
         contribution_ratio = results["contribution_ratio"]
         group_error = results["group_error"]
-        
-        error_df = pd.DataFrame()
-        
-        # Adding metadata
+
+        columns = {}
+
         if metadata is not None:
-            error_df = metadata.reset_index(drop=True).copy()
-            
-        # Add total reconstruction error
-        error_df["total_reconstruction_error"] = total_error
-            
-        # Adding group-level errors if defined
+            meta = metadata.reset_index(drop=True)
+            for col in meta.columns:
+                columns[col] = meta[col].values
+
+        columns["total_reconstruction_error"] = total_error
+
         if (self.feature_groups is not None) and (group_error is not None):
             for idx, group in enumerate(self.feature_groups.keys()):
-                error_df[f"group_error_{group}"] = group_error[:, idx]
-                
-        # Adding feature-level errors if true
+                columns[f"group_error_{group}"] = group_error[:, idx]
+
         if include_feat_err:
             for idx, feature in enumerate(self.feature_names):
-                error_df[f"error_{feature}"] = feature_error[:, idx]
-                
-        # Adding contribution ratios if true
+                columns[f"error_{feature}"] = feature_error[:, idx]
+
         if include_contributions:
             for idx, feature in enumerate(self.feature_names):
-                error_df[f"contribution_{feature}"] = contribution_ratio[:, idx]
-                
-        return error_df
+                columns[f"contribution_{feature}"] = contribution_ratio[:, idx]
+
+        return pd.DataFrame(columns)
     
 
 def save_table(df: pd.DataFrame, save_path: str) -> None:
     """
-    Saves the DataFrame table as a CSV file to the specified path.
-    
+    Saves the DataFrame table as a Parquet file to the specified path.
+
     Args:
         df: DataFrame table
-        save_path: Path to save table to ending in "*.csv"
-        
+        save_path: Path to save table to ending in "*.parquet"
+
     Returns:
         None:
     """
-    # Ensuring output directory exists
     output_dir = r"explainability\reconstruction_error"
     os.makedirs(output_dir, exist_ok=True)
-    
+
     full_path = os.path.join(output_dir, save_path)
-    df.to_csv(full_path, index=False)
-    
+    df.to_parquet(full_path, index=False)
+
     print("Successfully saved to:", full_path)
