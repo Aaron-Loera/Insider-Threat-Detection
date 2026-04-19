@@ -38,3 +38,22 @@
     * Working Hours: (9, 17)
     * Rolling Window Size: 5
 
+
+- UEBA Dataset v5 (ueba_dataset_5a.csv, ueba_dataset_5b.csv):
+    * Version 5 introduces the following FIXES:
+        - Resolves unique counting bugs found in previous iterations
+        - Includes z-score clipping for improved downstream model performance 
+        - Pipeline optimization improvements
+    * Version 5 chronological split for training and testing
+        - 90% of the dataset is saved for model training
+        - 10% of the dataset is saved for inference (i.e., live simulation)
+    * Number of Features (a, b): 34, 108 
+    * Chunked loading for large CSV files (e.g., email.csv, http.csv)
+    * Preprocessing pipeline produces four datasets:
+        - Dataset A: (user, pc, day) level dataset to be used for drill-down analysis
+        - Dataset B: (user, day) level dataset to be used for model training
+        - Training Set (ueba_dataset_5_train.csv): The first chronological 90% of the Dataset B
+        - Testing Set (ueba_dataset_5_test_stream.csv): The last chronological 10% of Dataset B
+    * Working Hours: (9, 17)
+    * Rolling Window Size: 5
+
