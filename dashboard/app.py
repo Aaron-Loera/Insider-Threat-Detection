@@ -524,44 +524,18 @@ st.markdown("""
 # Data Loading
 # ──────────────────────────────────────────────────────────────
 
-# Resolve paths relative to this script so any team member can run it
+# Resolve the project root so config.py (at the root) is importable.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
-# ── Local path overrides ──────────────────────────────────────────────────────
-# Contributors can create paths.local.py at the project root to point to their
-# own data locations without touching this file.  See paths.local.example.py.
-import importlib.util as _ilu
-_local = None
-_local_path = os.path.join(BASE_DIR, "paths.local.py")
-if os.path.exists(_local_path):
-    _spec = _ilu.spec_from_file_location("paths_local", _local_path)
-    _local = _ilu.module_from_spec(_spec)
-    _spec.loader.exec_module(_local)
-
-def _local_path_or(attr: str, default: str) -> str:
-    """Return override from paths.local.py if set, otherwise the default."""
-    val = getattr(_local, attr, None) if _local is not None else None
-    return val if val else default
-
-# Prefer Parquet (5-10x faster I/O); fall back to CSV
-_analyst_override = _local_path_or("ANALYST_TABLE", "")
-if _analyst_override:
-    ANALYST_TABLE_PARQUET = _analyst_override if _analyst_override.endswith(".parquet") else ""
-    ANALYST_TABLE_CSV     = _analyst_override if _analyst_override.endswith(".csv")     else _analyst_override
-else:
-    ANALYST_TABLE_PARQUET = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_4.parquet")
-    ANALYST_TABLE_CSV     = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_4.csv")
-
-_ueba_override = _local_path_or("UEBA_DATASET", "")
-if _ueba_override:
-    UEBA_PARQUET = _ueba_override if _ueba_override.endswith(".parquet") else ""
-    UEBA_CSV     = _ueba_override if _ueba_override.endswith(".csv")     else _ueba_override
-else:
-    UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_4", "ueba_dataset_4_train.parquet")
-    UEBA_CSV     = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_4", "ueba_dataset_4_train.csv")
-LIVE_OUTPUT     = os.path.join(BASE_DIR, "processed_datasets", "live_results.jsonl")
-LIVE_PAUSE_FLAG = os.path.join(BASE_DIR, "processed_datasets", "live_pause.flag")
-LIVE_SIM_SCRIPT = os.path.join(BASE_DIR, "live_simulation.py")
+# All path configuration is centralized in config.py.  Per-contributor
+# overrides live in paths.local.py (gitignored). See paths.local.example.py.
+from config import (
+    ANALYST_TABLE_PARQUET, ANALYST_TABLE_CSV,
+    UEBA_PARQUET, UEBA_CSV,
+    LIVE_OUTPUT, LIVE_PAUSE_FLAG, LIVE_SIM_SCRIPT,
+)
 
 # Only load columns the dashboard actually uses
 UEBA_COLS = [

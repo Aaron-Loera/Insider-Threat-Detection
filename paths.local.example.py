@@ -13,13 +13,30 @@
 #   to keep the default relative path.
 #
 # DEFAULT LOCATIONS (relative to project root):
-#   explainability/alert_table/alert_table_4.parquet   (or .csv)
-#   processed_datasets/ueba_dataset_4/ueba_dataset_4_train.parquet   (or .csv)
+#   explainability/alert_table/alert_table_{V}.parquet   (or .csv)
+#   processed_datasets/ueba_dataset_{V}/ueba_dataset_{V}_train.parquet   (or .csv)
+#   where {V} = MODEL_VERSION (default "5")
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Raw CERT dataset root (REQUIRED for preprocessing notebooks) ──────────────
+# Set this to the folder containing the CERT r6.2 CSVs on your machine.
+# There is no project-relative default — every contributor must set this.
+# CERT_PATH = r"C:\Users\yourname\Documents\Datasets\CERT_r6.2"
+
+# ── Active model version ──────────────────────────────────────────────────────
+# Controls which numbered model artifacts (encoder, isolation forest, alert table,
+# ueba dataset) are used by default across all notebooks and scripts.
+# MODEL_VERSION = "5"
+
+# ── Live simulation model version ─────────────────────────────────────────────
+# Defaults to MODEL_VERSION if not set.  Set this only if your deployed/live
+# scoring model differs from the version used in the offline training notebooks.
+# LIVE_MODEL_VERSION = "4"
+
+# ── Dashboard paths ───────────────────────────────────────────────────────────
 # Absolute path to the alert table produced by Alert_Object_Builder.ipynb.
-# Parquet is preferred; the app falls back to CSV if only that exists.
-# ANALYST_TABLE = r"C:\Users\yourname\data\alert_table_4.parquet"
+# Parquet is preferred; the dashboard falls back to CSV if only that exists.
+# ANALYST_TABLE = r"C:\Users\yourname\data\alert_table_5.parquet"
 
 # Absolute path to the UEBA training dataset produced by CERT_Preprocessing.ipynb.
-# UEBA_DATASET = r"C:\Users\yourname\data\ueba_dataset_4_train.parquet"
+# UEBA_DATASET = r"C:\Users\yourname\data\ueba_dataset_5_train.parquet"

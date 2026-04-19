@@ -25,19 +25,16 @@ import numpy as np
 import pandas as pd
 import websockets
 
-# ── Paths (all relative to the repo root, i.e. this file's directory) ────────
-BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-SCALER_PATH = os.path.join(BASE_DIR, "encoders",         "encoder_model_4", "feature_scaler.pkl")
-ENCODER_PATH= os.path.join(BASE_DIR, "encoders",         "encoder_model_4", "encoder_model.keras")
-IF_PATH     = os.path.join(BASE_DIR, "isolation_forests","iforest_model_4", "iforest_model.pkl")
-# Reference distribution used to compute global percentile ranks
-IF_SCORES_PATH = os.path.join(BASE_DIR, "isolation_forests", "iforest_model_4", "anomaly_scores.npy")
-# Default simulation input
-DEFAULT_INPUT  = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_4", "ueba_dataset_4_test_stream.csv")
-# Live output (one JSON object per line, appended as rows arrive)
-DEFAULT_OUTPUT = os.path.join(BASE_DIR, "processed_datasets", "live_results.jsonl")
-# Pause sentinel: simulation spin-waits while this file exists
-PAUSE_FLAG     = os.path.join(BASE_DIR, "processed_datasets", "live_pause.flag")
+# Paths (loaded from config.py)
+import config
+BASE_DIR       = config.BASE_DIR
+SCALER_PATH    = config.LIVE_SCALER_PATH
+ENCODER_PATH   = config.LIVE_ENCODER_PATH
+IF_PATH        = config.LIVE_IF_PATH
+IF_SCORES_PATH = config.LIVE_IF_SCORES_PATH
+DEFAULT_INPUT  = config.LIVE_DEFAULT_INPUT
+DEFAULT_OUTPUT = config.LIVE_OUTPUT
+PAUSE_FLAG     = config.LIVE_PAUSE_FLAG
 
 # Risk-band thresholds (percentile cutoffs, consistent with AlertObjectBuilder)
 CRITICAL_THRESH = 95.0

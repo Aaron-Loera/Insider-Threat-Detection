@@ -1,4 +1,5 @@
 import os
+import json
 import numpy as np
 import pandas as pd
 
@@ -420,6 +421,13 @@ def save_table(df: pd.DataFrame, save_path: str) -> None:
     if format == "csv":
         df.to_csv(full_path, index=False)
     else:
-        df.to_parquet(full_path, index=False)
+        # Converting object columns to JSON for parquet
+        df_copy = df.copy()
+        for col in df_copy.columns:
+            if df_copy[col].dtype == "object":
+                df_copy[col] = df_copy[col].apply(
+                    lambda x: json.dumps(x) if isinstance(x, (list, dict)) else x
+                )
+        df_copy.to_parquet(full_path, index=False)
 
     print("Successfully saved to:", full_path)
