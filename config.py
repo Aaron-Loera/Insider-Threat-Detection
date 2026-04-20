@@ -163,3 +163,7 @@ if _ueba_override:
 else:
     UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{V}", f"ueba_dataset_{V}_train.parquet")
     UEBA_CSV = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{V}", f"ueba_dataset_{V}_train.csv")
+
+# UEBA Table A (PC-level drill-down, user/pc/day granularity)
+UEBA_A_PARQUET = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{V}", f"ueba_dataset_{V}a.parquet")
+UEBA_A_CSV = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{V}", f"ueba_dataset_{V}a.csv")

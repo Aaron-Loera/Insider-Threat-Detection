@@ -584,6 +584,7 @@ if BASE_DIR not in sys.path:
 from config import (
     ANALYST_TABLE_PARQUET, ANALYST_TABLE_CSV,
     UEBA_PARQUET, UEBA_CSV,
+    UEBA_A_PARQUET, UEBA_A_CSV,
     LIVE_OUTPUT, LIVE_PAUSE_FLAG, LIVE_SIM_SCRIPT,
 )
 
@@ -615,12 +616,12 @@ UEBA_COLS = [
 
 
 @st.cache_data(show_spinner=False)
-def load_ueba_3a():
+def load_ueba_a():
     """Load UEBA Table A — (user, pc, day) granular rows used for PC-level drill-down."""
-    if os.path.exists(UEBA_3A_PARQUET):
-        df = pd.read_parquet(UEBA_3A_PARQUET)
-    elif os.path.exists(UEBA_3A_CSV):
-        df = pd.read_csv(UEBA_3A_CSV)
+    if os.path.exists(UEBA_A_PARQUET):
+        df = pd.read_parquet(UEBA_A_PARQUET)
+    elif os.path.exists(UEBA_A_CSV):
+        df = pd.read_csv(UEBA_A_CSV)
         if "Unnamed: 0" in df.columns:
             df = df.drop(columns=["Unnamed: 0"])
     else:
@@ -710,9 +711,10 @@ def load_data():
 
 try:
     merged_df, user_risk, user_data_dict = load_data()
+    ueba_a_df = load_ueba_a()
     DATA_LOADED = True
 except Exception:
-    ueba_3a_df = None
+    ueba_a_df = None
     DATA_LOADED = False
 
 
@@ -1796,7 +1798,7 @@ if active_page == "Investigation":
             ("user",               "User"),
             ("day",                "Day"),
             ("risk_levels",        "AE Risk Band"),
-            ("percentile_rank",    "AE Percentile"),
+            ("ae_percentile_rank",    "AE Percentile"),
             ("anomaly_scores",     "IF Score"),
             ("if_percentile_rank", "IF Percentile"),
             ("if_risk_band",       "IF Risk Band"),
@@ -1914,10 +1916,10 @@ if active_page == "Investigation":
 
 
         # ── PC-Level Drill-Down (UEBA Table A) ──
-        if ueba_3a_df is not None:
-            _drill = ueba_3a_df[
-                (ueba_3a_df["user"] == selected_user) &
-                (ueba_3a_df["day"] == _ctx_day_ts)
+        if ueba_a_df is not None:
+            _drill = ueba_a_df[
+                (ueba_a_df["user"] == selected_user) &
+                (ueba_a_df["day"] == _ctx_day_ts)
             ].copy()
             _drop_cols = [c for c in ("user", "day") if c in _drill.columns]
             if _drop_cols:
@@ -2453,20 +2455,20 @@ if active_page == "Alerts":
 
         # Filter first
         alert_data = filtered_df[
-            (filtered_df["risk_levels"].isin(alert_risk)) &
-            (filtered_df["percentile_rank"] >= min_pctl)
+            (filtered_df["ae_risk_band"].isin(alert_risk)) &
+            (filtered_df["ae_percentile_rank"] >= min_pctl)
         ].copy()
 
         # Sort based on explicit outcome label
         if sort_choice == "Highest score first":
-            alert_data = alert_data.sort_values("percentile_rank", ascending=False)
+            alert_data = alert_data.sort_values("ae_percentile_rank", ascending=False)
         elif sort_choice == "Lowest score first":
-            alert_data = alert_data.sort_values("percentile_rank", ascending=True)
+            alert_data = alert_data.sort_values("ae_percentile_rank", ascending=True)
         elif sort_choice in ("Highest severity first", "Lowest severity first"):
             _asc = sort_choice == "Lowest severity first"
-            alert_data["_risk_sort_key"] = alert_data["risk_levels"].map(_RISK_ORDER).fillna(-1)
+            alert_data["_risk_sort_key"] = alert_data["ae_risk_band"].astype(str).map(_RISK_ORDER).fillna(-1)
             alert_data = alert_data.sort_values(
-                ["_risk_sort_key", "percentile_rank"],
+                ["_risk_sort_key", "ae_percentile_rank"],
                 ascending=[_asc, False],
             ).drop(columns=["_risk_sort_key"])
         elif sort_choice == "Most recent first":
@@ -2562,7 +2564,7 @@ if active_page == "Alerts":
 
                 with c_btn:
                     if st.button("Investigate →", key=f"al_inv_{i}", use_container_width=True):
-                        st.session_state["inv_user_search"] = user
+                        st.session_state["inv_user_select"] = user
                         st.session_state["inv_alert_context"] = {
                             "user": user,
                             "day": day_str,
