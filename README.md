@@ -121,12 +121,12 @@ The platform is composed of the following core modules:
 
 ## Team
 
-*Aaron Lorea - https://www.linkedin.com/in/aaronloera324/
-*Tyler Kees - https://www.linkedin.com/in/tyler-kees/
-*Melusi Senzanje - https://www.linkedin.com/in/melusisenzanje/
-*Melody Nnadi - https://www.linkedin.com/in/melodynnadi/
-*Hugo Margues - https://www.linkedin.com/in/hugomarquesnob/
-*Matthew Emanuel - https://www.linkedin.com/in/matthew-emanuel-1b168a340/
+* Aaron Lorea - https://www.linkedin.com/in/aaronloera324/
+* Tyler Kees - https://www.linkedin.com/in/tyler-kees/
+* Melusi Senzanje - https://www.linkedin.com/in/melusisenzanje/
+* Melody Nnadi - https://www.linkedin.com/in/melodynnadi/
+* Hugo Margues - https://www.linkedin.com/in/hugomarquesnob/
+* Matthew Emanuel - https://www.linkedin.com/in/matthew-emanuel-1b168a340/
 
 ---
 
