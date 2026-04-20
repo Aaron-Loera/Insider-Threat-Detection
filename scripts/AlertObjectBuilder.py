@@ -410,7 +410,7 @@ def save_table(df: pd.DataFrame, save_path: str) -> None:
         None:
     """
     # Ensuring output directory exists
-    output_dir = r"explainability\alert_table"
+    output_dir = os.path.join("explainability", "alert_table")
     os.makedirs(output_dir, exist_ok=True)
 
     format = save_path.split(".")[-1]

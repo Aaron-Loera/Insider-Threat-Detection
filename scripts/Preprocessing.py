@@ -907,27 +907,30 @@ def build_layer_a(
     return layer_a_matrix
 
 
-def save_dataset(dataset: pd.DataFrame, filename: str, output_dir: str=DEFAULT_OUTPUT_DIR) -> str:
+def save_dataset(dataset: pd.DataFrame, filename: str, output_dir: str=DEFAULT_OUTPUT_DIR, as_parquet: bool=False) -> str:
     """
-    Saves the UEBA-enhanced dataset to the specified path as a CSV file.
-    
+    Saves the UEBA-enhanced dataset to the specified path as a CSV or Parquet file.
+
     Args:
         dataset: The UEBA-enhanced dataset
-        file_name: The desired name of the CSV dataset
+        filename: The desired name of the dataset file
         output_dir: Directory where processed outputs are saved
-        
+        as_parquet: If True, saves as Parquet instead of CSV
+
     Returns:
         str: Full path to the saved dataset
     """
     # Ensures directory exists
     save_path = os.path.join(os.getcwd(), "processed_datasets", output_dir)
     os.makedirs(save_path, exist_ok=True)
-    
+
     # Creates full file path
     file_path = os.path.join(save_path, filename)
-    
-    # Saving the dataset
-    dataset.to_csv(file_path)
+
+    if as_parquet:
+        dataset.to_parquet(file_path, index=False)
+    else:
+        dataset.to_csv(file_path)
     print(f"Dataset successfully saved to: {file_path}")
 
     return file_path
