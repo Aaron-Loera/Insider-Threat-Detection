@@ -748,7 +748,7 @@ PLOTLY_LAYOUT = dict(
 )
 
 RISK_TIERS = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
-RISK_COLORS = {"CRITICAL": "#ff1744", "HIGH": "#e84545", "MEDIUM": "#d4a017", "LOW": "#3a86a8"}
+RISK_COLORS = {"CRITICAL": "#bb44f0", "HIGH": "#e84545", "MEDIUM": "#d4a017", "LOW": "#3a86a8"}
 
 # ──────────────────────────────────────────────────────────────
 # Alert context helpers
@@ -1505,7 +1505,7 @@ if active_page == "Overview":
             days = row.critical_count + row.high_count
             # Color badge based on score
             if score >= 95:
-                badge_color = "#ff1744"
+                badge_color = "#bb44f0"
                 badge_label = "CRITICAL"
             elif score >= 90:
                 badge_color = "#e84545"
@@ -2044,7 +2044,7 @@ if active_page == "Alerts":
                 score = row.max_percentile
                 days = int(row.critical_count + row.high_count)
                 if score >= 95:
-                    badge_color = "#ff1744"
+                    badge_color = "#bb44f0"
                     badge_label = "CRITICAL"
                 elif score >= 90:
                     badge_color = "#e84545"
@@ -2085,21 +2085,39 @@ if active_page == "Alerts":
                 st.markdown("<div style='border-bottom:1px solid #111;margin:0;'></div>", unsafe_allow_html=True)
 
         # Alert severity filter within this tab
-        alert_cols = st.columns([2, 2, 2, 6])
-        with alert_cols[0]:
-            alert_risk = st.multiselect("Severity", RISK_TIERS, default=["CRITICAL", "HIGH", "MEDIUM"], key="alert_sev")
-        with alert_cols[1]:
-            min_pctl = st.slider("Min Percentile", 0.0, 100.0, 0.0, key="min_pctl")
-        with alert_cols[2]:
-            max_results = st.number_input("Max Rows", min_value=10, max_value=10000, value=500, step=50, key="max_rows")
+        _severity_counts = {
+            tier: int((filtered_df["ae_risk_band"] == tier).sum()) for tier in RISK_TIERS
+        }
+
+        section_header("Filter by severity", "sh_top_users")
+
+        _sev_cols = st.columns([1, 1, 1, 1, 4])
+        _tier_checked = {}
+        for _idx, _tier in enumerate(RISK_TIERS):
+            _color = RISK_COLORS[_tier]
+            _count = _severity_counts[_tier]
+            with _sev_cols[_idx]:
+                _tier_checked[_tier] = st.checkbox(
+                    _tier,
+                    value=(_tier in ["CRITICAL", "HIGH"]),
+                    key=f"alert_sev_{_tier}",
+                )
+                st.markdown(
+                    f"<span style='background:{_color}22;color:{_color};font-size:9px;"
+                    f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 6px;"
+                    f"border:1px solid {_color}55;display:inline-block;margin-top:-6px;'>"
+                    f"{_count:,} alert{'s' if _count != 1 else ''}</span>",
+                    unsafe_allow_html=True,
+                )
+
+        alert_risk = [t for t, checked in _tier_checked.items() if checked]
 
         alert_data = filtered_df[
-            (filtered_df["ae_risk_band"].isin(alert_risk)) &
-            (filtered_df["ae_percentile_rank"] >= min_pctl)
-        ].sort_values("ae_percentile_rank", ascending=False).head(int(max_results))
+            (filtered_df["ae_risk_band"].isin(alert_risk))
+        ].sort_values("ae_percentile_rank", ascending=False)
 
         # Cap card rendering to keep the UI responsive
-        CARD_LIMIT = 100
+        CARD_LIMIT = 10
         total_alerts = len(alert_data)
         card_data = alert_data.head(CARD_LIMIT)
 
