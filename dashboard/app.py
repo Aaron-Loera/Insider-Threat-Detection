@@ -2328,7 +2328,7 @@ if active_page == "Alerts":
         _filter_bar("al_flt")
         filtered_df = _get_filtered_df()
 
-x        # Alert severity filter + sort controls
+        # Alert severity filter + sort controls
         alert_cols = st.columns([2, 2, 2, 4])
         with alert_cols[0]:
             alert_risk = st.multiselect("Severity", ["HIGH", "MEDIUM", "LOW"], default=["HIGH", "MEDIUM"], key="alert_sev")
