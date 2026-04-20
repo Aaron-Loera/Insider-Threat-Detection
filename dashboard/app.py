@@ -1717,7 +1717,6 @@ if active_page == "Investigation":
             ("anomaly_scores",     "IF Score"),
             ("if_percentile_rank", "IF Percentile"),
             ("if_risk_band",       "IF Risk Band"),
-            ("explanation",        "Explanation"),
         ]
 
         def _fmt_alert_val(col, val):
@@ -1863,16 +1862,22 @@ if active_page == "Investigation":
                 _drill_th_html = "".join(
                     f"<th style='font-family:JetBrains Mono,monospace;font-size:11px;font-weight:600;"
                     f"color:#aaaaaa;text-align:left;text-transform:uppercase;letter-spacing:1.2px;"
-                    f"white-space:nowrap;padding:0 28px 12px 0;border-bottom:1px solid #1a1a1a;"
-                    f"border-right:{'none' if col == _drill_last else '1px solid #1e1e1e'};"
+                    f"white-space:nowrap;padding-top:0;padding-bottom:12px;"
+                    f"padding-right:{'0' if col == _drill_last else '20px'};"
+                    f"padding-left:{'0' if col == _drill_cols[0] else '20px'};"
+                    f"border-bottom:1px solid #1a1a1a;"
+                    f"border-right:{'none' if col == _drill_last else '1px solid #2e2e2e'};"
                     f"min-width:130px;'>{col.replace('_', ' ')}</th>"
                     for col in _drill_cols
                 )
                 _drill_tbody_html = "".join(
                     "<tr>" + "".join(
                         f"<td style='font-family:JetBrains Mono,monospace;font-size:12px;color:#cccccc;"
-                        f"padding:10px 28px 10px 0;border-bottom:1px solid #111;vertical-align:middle;"
-                        f"white-space:nowrap;border-right:{'none' if col == _drill_last else '1px solid #1e1e1e'};"
+                        f"padding-top:10px;padding-bottom:10px;"
+                        f"padding-right:{'0' if col == _drill_last else '20px'};"
+                        f"padding-left:{'0' if col == _drill_cols[0] else '20px'};"
+                        f"border-bottom:1px solid #111;vertical-align:middle;white-space:nowrap;"
+                        f"border-right:{'none' if col == _drill_last else '1px solid #2e2e2e'};"
                         f"min-width:130px;'>{_fmt_alert_val(col, row[col])}</td>"
                         for col in _drill_cols
                     ) + "</tr>"
@@ -1890,9 +1895,6 @@ if active_page == "Investigation":
                     unsafe_allow_html=True,
                 )
 
-
-    # ── Anomaly Timeline ──
-    section_header("Anomaly Score Timeline", "sh_score_timeline")
 
     # ── Anomaly Timeline ──
     section_header("Anomaly Score Timeline", "sh_score_timeline")
