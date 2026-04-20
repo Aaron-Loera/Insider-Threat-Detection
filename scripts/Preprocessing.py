@@ -1,3 +1,4 @@
+import glob
 import os
 import numpy as np
 import pandas as pd
@@ -26,6 +27,7 @@ DTYPE_MAP = {
 TIMESTAMP_FORMAT = "%m/%d/%Y %H:%M:%S"
 
 LARGE_FILE_SOURCES = {"email", "http"}
+DEFAULT_SAMPLE_LOG_ROWS = 100_000
 
 INTERNAL_EMAIL_DOMAIN = "dtaa.com"
 LONG_URL_THRESHOLD = 90
@@ -54,17 +56,18 @@ SUSPICIOUS_DOMAINS = {
 }
 
 # Functions
-def load_raw_logs(cert_path: str) -> dict:
+def load_raw_logs(cert_path: str, sample_n: int | None = None) -> dict:
     """
     Loads the raw CERT log files needed for preprocessing. Small files are loaded eagerly
-    whereas large files are represented as {path: chunked=True} for downstream chunked
+    whereas large files are represented as {path: ..., chunked: True} for downstream chunked
     processing.
     
     Args:
         cert_path: The base path containing the CERT dataset
+        sample_n: If provided, loads only the first sample_n rows from each source.
         
     Returns:
-        dict: {file_name: DataFrame | {"path": str, "chunked": True}}
+        dict: {file_name: DataFrame | {"path": str, "chunked": True, "sample_n": int | None}}
     """
     file_map = {
         "logon":  "logon.csv",
@@ -85,7 +88,11 @@ def load_raw_logs(cert_path: str) -> dict:
             continue
         # Defers large files for later chunked loading
         if source_name in LARGE_FILE_SOURCES:
-            logs[source_name] = {"path": full_path, "chunked": True}
+            logs[source_name] = {
+                "path": full_path,
+                "chunked": True,
+                "sample_n": sample_n,
+            }
         # Loads small files with optimized dtypes
         else:
             applicable_dtype = {col: DTYPE_MAP[col] for col in USECOLS_MAP[source_name] if col in DTYPE_MAP}
@@ -93,12 +100,70 @@ def load_raw_logs(cert_path: str) -> dict:
                 full_path,
                 usecols=USECOLS_MAP[source_name],
                 dtype=applicable_dtype,
+                nrows=sample_n,
             )
             
     if missing_files:
         raise FileNotFoundError("Missing required CERT files: " + ", ".join(missing_files))
     
     return logs
+
+
+def load_ldap_profiles(ldap_path: str, users: set[str] | None = None) -> pd.DataFrame:
+    """
+    Loads monthly LDAP snapshot CSVs and optionally filters to the users active in a sampled log subset.
+
+    Args:
+        ldap_path: Directory containing LDAP snapshot CSVs.
+        users: Optional set of lowercase user IDs to filter LDAP rows to only those users.
+
+    Returns:
+        pd.DataFrame: Concatenated LDAP snapshot rows with lowercase user IDs and snapshot metadata.
+    """
+    ldap_files = sorted(glob.glob(os.path.join(ldap_path, "*.csv")))
+    if not ldap_files:
+        raise FileNotFoundError(f"No LDAP CSVs found in: {ldap_path}")
+
+    frames = []
+    for path in ldap_files:
+        snapshot = os.path.basename(path).replace(".csv", "")
+        df = pd.read_csv(path)
+        df["_snapshot"] = pd.to_datetime(snapshot)
+        df["user"] = df["user_id"].astype(str).str.lower()
+        if users is not None:
+            df = df[df["user"].isin(users)]
+        frames.append(df)
+
+    ldap_raw = pd.concat(frames, ignore_index=True)
+    print(
+        f"Loaded {len(ldap_files)} LDAP snapshots — {ldap_raw['user'].nunique()} unique users, {len(ldap_raw)} total rows"
+    )
+    return ldap_raw
+
+
+def build_user_profiles(ldap_raw: pd.DataFrame) -> pd.DataFrame:
+    """
+    Builds a per-user profile table from LDAP snapshot rows.
+
+    Args:
+        ldap_raw: Raw LDAP rows containing a lowercase `user` column and `_snapshot` datetime.
+
+    Returns:
+        pd.DataFrame: User profile table with only the most recent snapshot and an `is_active` flag.
+    """
+    latest_snapshot = ldap_raw["_snapshot"].max()
+
+    user_profiles = (
+        ldap_raw
+        .sort_values("_snapshot")
+        .groupby("user", as_index=False)
+        .last()
+        [["user", "employee_name", "role", "department", "functional_unit", "supervisor", "_snapshot"]]
+    )
+
+    user_profiles["is_active"] = user_profiles["_snapshot"] == latest_snapshot
+    user_profiles = user_profiles.drop(columns="_snapshot")
+    return user_profiles
 
 
 def normalize_shared_columns(df: pd.DataFrame, remove_cols: list=["id"], sort: bool=True) -> pd.DataFrame:
@@ -205,7 +270,13 @@ def extract_domain(url: str) -> str:
         return ""
     
     
-def load_log_in_chunks(filepath: str, usecols: list, dtype: dict, chunksize: int=50_000) -> pd.io.parsers.readers.TextFileReader:
+def load_log_in_chunks(
+    filepath: str,
+    usecols: list,
+    dtype: dict,
+    chunksize: int = 50_000,
+    max_rows: int | None = None
+) -> pd.io.parsers.readers.TextFileReader:
     """
     Returns an iterator consisting of DataFrames for processing large CSV files in fixed-size chunks.
     
@@ -214,12 +285,19 @@ def load_log_in_chunks(filepath: str, usecols: list, dtype: dict, chunksize: int
         usecols: The columns to load in from the CSV file
         dtype: Dict of dtype assignments for specific columns
         chunksize: Number of rows per chunk
+        max_rows: If provided, limits the total rows read from the file
         
     Returns:
         pd.io.parsers.TextFileReader: An iterable of DataFrames, one per chunk
     """
     applicable_dtype = {col: dtype[col] for col in usecols if col in dtype}
-    return pd.read_csv(filepath, usecols=usecols, dtype=applicable_dtype, chunksize=chunksize)
+    return pd.read_csv(
+        filepath,
+        usecols=usecols,
+        dtype=applicable_dtype,
+        chunksize=chunksize,
+        nrows=max_rows,
+    )
 
 
 def combine_partial_aggregations(partial_list: list, merge_cols: list) -> pd.DataFrame:
@@ -387,6 +465,7 @@ def extract_email_features_chunked(
     filepath: str,
     work_hours: tuple = (9, 17),
     chunksize: int = 50_000,
+    max_rows: int | None = None,
     return_identity_frame: bool = False
 ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """
@@ -409,7 +488,7 @@ def extract_email_features_chunked(
     partial_aggs = []
     identity_frames = []
 
-    for i, chunk in enumerate(load_log_in_chunks(filepath, USECOLS_MAP["email"], DTYPE_MAP, chunksize), start=1):
+    for i, chunk in enumerate(load_log_in_chunks(filepath, USECOLS_MAP["email"], DTYPE_MAP, chunksize, max_rows), start=1):
         print(f"  Email chunk {i}...")
         chunk = normalize_shared_columns(chunk, sort=False)
 
@@ -458,6 +537,7 @@ def extract_http_features_chunked(
     filepath: str,
     work_hours: tuple = (9, 17),
     chunksize: int = 50_000,
+    max_rows: int | None = None,
     return_identity_frame: bool = False
 ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """
@@ -480,7 +560,7 @@ def extract_http_features_chunked(
     partial_aggs = []
     identity_frames = []
 
-    for i, chunk in enumerate(load_log_in_chunks(filepath, USECOLS_MAP["http"], DTYPE_MAP, chunksize), start=1):
+    for i, chunk in enumerate(load_log_in_chunks(filepath, USECOLS_MAP["http"], DTYPE_MAP, chunksize, max_rows), start=1):
         print(f"  HTTP chunk {i}...")
         chunk = normalize_shared_columns(chunk, sort=False)
 
@@ -648,7 +728,12 @@ def add_pc_features(df: pd.DataFrame, min_history: int=10) -> pd.DataFrame:
     return df
 
 
-def build_layer_a(cert_path: str, work_hours: tuple = (9, 17), return_nunique_frames: bool = False) -> pd.DataFrame | tuple[pd.DataFrame, dict]:
+def build_layer_a(
+    cert_path: str,
+    work_hours: tuple = (9, 17),
+    return_nunique_frames: bool = False,
+    sample_n: int | None = DEFAULT_SAMPLE_LOG_ROWS
+) -> pd.DataFrame | tuple[pd.DataFrame, dict]:
     """
     Builds the complete layer A drill-down-ready dataset at the (user, pc, day) level.
 
@@ -664,8 +749,8 @@ def build_layer_a(cert_path: str, work_hours: tuple = (9, 17), return_nunique_fr
         If return_nunique_frames is True, returns a (layer_a_df, nunique_frames) tuple.
     """
     # Loading the raw log files from the CERT dataset
-    print("Loading raw CERT logs...")
-    raw_logs = load_raw_logs(cert_path)
+    print("Loading raw CERT logs (sample mode)...")
+    raw_logs = load_raw_logs(cert_path, sample_n=sample_n)
 
     # Normalizing and validating files
     normalized_logs = {}
@@ -687,9 +772,19 @@ def build_layer_a(cert_path: str, work_hours: tuple = (9, 17), return_nunique_fr
         print("Extracting device (USB) features...")
         device_ft = extract_device_features(normalized_logs["device"], work_hours)
         print("Extracting email features (chunked)...")
-        email_features, email_id = extract_email_features_chunked(normalized_logs["email"], work_hours, return_identity_frame=True)
+        email_features, email_id = extract_email_features_chunked(
+            normalized_logs["email"],
+            work_hours,
+            max_rows=raw_logs["email"]["sample_n"],
+            return_identity_frame=True,
+        )
         print("Extracting HTTP features (chunked)...")
-        http_features, http_id = extract_http_features_chunked(normalized_logs["http"], work_hours, return_identity_frame=True)
+        http_features, http_id = extract_http_features_chunked(
+            normalized_logs["http"],
+            work_hours,
+            max_rows=raw_logs["http"]["sample_n"],
+            return_identity_frame=True,
+        )
 
         feature_tables = [logon_ft, file_features, device_ft, email_features, http_features]
     else:
@@ -700,9 +795,17 @@ def build_layer_a(cert_path: str, work_hours: tuple = (9, 17), return_nunique_fr
         print("Extracting device (USB) features...")
         device_ft = extract_device_features(normalized_logs["device"], work_hours)
         print("Extracting email features (chunked)...")
-        email_ft = extract_email_features_chunked(normalized_logs["email"], work_hours)
+        email_ft = extract_email_features_chunked(
+            normalized_logs["email"],
+            work_hours,
+            max_rows=raw_logs["email"]["sample_n"],
+        )
         print("Extracting HTTP features (chunked)...")
-        http_ft = extract_http_features_chunked(normalized_logs["http"], work_hours)
+        http_ft = extract_http_features_chunked(
+            normalized_logs["http"],
+            work_hours,
+            max_rows=raw_logs["http"]["sample_n"],
+        )
         feature_tables = [logon_ft, file_ft, device_ft, email_ft, http_ft]
 
     # Merging the feature tables

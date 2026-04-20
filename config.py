@@ -46,6 +46,10 @@ CERT_PATH = _local_or("CERT_PATH", None)
 _insiders_default = os.path.join(CERT_PATH, "answers", "insiders.csv") if CERT_PATH else None
 INSIDERS_PATH = _local_or("INSIDERS_PATH", _insiders_default)
 
+# LDAP snapshots directory (monthly CSVs with user profile data)
+_ldap_default = os.path.join(CERT_PATH, "LDAP") if CERT_PATH else None
+LDAP_PATH = _local_or("LDAP_PATH", _ldap_default)
+
 
 # Active Model Version
 MODEL_VERSION = _local_or("MODEL_VERSION", "5")
