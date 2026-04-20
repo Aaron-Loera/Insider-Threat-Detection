@@ -27,19 +27,21 @@ import websockets
 
 # Paths (loaded from config.py)
 import config
-BASE_DIR       = config.BASE_DIR
-SCALER_PATH    = config.LIVE_SCALER_PATH
-ENCODER_PATH   = config.LIVE_ENCODER_PATH
-IF_PATH        = config.LIVE_IF_PATH
-IF_SCORES_PATH = config.LIVE_IF_SCORES_PATH
-DEFAULT_INPUT  = config.LIVE_DEFAULT_INPUT
-DEFAULT_OUTPUT = config.LIVE_OUTPUT
-PAUSE_FLAG     = config.LIVE_PAUSE_FLAG
+BASE_DIR                    = config.BASE_DIR
+SCALER_PATH                 = config.LIVE_SCALER_PATH
+ENCODER_PATH                = config.LIVE_ENCODER_PATH
+IF_PATH                     = config.LIVE_IF_PATH
+IF_SCORES_PATH              = config.LIVE_IF_SCORES_PATH
+IF_BASELINE_PATH            = config.LIVE_IF_BASELINE_PATH
+CALIBRATION_THRESHOLD_PATH  = config.LIVE_CALIBRATION_THRESHOLD_PATH
+DEFAULT_INPUT               = config.LIVE_DEFAULT_INPUT
+DEFAULT_OUTPUT              = config.LIVE_OUTPUT
+PAUSE_FLAG                  = config.LIVE_PAUSE_FLAG
 
-# Risk-band thresholds (percentile cutoffs, consistent with AlertObjectBuilder)
-CRITICAL_THRESH = 95.0
-HIGH_THRESH     = 90.0
-MEDIUM_THRESH   = 80.0
+# Fallback percentile thresholds (used only when calibration_thresholds.json is absent)
+_FALLBACK_CRITICAL = 95.0
+_FALLBACK_HIGH     = 90.0
+_FALLBACK_MEDIUM   = 80.0
 
 # ── Global WebSocket client registry ─────────────────────────────────────────
 _ws_clients: set = set()
@@ -69,13 +71,26 @@ class LiveScorer:
         self.iforest = UEBAIsolationForest()
         self.iforest.load(IF_PATH)
 
-        # Load historical scores for global percentile computation
+        # Load reference score distribution for percentile ranking.
+        # Prefer the clean calibration baseline; fall back to full training scores.
         print("[live_simulation] Loading reference score distribution …", flush=True)
-        self.ref_scores: np.ndarray = np.load(IF_SCORES_PATH)
+        _ref_path = IF_BASELINE_PATH if os.path.exists(IF_BASELINE_PATH) else IF_SCORES_PATH
+        self.ref_scores: np.ndarray = np.load(_ref_path)
+        _ref_label = "clean calibration baseline" if _ref_path == IF_BASELINE_PATH else "training distribution"
         print(
-            f"[live_simulation] Ready. Reference distribution: {len(self.ref_scores):,} rows.",
+            f"[live_simulation] Ready. Reference distribution ({_ref_label}): {len(self.ref_scores):,} rows.",
             flush=True,
         )
+
+        # Load calibrated absolute IF thresholds if available; fall back to percentile cutoffs.
+        self._if_absolute_thresholds: dict | None = None
+        if os.path.exists(CALIBRATION_THRESHOLD_PATH):
+            with open(CALIBRATION_THRESHOLD_PATH) as _f:
+                _cal = json.load(_f)
+            self._if_absolute_thresholds = _cal.get("if")
+            print("[live_simulation] Loaded calibrated absolute IF thresholds.", flush=True)
+        else:
+            print("[live_simulation] calibration_thresholds.json not found — using fallback percentile thresholds.", flush=True)
 
     def score_row(self, row_df: pd.DataFrame) -> dict:
         """Score one row and return a dict with all required fields."""
@@ -106,12 +121,20 @@ class LiveScorer:
         # Global percentile (fraction of reference scores strictly below this score)
         percentile = float(np.mean(self.ref_scores < raw_score) * 100)
 
-        if_risk_band = (
-            "CRITICAL" if percentile >= CRITICAL_THRESH else
-            "HIGH"     if percentile >= HIGH_THRESH     else
-            "MEDIUM"   if percentile >= MEDIUM_THRESH   else
-            "LOW"
-        )
+        # Risk band: use calibrated absolute thresholds when available, else percentile cutoffs
+        if self._if_absolute_thresholds is not None:
+            if_risk_band = "CRITICAL"
+            for label, thresh in self._if_absolute_thresholds.items():
+                if raw_score <= thresh:
+                    if_risk_band = label
+                    break
+        else:
+            if_risk_band = (
+                "CRITICAL" if percentile >= _FALLBACK_CRITICAL else
+                "HIGH"     if percentile >= _FALLBACK_HIGH     else
+                "MEDIUM"   if percentile >= _FALLBACK_MEDIUM   else
+                "LOW"
+            )
 
         payload = {
             **meta,

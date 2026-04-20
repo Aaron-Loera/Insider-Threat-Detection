@@ -11,13 +11,24 @@ class AlertObjectBuilder:
     producing a unified alert with per-signal percentile ranks and risk bands.
     """
 
-    def __init__(self, percentile_thresholds: dict | None=None, top_k: int=3) -> None:
+    def __init__(
+        self,
+        percentile_thresholds: dict | None = None,
+        top_k: int = 3,
+        ae_absolute_thresholds: dict | None = None,
+        if_absolute_thresholds: dict | None = None,
+    ) -> None:
         """
         Initializing the alert object builder.
 
         Args:
-            percentile_thresholds: The risk band thresholds (shared by both AE and IF signals)
+            percentile_thresholds: Legacy percentile-based risk band thresholds. Used for banding
+                only when ae_absolute_thresholds / if_absolute_thresholds are not provided.
             top_k: Number of top contributing features to extract
+            ae_absolute_thresholds: Absolute AE reconstruction-error thresholds calibrated against
+                a held-out clean population (e.g. {"LOW": t_low, "MEDIUM": t_med, "HIGH": t_hi,
+                "CRITICAL": inf}). When set, these replace percentile_thresholds for AE banding.
+            if_absolute_thresholds: Same as ae_absolute_thresholds but for IF anomaly scores.
 
         Returns:
             None:
@@ -34,6 +45,8 @@ class AlertObjectBuilder:
         self.top_k = top_k
         self.ae_baseline = None
         self.if_baseline = None
+        self.ae_absolute_thresholds = ae_absolute_thresholds
+        self.if_absolute_thresholds = if_absolute_thresholds
 
 
     def fit_ae_baseline(self, reconstruction_errors: np.ndarray) -> None:
@@ -113,6 +126,23 @@ class AlertObjectBuilder:
         return "CRITICAL"
 
 
+    def assign_risk_band_from_score(self, score: float, absolute_thresholds: dict) -> str:
+        """
+        Assigns a risk band by comparing a raw score against calibrated absolute thresholds.
+
+        Args:
+            score: Raw AE reconstruction error or IF anomaly score
+            absolute_thresholds: Ordered dict {"LOW": t_low, ..., "CRITICAL": inf}
+
+        Returns:
+            str: The risk band label
+        """
+        for label, thresh in absolute_thresholds.items():
+            if thresh is None or score <= thresh:
+                return label
+        return "CRITICAL"
+
+
     def extract_top_contributors(self, row: pd.Series) -> list:
         """
         Extracts the top-K contributing factors from a row.
@@ -154,13 +184,19 @@ class AlertObjectBuilder:
         # Computing AE percentile and risk band
         ae_error = row["total_reconstruction_error"]
         ae_percentile = self.compute_ae_percentile(ae_error)
-        ae_risk_band = self.assign_risk_band(ae_percentile)
+        if self.ae_absolute_thresholds is not None:
+            ae_risk_band = self.assign_risk_band_from_score(ae_error, self.ae_absolute_thresholds)
+        else:
+            ae_risk_band = self.assign_risk_band(ae_percentile)
         top_features = self.extract_top_contributors(row)
 
         # Computing IF percentile and risk band
         if_score = row["if_anomaly_score"]
         if_percentile = self.compute_if_percentile(if_score)
-        if_risk_band = self.assign_risk_band(if_percentile)
+        if self.if_absolute_thresholds is not None:
+            if_risk_band = self.assign_risk_band_from_score(if_score, self.if_absolute_thresholds)
+        else:
+            if_risk_band = self.assign_risk_band(if_percentile)
 
         # Computing composite signal (equal-weight fusion of AE and IF percentile ranks)
         composite_score = w1 * ae_percentile + w2 * if_percentile
@@ -234,17 +270,34 @@ class AlertObjectBuilder:
         if_pct = np.searchsorted(self.if_baseline, if_scores) / len(self.if_baseline) * 100
 
         # Vectorized risk band assignment
-        sorted_items = sorted(self.percentile_thresholds.items(), key=lambda x: x[1])
-        band_labels = [item[0] for item in sorted_items] # ["LOW","MEDIUM","HIGH","CRITICAL"]
-        thresh_vals = [item[1] for item in sorted_items] # [80, 90, 95, 100]
-        band_arr = np.array(band_labels)
-        max_idx = len(band_labels) - 1
+        # Composite always uses percentile thresholds (percentile-space fusion score)
+        sorted_pct_items = sorted(self.percentile_thresholds.items(), key=lambda x: x[1])
+        pct_band_labels = [item[0] for item in sorted_pct_items]
+        pct_thresh_vals = [item[1] for item in sorted_pct_items]
+        pct_band_arr = np.array(pct_band_labels)
+        max_idx = len(pct_band_labels) - 1
 
-        # Composite risk band assignment
-        ae_bands = band_arr[np.digitize(ae_pct, thresh_vals, right=True).clip(0, max_idx)]
-        if_bands = band_arr[np.digitize(if_pct, thresh_vals, right=True).clip(0, max_idx)]
         composite = w1 * ae_pct + w2 * if_pct
-        comp_bands = band_arr[np.digitize(composite, thresh_vals, right=True).clip(0, max_idx)]
+        comp_bands = pct_band_arr[np.digitize(composite, pct_thresh_vals, right=True).clip(0, max_idx)]
+
+        # AE and IF bands: use absolute thresholds when calibrated, else fall back to percentile
+        if self.ae_absolute_thresholds is not None:
+            abs_items = sorted(self.ae_absolute_thresholds.items(),
+                               key=lambda x: (x[1] is None, x[1] if x[1] is not None else 0))
+            abs_labels = np.array([item[0] for item in abs_items])
+            abs_vals = [float("inf") if item[1] is None else item[1] for item in abs_items]
+            ae_bands = abs_labels[np.digitize(ae_errors, abs_vals, right=True).clip(0, max_idx)]
+        else:
+            ae_bands = pct_band_arr[np.digitize(ae_pct, pct_thresh_vals, right=True).clip(0, max_idx)]
+
+        if self.if_absolute_thresholds is not None:
+            abs_items = sorted(self.if_absolute_thresholds.items(),
+                               key=lambda x: (x[1] is None, x[1] if x[1] is not None else 0))
+            abs_labels = np.array([item[0] for item in abs_items])
+            abs_vals = [float("inf") if item[1] is None else item[1] for item in abs_items]
+            if_bands = abs_labels[np.digitize(if_scores, abs_vals, right=True).clip(0, max_idx)]
+        else:
+            if_bands = pct_band_arr[np.digitize(if_pct, pct_thresh_vals, right=True).clip(0, max_idx)]
         both_high = np.isin(ae_bands, ["HIGH", "CRITICAL"]) & np.isin(if_bands, ["HIGH", "CRITICAL"])
 
         # Vectorized top-K extraction

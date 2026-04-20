@@ -14,7 +14,8 @@
 # OVERRIDING A PATH:
 #   Edit paths.local.py (copy from paths.local.example.py) and set any of:
 #     CERT_PATH, MODEL_VERSION, LIVE_MODEL_VERSION,
-#     ANALYST_TABLE, UEBA_DATASET
+#     ANALYST_TABLE, UEBA_DATASET, UEBA_CALIBRATION_PATH,
+#     AE_BASELINE_PATH, IF_BASELINE_PATH, CALIBRATION_THRESHOLD_PATH
 
 import importlib.util as _ilu
 import os
@@ -64,6 +65,19 @@ UEBA_PATH = _local_or(
     os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{V}", f"ueba_dataset_{V}_train.csv"),
 )
 
+# Calibration slice (held-out 10%, insider-free — used for baseline fitting and threshold calibration)
+UEBA_CALIBRATION_PATH = _local_or(
+    "UEBA_CALIBRATION_PATH",
+    os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{V}", f"ueba_dataset_{V}_calibration.parquet"),
+)
+
+# Calibration eval slice (same time window as UEBA_CALIBRATION_PATH but retains insider users;
+# used only for held-out AE/IF evaluation — never for baseline fitting)
+UEBA_CALIB_EVAL_PATH = _local_or(
+    "UEBA_CALIB_EVAL_PATH",
+    os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{V}", f"ueba_dataset_{V}_calibration_eval.parquet"),
+)
+
 
 # Preprocessing Output Directory (notebook: CERT_Preprocessing)
 DEFAULT_OUTPUT_DIR = _local_or(
@@ -90,6 +104,18 @@ AE_PATH = _local_or(
     os.path.join(BASE_DIR, "encoders", f"encoder_model_{V}", "autoencoder_model.keras"),
 )
 
+# Clean calibration baseline — AE reconstruction errors from the insider-free calibration slice
+AE_BASELINE_PATH = _local_or(
+    "AE_BASELINE_PATH",
+    os.path.join(BASE_DIR, "encoders", f"encoder_model_{V}", "ae_baseline_clean.npy"),
+)
+
+# Absolute risk-band thresholds calibrated against the clean calibration baseline
+CALIBRATION_THRESHOLD_PATH = _local_or(
+    "CALIBRATION_THRESHOLD_PATH",
+    os.path.join(BASE_DIR, "encoders", f"encoder_model_{V}", "calibration_thresholds.json"),
+)
+
 
 # Isolation Forest Artifacts
 SAVE_IFOREST_PATH = _local_or(
@@ -105,6 +131,12 @@ IF_SCORES_PATH = _local_or(
     os.path.join(BASE_DIR, "isolation_forests", f"iforest_model_{V}", "anomaly_scores.npy"),
 )
 SCORES_PATH = IF_SCORES_PATH  # alias used by Alert_Object_Builder
+
+# Clean calibration baseline — IF anomaly scores from the insider-free calibration slice
+IF_BASELINE_PATH = _local_or(
+    "IF_BASELINE_PATH",
+    os.path.join(BASE_DIR, "isolation_forests", f"iforest_model_{V}", "if_baseline_clean.npy"),
+)
 
 
 # Explainability Outputs
@@ -133,6 +165,18 @@ LIVE_IF_SCORES_PATH = _local_or(
     "LIVE_IF_SCORES_PATH",
     os.path.join(BASE_DIR, "isolation_forests", f"iforest_model_{LV}", "anomaly_scores.npy"),
 )
+LIVE_AE_BASELINE_PATH = _local_or(
+    "LIVE_AE_BASELINE_PATH",
+    os.path.join(BASE_DIR, "encoders", f"encoder_model_{LV}", "ae_baseline_clean.npy"),
+)
+LIVE_IF_BASELINE_PATH = _local_or(
+    "LIVE_IF_BASELINE_PATH",
+    os.path.join(BASE_DIR, "isolation_forests", f"iforest_model_{LV}", "if_baseline_clean.npy"),
+)
+LIVE_CALIBRATION_THRESHOLD_PATH = _local_or(
+    "LIVE_CALIBRATION_THRESHOLD_PATH",
+    os.path.join(BASE_DIR, "encoders", f"encoder_model_{LV}", "calibration_thresholds.json"),
+)
 _live_input_parquet = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{LV}", f"ueba_dataset_{LV}_test_stream.parquet")
 _live_input_csv     = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{LV}", f"ueba_dataset_{LV}_test_stream.csv")
 LIVE_DEFAULT_INPUT = _local_or(
@@ -156,7 +200,7 @@ else:
     ANALYST_TABLE_PARQUET = os.path.join(BASE_DIR, "explainability", "alert_table", f"alert_table_{V}.parquet")
     ANALYST_TABLE_CSV = os.path.join(BASE_DIR, "explainability", "alert_table", f"alert_table_{V}.csv")
 
-_ueba_override = _local_or("UEBA_DATASET", "")
+_ueba_override = _local_or("UEBA_PATH", "")
 if _ueba_override:
     UEBA_PARQUET = _ueba_override if _ueba_override.endswith(".parquet") else ""
     UEBA_CSV = _ueba_override if _ueba_override.endswith(".csv")     else _ueba_override
