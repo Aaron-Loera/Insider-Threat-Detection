@@ -1,45 +1,88 @@
 # Imports 
-import pandas as pd
-from sklearn.preprocessing import StandardScaler
-import tensorflow as tf
-from tensorflow.keras.models import load_model
 import os
 import joblib
-from scripts.UEBAIsolationForest import UEBAIsolationForest  
-import time
-import threading
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.models import load_model
+from scripts.UEBAIsolationForest import UEBAIsolationForest
+from scripts.Preprocessing import chronological_split  # re-export for backward compatibility
 
-# Split Data for Simulation
-def chronological_split(csv_path, split_ratio=0.9):
+__all__ = ["chronological_split", "get_insiders", "build_insider_mask", "get_scores"]
 
-    df = pd.read_csv(csv_path, index_col=0)
+import config
 
-    # Ensure sorted globally by time
-    df = df.sort_values("day")
+SCALER_PATH = config.SCALER_PATH
+ENCODER_PATH = config.ENCODER_PATH
+IF_PATH = config.IF_PATH
 
-    unique_days = df["day"].unique()
-    cutoff_index = int(len(unique_days) * split_ratio)
-    cutoff_day = unique_days[cutoff_index]
 
-    train_df = df[df["day"] <= cutoff_day]
-    test_df  = df[df["day"] > cutoff_day]
+def get_insiders(path: str, version: str | float, return_all: bool=False) -> pd.DataFrame:
+    """
+    Loads the raw insiders table and returns the scenarios for a specific version. If specified, the
+    full raw table across all CERT versions can be returned.
+    
+    Args:
+        path: The location of the insiders CSV file
+        version: CERT version to extract
+        return_all: If true, returns the full insider table along with the version-specific table
+        
+    Returns:
+        pd.DataFrame: A table describing the window of abnormal activity for each insider
+    """
+    df = pd.read_csv(path)
+    
+    # Normalizing table
+    df.columns = df.columns.str.strip()
+    df["user"] = df["user"].str.strip().str.lower()
+    df["start"] = pd.to_datetime(df["start"].str.strip())
+    df["end"] = pd.to_datetime(df["end"].str.strip())
+    df["start_day"] = df["start"].dt.normalize()
+    df["end_day"] = df["end"].dt.normalize()
+    
+    if isinstance(version, float):
+        version = str(version)
+    
+    # Extracting only version-specific insiders
+    insiders_df = df[df["dataset"].astype(str).str.strip() == version]
+    insiders_df = insiders_df[["user", "start_day", "end_day", "scenario"]].reset_index(drop=True)
+    
+    if return_all:
+        return insiders_df, df
+    else:
+        return insiders_df
+    
 
-    return train_df, test_df
+def build_insider_mask(df: pd.DataFrame, windows: pd.DataFrame) -> pd.Series:
+    """
+    Returns a boolean mask for any (user, day) pair that falls within a known threat window.
+    
+    Args:
+        df: The UEBA dataset intended for model training
+        windows: DataFrame holding the insider windows
+        
+    Returns:
+        pd.Series: A boolean mask where `False=normal` and `True=insider`
+    """
+    mask = pd.Series(False, index=df.index)
+    for _, row in windows.iterrows():
+        mask |= (
+            (df["user"] == row["user"]) &
+            (df["day"] >= row["start_day"]) &
+            (df["day"] <= row["end_day"])
+        )
+    return mask    
 
-# Split Table 
-train_df, test_df = chronological_split(r"processed_datasets\ueba_dataset.csv")
 
-# Convert to CSV
-train_df.to_csv("processed_datasets/train.csv", index=False)
-test_df.to_csv("processed_datasets/test_stream.csv", index=False)
-
-# Paths 
-SCALER_PATH = os.path.join(r"encoders\encoder_model_1\feature_scaler.pkl")
-ENCODER_PATH = os.path.join(r"encoders\encoder_model_1\encoder_model.keras")
-IF_PATH  = os.path.join(r"isolation_forests\iforest_model_1\iforest_model.pkl")
-
-# Take in raw data df then returns a df with userid and anomaly score.
-def get_scores(newData_df):
+def get_scores(newData_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Takes in a raw data and returns a DataFrame with a corresponding anomaly score.
+    
+    Args:
+        newData_df: The raw DataFrame
+        
+    Returns:
+        pd.DataFrame: DataFrame with corresponding anomaly score
+    """
     # Use the parameter, work on a copy
     live_df = newData_df.copy()
 
@@ -73,3 +116,5 @@ def get_scores(newData_df):
     result_df.index = newData_df.index
 
     return result_df
+
+

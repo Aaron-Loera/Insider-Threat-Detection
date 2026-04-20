@@ -118,7 +118,7 @@ st.markdown("""
     /* ── Sidebar section labels ── */
     .sidebar-section-label {
         font-family: 'JetBrains Mono', monospace;
-        font-size: 9px;
+        font-size: 11px;
         color: #444;
         text-transform: uppercase;
         letter-spacing: 2px;
@@ -144,7 +144,7 @@ st.markdown("""
     }
     .page-subtitle {
         font-family: 'Inter', sans-serif;
-        font-size: 13px;
+        font-size: 15px;
         color: #555;
         margin: 3px 0 0 0 !important;
         padding: 0 !important;
@@ -223,7 +223,7 @@ st.markdown("""
     }
     .alert-notice-title {
         font-family: 'JetBrains Mono', monospace;
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 700;
         letter-spacing: 2.5px;
         text-transform: uppercase;
@@ -240,7 +240,7 @@ st.markdown("""
     }
     .alert-notice-count {
         font-family: 'JetBrains Mono', monospace;
-        font-size: 11px;
+        font-size: 12px;
         color: #999;
         letter-spacing: 1px;
     }
@@ -255,7 +255,7 @@ st.markdown("""
         border: 1px solid #3a0000;
         padding: 6px 12px;
         font-family: 'JetBrains Mono', monospace;
-        font-size: 11px;
+        font-size: 12px;
         color: #cccccc;
         display: flex;
         align-items: center;
@@ -263,7 +263,7 @@ st.markdown("""
     }
     .alert-notice-row-item .u-id  { color: #ffffff; font-weight: 600; }
     .alert-notice-row-item .u-pct { color: #e84545; }
-    .alert-notice-row-item .u-days { color: #888; font-size: 10px; }
+    .alert-notice-row-item .u-days { color: #888; font-size: 11px; }
 
     /* ── KPI Cards ── */
     .kpi-scroll-wrapper {
@@ -314,7 +314,7 @@ st.markdown("""
         box-sizing: border-box;
     }
     .kpi-card h3 {
-        margin: 0; font-size: 11px; color: #666666; font-weight: 500;
+        margin: 0; font-size: 12px; color: #666666; font-weight: 500;
         text-transform: uppercase; letter-spacing: 1.5px;
         font-family: 'JetBrains Mono', monospace;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -326,7 +326,7 @@ st.markdown("""
         font-size: clamp(16px, 2.2vw, 28px);
     }
     .kpi-card p {
-        margin: 6px 0 0 0; font-size: 11px; color: #555555;
+        margin: 6px 0 0 0; font-size: 12px; color: #555555;
         font-family: 'JetBrains Mono', monospace;
         text-transform: uppercase; letter-spacing: 0.5px;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -334,10 +334,10 @@ st.markdown("""
 
     /* ── Section Headers ── */
     .section-header {
-        font-size: 13px;
+        font-size: 16px;
         font-weight: 600;
         color: #999999;
-        margin: 32px 0 16px 0;
+        margin: 32px 0 8px 0;
         padding-bottom: 10px;
         border-bottom: 1px solid #1a1a1a;
         text-transform: uppercase;
@@ -398,14 +398,14 @@ st.markdown("""
 
     /* ── Metric tweaks ── */
     [data-testid="stMetricValue"] {
-        font-size: 24px;
+        font-size: 26px;
         font-family: 'JetBrains Mono', monospace !important;
         font-weight: 600;
     }
     [data-testid="stMetricLabel"] {
         text-transform: uppercase;
         letter-spacing: 1px;
-        font-size: 11px !important;
+        font-size: 12px !important;
         font-family: 'JetBrains Mono', monospace !important;
         color: #666666 !important;
     }
@@ -493,17 +493,17 @@ st.markdown("""
     /* ── Responsive: Large screens (>1400px) ── */
     @media (min-width: 1401px) {
         .kpi-card h1 { font-size: 28px; }
-        .kpi-card h3 { font-size: 11px; }
-        .kpi-card p  { font-size: 11px; }
+        .kpi-card h3 { font-size: 12px; }
+        .kpi-card p  { font-size: 12px; }
     }
 
     /* ── Responsive: Medium screens (1024–1400px) ── */
     @media (max-width: 1400px) {
         .kpi-card { padding: 16px 18px; min-height: 110px; }
         .kpi-card h1 { font-size: 22px; }
-        .kpi-card h3 { font-size: 10px; letter-spacing: 1px; }
-        .kpi-card p  { font-size: 10px; }
-        .section-header { font-size: 12px; letter-spacing: 1.5px; }
+        .kpi-card h3 { font-size: 11px; letter-spacing: 1px; }
+        .kpi-card p  { font-size: 11px; }
+        .section-header { font-size: 14px; letter-spacing: 1.5px; }
     }
 
     /* ── Responsive: Small screens (768–1023px) ── */
@@ -511,11 +511,11 @@ st.markdown("""
         .block-container { padding-left: 1rem; padding-right: 1rem; }
         .kpi-card { padding: 14px 14px; min-height: 100px; }
         .kpi-card h1 { font-size: 20px; }
-        .kpi-card h3 { font-size: 9px; letter-spacing: 0.8px; }
-        .kpi-card p  { font-size: 9px; }
-        .section-header { font-size: 11px; margin: 20px 0 10px 0; }
-        [data-testid="stMetricValue"] { font-size: 20px; }
-        [data-testid="stMetricLabel"] { font-size: 10px !important; }
+        .kpi-card h3 { font-size: 10px; letter-spacing: 0.8px; }
+        .kpi-card p  { font-size: 10px; }
+        .section-header { font-size: 13px; margin: 20px 0 10px 0; }
+        [data-testid="stMetricValue"] { font-size: 22px; }
+        [data-testid="stMetricLabel"] { font-size: 11px !important; }
     }
 
     /* ── Responsive: Extra small (<768px) ── */
@@ -523,11 +523,11 @@ st.markdown("""
         .block-container { padding-left: 0.5rem; padding-right: 0.5rem; }
         .kpi-card { padding: 12px 12px; min-height: 90px; border-left-width: 2px; }
         .kpi-card h1 { font-size: 18px; }
-        .kpi-card h3 { font-size: 8px; }
-        .kpi-card p  { font-size: 8px; }
-        .section-header { font-size: 10px; letter-spacing: 1px; }
-        [data-testid="stMetricValue"] { font-size: 18px; }
-        [data-testid="stMetricLabel"] { font-size: 9px !important; }
+        .kpi-card h3 { font-size: 9px; }
+        .kpi-card p  { font-size: 9px; }
+        .section-header { font-size: 12px; letter-spacing: 1px; }
+        [data-testid="stMetricValue"] { font-size: 20px; }
+        [data-testid="stMetricLabel"] { font-size: 10px !important; }
     }
 
     /* ── Info popover button ── */
@@ -574,18 +574,18 @@ st.markdown("""
 # Data Loading
 # ──────────────────────────────────────────────────────────────
 
-# Resolve paths relative to this script so any team member can run it
+# Resolve the project root so config.py (at the root) is importable.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
-# Prefer Parquet (5-10x faster I/O); fall back to CSV
-ANALYST_TABLE_PARQUET = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_3.parquet")
-ANALYST_TABLE_CSV = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_3.csv")
-UEBA_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.parquet")
-UEBA_CSV = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3b.csv")
-UEBA_3A_PARQUET = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3a.parquet")
-UEBA_3A_CSV     = os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_3a.csv")
-LIVE_OUTPUT = os.path.join(BASE_DIR, "processed_datasets", "live_results.jsonl")
-LIVE_SIM_SCRIPT = os.path.join(BASE_DIR, "live_simulation.py")
+# All path configuration is centralized in config.py.  Per-contributor
+# overrides live in paths.local.py (gitignored). See paths.local.example.py.
+from config import (
+    ANALYST_TABLE_PARQUET, ANALYST_TABLE_CSV,
+    UEBA_PARQUET, UEBA_CSV,
+    LIVE_OUTPUT, LIVE_PAUSE_FLAG, LIVE_SIM_SCRIPT,
+)
 
 # Only load columns the dashboard actually uses
 UEBA_COLS = [
@@ -640,13 +640,6 @@ def load_data():
     else:
         analyst = pd.read_csv(ANALYST_TABLE_CSV)
 
-    # This will be removed once dashboard is adapted to new alert table layout
-    analyst = analyst.rename(columns={
-        "if_anomaly_score":   "anomaly_scores",
-        "ae_percentile_rank": "percentile_rank",
-        "ae_risk_band":       "risk_levels",
-    })
-
     # ── Load UEBA dataset ──
     if os.path.exists(UEBA_PARQUET):
         import pyarrow.parquet as pq
@@ -672,36 +665,51 @@ def load_data():
 
     # Merge — include alert-context columns from the alert table
     analyst_cols = [
-        "user", "day", "anomaly_scores", "percentile_rank", "risk_levels",
+        "user", "day", "if_anomaly_score", "ae_percentile_rank", "ae_risk_band",
         "top_contributors", "if_percentile_rank", "if_risk_band", "explanation",
     ]
     analyst_cols = [c for c in analyst_cols if c in analyst.columns]
-    merged = ueba.merge(analyst[analyst_cols], on=["user", "day"], how="inner")
+    merged = ueba.merge(analyst[analyst_cols], on=["user", "day"], how="left")
 
     # Pre-compute per-user risk summary (expensive groupby, do once)
     user_risk = (
         merged.groupby("user")
         .agg(
-            max_score=("anomaly_scores", "max"),
-            mean_score=("anomaly_scores", "mean"),
-            max_percentile=("percentile_rank", "max"),
+            max_score=("if_anomaly_score", "max"),
+            mean_score=("if_anomaly_score", "mean"),
+            max_percentile=("ae_percentile_rank", "max"),
             alert_days=("day", "nunique"),
-            high_count=("risk_levels", lambda x: (x == "HIGH").sum()),
-            medium_count=("risk_levels", lambda x: (x == "MEDIUM").sum()),
+            critical_count=("ae_risk_band", lambda x: (x == "CRITICAL").sum()),
+            high_count=("ae_risk_band", lambda x: (x == "HIGH").sum()),
+            medium_count=("ae_risk_band", lambda x: (x == "MEDIUM").sum()),
         )
         .reset_index()
         .sort_values("max_percentile", ascending=False)
     )
 
+    # Cast risk band to ordered categorical — makes .isin() and groupby ~3x faster
+    _risk_cat = pd.CategoricalDtype(
+        categories=["LOW", "MEDIUM", "HIGH", "CRITICAL"], ordered=True
+    )
+    for _col in ("ae_risk_band", "if_risk_band"):
+        if _col in merged.columns:
+            merged[_col] = merged[_col].astype(_risk_cat)
+
+    # Pre-group by user so the Investigation tab can do O(1) lookups instead
+    # of scanning the full 1.5M-row frame on every user switch
+    user_data_dict: dict[str, pd.DataFrame] = {
+        u: grp.reset_index(drop=True)
+        for u, grp in merged.groupby("user", observed=True)
+    }
+
     del ueba, analyst
     gc.collect()
 
-    return merged, user_risk
+    return merged, user_risk, user_data_dict
 
 
 try:
-    merged_df, user_risk = load_data()
-    ueba_3a_df = load_ueba_3a()
+    merged_df, user_risk, user_data_dict = load_data()
     DATA_LOADED = True
 except Exception:
     ueba_3a_df = None
@@ -716,10 +724,10 @@ if not DATA_LOADED:
     st.title("INSIDER THREAT DETECTION")
     st.error(
         "**Data files not found.** Please run the preprocessing and model notebooks first:\n\n"
-        "1. `CERT_Preprocessing.ipynb` → generates `processed_datasets/ueba_dataset.csv`\n"
+        "1. `CERT_Preprocessing.ipynb` → generates `processed_datasets/ueba_dataset_4/ueba_dataset_4_train.csv`\n"
         "2. `Autoencoder.ipynb` → trains the encoder model\n"
         "3. `Isolation_Forest.ipynb` → generates anomaly scores\n"
-        "4. `Alert_Object_Builder.ipynb` → generates `explainability/alert_table/alert_table_2.csv`"
+        "4. `Alert_Object_Builder.ipynb` → generates `explainability/alert_table/alert_table_4.csv`"
     )
     st.stop()
 
@@ -805,7 +813,8 @@ PLOTLY_LAYOUT = dict(
     yaxis=dict(gridcolor="#1a1a1a", zerolinecolor="#1a1a1a"),
 )
 
-RISK_COLORS = {"HIGH": "#e84545", "MEDIUM": "#d4a017", "LOW": "#3a86a8"}
+RISK_TIERS = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+RISK_COLORS = {"CRITICAL": "#bb44f0", "HIGH": "#e84545", "MEDIUM": "#d4a017", "LOW": "#3a86a8"}
 
 # ──────────────────────────────────────────────────────────────
 # Alert context helpers
@@ -1071,11 +1080,19 @@ def build_alert_summary(top_contributors_raw) -> str:
 # ──────────────────────────────────────────────────────────────
 
 NAV_PAGES = [
+    "Alerts",
     "Overview",
     "Investigation",
-    "Alerts",
     "Channels",
 ]
+
+# Live simulation state is shared across all pages.
+if "live_mode" not in st.session_state:
+    st.session_state.live_mode = False
+if "live_proc" not in st.session_state:
+    st.session_state.live_proc = None  # subprocess.Popen or None
+if "live_paused" not in st.session_state:
+    st.session_state.live_paused = False
 
 # Consume any programmatic navigation request NOW — before any widget is
 # instantiated — so we can write session_state.nav_page freely.
@@ -1119,6 +1136,50 @@ with st.sidebar:
 
     st.markdown("<div style='border-top:1px solid #1a1a1a; margin:8px 0 0 0;'></div>", unsafe_allow_html=True)
 
+    # ── Global live status (visible on every page) ──
+    _live_rows_received = 0
+    _stream_done = False
+    _live_session_active = bool(st.session_state.live_mode or st.session_state.live_paused)
+    if _live_session_active and os.path.exists(LIVE_OUTPUT):
+        with open(LIVE_OUTPUT, "r", encoding="utf-8") as _fh:
+            for _line in _fh:
+                _line = _line.strip()
+                if not _line:
+                    continue
+                try:
+                    _obj = json.loads(_line)
+                except json.JSONDecodeError:
+                    continue
+                if _obj.get("_eos"):
+                    _stream_done = True
+                else:
+                    _live_rows_received += 1
+
+    _proc = st.session_state.live_proc
+    _proc_running = _proc is not None and _proc.poll() is None
+    if not _live_session_active:
+        _status_color = "#666"
+        _status_label = "IDLE"
+    elif st.session_state.live_paused:
+        _status_color = "#f5a623"
+        _status_label = "PAUSED"
+    elif _proc_running:
+        _status_color = "#3c9"
+        _status_label = "RUNNING"
+    else:
+        _status_color = "#e84545"
+        _status_label = "COMPLETE" if _stream_done else "STOPPED"
+
+    st.markdown(
+        f"<div style='margin:12px 0 6px 0;'>"
+        f"<span style='font-family:JetBrains Mono,monospace; font-size:11px; "
+        f"color:{_status_color}; letter-spacing:1.5px;'>● {_status_label}</span>"
+        f"<span style='font-family:JetBrains Mono,monospace; font-size:10px; "
+        f"color:#555; margin-left:10px;'>{_live_rows_received:,} rows received</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
     st.markdown("<div style='border-top:1px solid #1a1a1a; margin:16px 0;'></div>", unsafe_allow_html=True)
     st.markdown(
         "<div style='font-family:JetBrains Mono,monospace; font-size:9px; color:#333; "
@@ -1143,7 +1204,7 @@ if "flt_date_start" not in st.session_state:
 if "flt_date_end" not in st.session_state:
     st.session_state.flt_date_end = _DS_MAX
 if "flt_risk" not in st.session_state:
-    st.session_state.flt_risk = ["HIGH", "MEDIUM", "LOW"]
+    st.session_state.flt_risk = list(RISK_TIERS)
 
 
 @st.dialog("Filters")
@@ -1160,7 +1221,7 @@ def show_filters():
     st.markdown("**Risk Levels**")
     rl = st.multiselect(
         "Risk Levels",
-        ["HIGH", "MEDIUM", "LOW"],
+        RISK_TIERS,
         default=st.session_state.flt_risk,
         label_visibility="collapsed",
         key="dlg_risk",
@@ -1172,22 +1233,68 @@ def show_filters():
             if isinstance(dr, tuple) and len(dr) == 2:
                 st.session_state.flt_date_start = dr[0]
                 st.session_state.flt_date_end = dr[1]
-            st.session_state.flt_risk = rl if rl else ["HIGH", "MEDIUM", "LOW"]
+            st.session_state.flt_risk = rl if rl else list(RISK_TIERS)
             st.rerun()
     with reset_col:
         if st.button("Reset", use_container_width=True):
             st.session_state.flt_date_start = _DS_MIN
             st.session_state.flt_date_end = _DS_MAX
-            st.session_state.flt_risk = ["HIGH", "MEDIUM", "LOW"]
+            st.session_state.flt_risk = list(RISK_TIERS)
             st.rerun()
 
 
-def _get_filtered_df():
+@st.cache_data(show_spinner=False)
+def _cached_filtered_df(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
+    """Return a cached slice of merged_df. Only recomputes when filters change."""
+    mask = (
+        merged_df["ae_risk_band"].isin(risk_levels)
+        & (merged_df["day"].dt.date >= date_start)
+        & (merged_df["day"].dt.date <= date_end)
+    )
+    return merged_df[mask].copy()
+
+
+def _get_filtered_df() -> pd.DataFrame:
     """Return merged_df sliced by current session_state filter values."""
-    mask = merged_df["risk_levels"].isin(st.session_state.flt_risk)
-    mask &= merged_df["day"].dt.date >= st.session_state.flt_date_start
-    mask &= merged_df["day"].dt.date <= st.session_state.flt_date_end
-    return merged_df[mask]
+    return _cached_filtered_df(
+        st.session_state.flt_date_start,
+        st.session_state.flt_date_end,
+        tuple(sorted(st.session_state.flt_risk)),
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _pop_channel_avgs() -> dict[str, float]:
+    """Pre-compute population channel averages from the full dataset (run once)."""
+    result: dict[str, float] = {}
+    for channel, feats in CHANNELS.items():
+        valid = [f for f in feats if f in merged_df.columns]
+        if valid:
+            result[channel] = float(merged_df[valid].mean().sum())
+    return result
+
+
+@st.cache_data(show_spinner=False)
+def _channel_time_series(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
+    """Cached channel-volume-by-day aggregation for the Channels tab."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    parts = []
+    for channel, feats in CHANNELS.items():
+        valid = [f for f in feats if f in fdf.columns]
+        if valid:
+            daily = fdf.groupby(fdf["day"].dt.date)[valid].sum().sum(axis=1).reset_index()
+            daily.columns = ["Date", "Volume"]
+            daily["Channel"] = channel
+            parts.append(daily)
+    return pd.concat(parts) if parts else pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False)
+def _corr_matrix(date_start, date_end, risk_levels: tuple, corr_feats: tuple) -> pd.DataFrame:
+    """Cached Pearson correlation matrix for the Channels tab."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    sample = fdf if len(fdf) <= MAX_PLOT_POINTS else fdf.sample(MAX_PLOT_POINTS, random_state=42)
+    return sample[list(corr_feats)].corr()
 
 
 _SECTION_INFO = {
@@ -1317,15 +1424,17 @@ _SECTION_INFO = {
 
 
 def section_header(title: str, key: str) -> None:
-    """Render a section header with a right-aligned ⓘ info popover."""
-    c_title, c_info = st.columns([12, 1])
-    c_title.markdown(f"<div class='section-header'>{title}</div>", unsafe_allow_html=True)
-    with c_info:
-        st.markdown("<div style='padding-top:28px;'>", unsafe_allow_html=True)
-        with st.popover("ⓘ", use_container_width=True):
-            body = _SECTION_INFO.get(title, "No description available.")
-            st.markdown(body)
-        st.markdown("</div>", unsafe_allow_html=True)
+    """Render a section header with an optional ⓘ info popover."""
+    info = _SECTION_INFO.get(title, "")
+    if info:
+        _hdr_left, _hdr_right = st.columns([9, 1], vertical_alignment="bottom")
+        with _hdr_left:
+            st.markdown(f"<div class='section-header'>{title}</div>", unsafe_allow_html=True)
+        with _hdr_right:
+            with st.popover("ⓘ", use_container_width=True):
+                st.markdown(info, unsafe_allow_html=True)
+    else:
+        st.markdown(f"<div class='section-header'>{title}</div>", unsafe_allow_html=True)
 
 
 def _filter_bar(key: str):
@@ -1396,68 +1505,25 @@ if active_page == "Overview":
     _filter_bar("ov_flt")
     filtered_df = _get_filtered_df()
 
-    # ── Critical Alert Notice ──────────────────────────────────
-    _high_df = filtered_df[filtered_df["risk_levels"] == "HIGH"]
-    _high_user_count = _high_df["user"].nunique()
-    _high_record_count = len(_high_df)
-
-    if _high_user_count > 0:
-        # Top 5 users by peak percentile (or anomaly score fallback)
-        _top_alert_users = (
-            _high_df.groupby("user", observed=True)
-            .agg(
-                peak_pct=("percentile_rank", "max") if "percentile_rank" in _high_df.columns else ("anomaly_scores", "max"),
-                high_days=("risk_levels", "count"),
-            )
-            .sort_values("peak_pct", ascending=False)
-            .head(5)
-            .reset_index()
-        )
-
-        _user_pills = ""
-        for _, _row in _top_alert_users.iterrows():
-            _user_pills += (
-                f"<div class='alert-notice-row-item'>"
-                f"<span class='u-id'>{_row['user']}</span>"
-                f"<span class='u-pct'>P{_row['peak_pct']:.0f}</span>"
-                f"<span class='u-days'>{int(_row['high_days'])} high-risk day{'s' if _row['high_days'] != 1 else ''}</span>"
-                f"</div>"
-            )
-
-        _notice_html = (
-            "<div class='alert-notice-banner'>"
-            "<div class='alert-notice-header'>"
-            f"<span class='alert-notice-title'>Active Alerts Requiring Immediate Attention</span>"
-            f"<span class='alert-notice-count'>{_high_user_count:,} high-risk user{'s' if _high_user_count != 1 else ''} &nbsp;&middot;&nbsp; {_high_record_count:,} flagged record{'s' if _high_record_count != 1 else ''}</span>"
-            "</div>"
-            f"<div class='alert-notice-rows'>{_user_pills}</div>"
-            "</div>"
-        )
-        st.markdown(_notice_html, unsafe_allow_html=True)
-
-        if st.button("View All Alerts \u2192", key="ov_goto_alerts", type="primary"):
-            st.session_state._nav_request = "Alerts"
-            st.rerun()
-
-        st.markdown("<div style='margin-bottom:4px;'></div>", unsafe_allow_html=True)
-
     total_users = filtered_df["user"].nunique()
     total_records = len(filtered_df)
-    high_risk_users = filtered_df[filtered_df["risk_levels"] == "HIGH"]["user"].nunique()
-    medium_risk_users = filtered_df[filtered_df["risk_levels"] == "MEDIUM"]["user"].nunique()
-    avg_anomaly = filtered_df["anomaly_scores"].mean()
-    detection_rate = (filtered_df["risk_levels"].isin(["HIGH", "MEDIUM"]).sum() / max(len(filtered_df), 1)) * 100
+    critical_risk_users = filtered_df[filtered_df["ae_risk_band"] == "CRITICAL"]["user"].nunique()
+    high_risk_users = filtered_df[filtered_df["ae_risk_band"] == "HIGH"]["user"].nunique()
+    medium_risk_users = filtered_df[filtered_df["ae_risk_band"] == "MEDIUM"]["user"].nunique()
+    avg_anomaly = filtered_df["if_anomaly_score"].mean()
+    detection_rate = (filtered_df["ae_risk_band"].isin(["CRITICAL", "HIGH", "MEDIUM"]).sum() / max(len(filtered_df), 1)) * 100
 
     st.markdown(
         "<div class='kpi-scroll-wrapper'>"
         "<div class='kpi-scroll-arrow' id='kpi-arrow-left'>&#8592;</div>"
         f"<div class='kpi-scroll-row' id='kpi-row'>"
         f"<div class='kpi-card' style='border-color:#ffffff'><h3>Users Monitored</h3><h1 style='color:#ffffff'>{total_users:,}</h1><p>Active in period</p></div>"
-        f"<div class='kpi-card' style='border-color:#e84545'><h3>High Risk</h3><h1 style='color:#e84545'>{high_risk_users}</h1><p>&ge; 95th percentile</p></div>"
+        f"<div class='kpi-card' style='border-color:#ff1744'><h3>Critical Risk</h3><h1 style='color:#ff1744'>{critical_risk_users}</h1><p>&ge; 95th percentile</p></div>"
+        f"<div class='kpi-card' style='border-color:#e84545'><h3>High Risk</h3><h1 style='color:#e84545'>{high_risk_users}</h1><p>&ge; 90th percentile</p></div>"
         f"<div class='kpi-card' style='border-color:#d4a017'><h3>Medium Risk</h3><h1 style='color:#d4a017'>{medium_risk_users}</h1><p>&ge; 80th percentile</p></div>"
         f"<div class='kpi-card' style='border-color:#666666'><h3>Total Records</h3><h1 style='color:#cccccc'>{total_records:,}</h1><p>User-day observations</p></div>"
         f"<div class='kpi-card' style='border-color:#666666'><h3>Avg Anomaly Score</h3><h1 style='color:#cccccc'>{avg_anomaly:.4f}</h1><p>Across all records</p></div>"
-        f"<div class='kpi-card' style='border-color:#666666'><h3>Detection Rate</h3><h1 style='color:#cccccc'>{detection_rate:.1f}%</h1><p>Medium + High alerts</p></div>"
+        f"<div class='kpi-card' style='border-color:#666666'><h3>Detection Rate</h3><h1 style='color:#cccccc'>{detection_rate:.1f}%</h1><p>Medium + High + Critical alerts</p></div>"
         "</div>"
         "<div class='kpi-scroll-arrow' id='kpi-arrow-right'>&#8594;</div>"
         "</div>",
@@ -1488,7 +1554,7 @@ if active_page == "Overview":
 
     with col_left:
         section_header("Risk Distribution", "sh_risk_dist")
-        risk_counts = filtered_df["risk_levels"].value_counts().reset_index()
+        risk_counts = filtered_df["ae_risk_band"].value_counts().reset_index()
         risk_counts.columns = ["Risk Level", "Count"]
         fig_donut = px.pie(
             risk_counts, values="Count", names="Risk Level",
@@ -1505,7 +1571,7 @@ if active_page == "Overview":
     with col_right:
         section_header("Alert Trend Over Time", "sh_alert_trend")
         daily_alerts = (
-            filtered_df.groupby([filtered_df["day"].dt.date, "risk_levels"])
+            filtered_df.groupby([filtered_df["day"].dt.date, "ae_risk_band"])
             .size()
             .reset_index(name="count")
         )
@@ -1523,7 +1589,7 @@ if active_page == "Overview":
     with col_left2:
         section_header("Top 10 Riskiest Users", "sh_top_users")
         st.markdown(
-            "<p style='font-family:Inter,sans-serif;font-size:12px;color:#555;margin:0 0 12px 0;'>"
+            "<p style='font-family:Inter,sans-serif;font-size:13px;color:#555;margin:0 0 12px 0;'>"
             "Click a user to open their investigation profile.</p>",
             unsafe_allow_html=True,
         )
@@ -1531,34 +1597,37 @@ if active_page == "Overview":
         for rank, row in enumerate(top_users.itertuples(), start=1):
             uid = row.user
             score = row.max_percentile
-            days = row.high_count
+            days = row.critical_count + row.high_count
             # Color badge based on score
-            if score >= 80:
-                badge_color = "#e84545"
+            if score >= 95:
+                badge_color = "#bb44f0"
                 badge_label = "CRITICAL"
-            elif score >= 60:
-                badge_color = "#d4a017"
+            elif score >= 90:
+                badge_color = "#e84545"
                 badge_label = "HIGH"
+            elif score >= 80:
+                badge_color = "#d4a017"
+                badge_label = "MEDIUM"
             else:
-                badge_color = "#4a9eff"
-                badge_label = "ELEVATED"
+                badge_color = "#3a86a8"
+                badge_label = "LOW"
 
             col_rank, col_info, col_btn = st.columns([1, 5, 3])
             with col_rank:
                 st.markdown(
-                    f"<div style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:13px;"
                     f"color:#444;font-weight:600;padding-top:4px;text-align:center;'>#{rank}</div>",
                     unsafe_allow_html=True,
                 )
             with col_info:
                 st.markdown(
                     f"<div style='padding:2px 0 1px 0;'>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:13px;"
                     f"color:#e0e0e0;font-weight:600;'>{uid}</span>"
-                    f"&nbsp;&nbsp;<span style='background:{badge_color}22;color:{badge_color};font-size:9px;"
+                    f"&nbsp;&nbsp;<span style='background:{badge_color}22;color:{badge_color};font-size:10px;"
                     f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 5px;"
                     f"border:1px solid {badge_color}55;'>{badge_label}</span>"
-                    f"<br><span style='font-family:Inter,sans-serif;font-size:10px;"
+                    f"<br><span style='font-family:Inter,sans-serif;font-size:11px;"
                     f"color:#555;line-height:1.5;'>"
                     f"Percentile {score:.1f} &middot; {days} high-risk day{'s' if days != 1 else ''}</span>"
                     f"</div>",
@@ -1576,9 +1645,9 @@ if active_page == "Overview":
         # Sample for histogram to avoid sending 2M+ points to Plotly
         hist_df = filtered_df if len(filtered_df) <= MAX_PLOT_POINTS else filtered_df.sample(MAX_PLOT_POINTS, random_state=42)
         fig_hist = px.histogram(
-            hist_df, x="anomaly_scores", nbins=80,
-            color="risk_levels", color_discrete_map=RISK_COLORS,
-            labels={"anomaly_scores": "Anomaly Score", "risk_levels": "Risk Level"},
+            hist_df, x="if_anomaly_score", nbins=80,
+            color="ae_risk_band", color_discrete_map=RISK_COLORS,
+            labels={"if_anomaly_score": "Anomaly Score", "ae_risk_band": "Risk Level"},
         )
         fig_hist.update_layout(**PLOTLY_LAYOUT, height=440, barmode="overlay")
         fig_hist.update_traces(opacity=0.75)
@@ -1588,9 +1657,13 @@ if active_page == "Overview":
     if CROSS_FLAGS:
         section_header("Cross-Channel Risk Flags (Global)", "sh_cross_flags")
         _flag_info = [
-            ("usb_file_activity_flag",     "USB + File Write",      "#e84545"),
-            ("off_hours_activity_flag",    "Off-Hours Activity",    "#d4a017"),
-            ("external_comm_activity_flag","External Communication","#3a86a8"),
+            ("usb_file_activity_flag",      "USB + File Write",      "#e84545"),
+            ("off_hours_activity_flag",     "Off-Hours Activity",    "#d4a017"),
+            ("external_comm_activity_flag", "External Communication","#3a86a8"),
+            ("jobsite_usb_activity_flag",   "Job Site + USB",        "#9b59b6"),
+            ("suspicious_upload_flag",      "Suspicious Upload",     "#e67e22"),
+            ("cloud_upload_flag",           "Cloud Upload",          "#00b4d8"),
+            ("non_primary_pc_risk_flag",    "Non-Primary PC",        "#7f8c8d"),
         ]
         _cards_html = ""
         for flag, label, color in _flag_info:
@@ -1600,12 +1673,12 @@ if active_page == "Overview":
                 _cards_html += (
                     f"<div style='flex:1;background:#0a0a0a;border:1px solid #1a1a1a;"
                     f"border-left:3px solid {color};padding:14px 18px;min-width:160px;'>"
-                    f"<div style='font-family:JetBrains Mono,monospace;font-size:10px;color:#555;"
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;color:#555;"
                     f"text-transform:uppercase;letter-spacing:1.5px;'>{label}</div>"
                     f"<div style='display:flex;align-items:baseline;gap:8px;margin-top:8px;'>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:22px;"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:24px;"
                     f"color:{color};font-weight:600;'>{count:,}</span>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
                     f"color:#444;'>{pct:.1f}%</span>"
                     f"</div></div>"
                 )
@@ -1647,26 +1720,35 @@ if active_page == "Investigation":
         st.info("Select a user above to begin investigation. Users are sorted by risk (highest first).")
         st.stop()
 
-    # Clear stale alert context if the user was changed manually
-    if st.session_state.get("inv_alert_context", {}).get("user") != selected_user:
-        st.session_state.pop("inv_alert_context", None)
-
-    user_data = filtered_df[filtered_df["user"] == selected_user].sort_values("day")
+    # O(1) lookup from pre-grouped dict — avoids scanning 1.5 M rows per user switch
+    _u_rows = user_data_dict.get(selected_user, pd.DataFrame())
+    if not _u_rows.empty:
+        _u_mask = (
+            _u_rows["ae_risk_band"].isin(st.session_state.flt_risk)
+            & (_u_rows["day"].dt.date >= st.session_state.flt_date_start)
+            & (_u_rows["day"].dt.date <= st.session_state.flt_date_end)
+        )
+        user_data = _u_rows[_u_mask].sort_values("day")
+    else:
+        user_data = pd.DataFrame()
 
     if user_data.empty:
         st.warning("No data for this user in the current filter range.")
         st.stop()
 
     # ── User KPI Row ──
-    u1, u2, u3, u4, u5 = st.columns(5)
-    u_max_score = user_data["anomaly_scores"].max()
-    u_max_pctl = user_data["percentile_rank"].max()
-    u_high_days = (user_data["risk_levels"] == "HIGH").sum()
-    u_med_days = (user_data["risk_levels"] == "MEDIUM").sum()
+    u1, u2, u3, u4, u5, u6 = st.columns(6)
+    u_max_score = user_data["if_anomaly_score"].max()
+    u_max_pctl = user_data["ae_percentile_rank"].max()
+    u_crit_days = (user_data["ae_risk_band"] == "CRITICAL").sum()
+    u_high_days = (user_data["ae_risk_band"] == "HIGH").sum()
+    u_med_days = (user_data["ae_risk_band"] == "MEDIUM").sum()
     u_total_days = len(user_data)
 
     # Determine overall user risk label
     if u_max_pctl >= 95:
+        u_risk_label, u_risk_color = "CRITICAL", "#ff1744"
+    elif u_max_pctl >= 90:
         u_risk_label, u_risk_color = "HIGH", "#ff6b6b"
     elif u_max_pctl >= 80:
         u_risk_label, u_risk_color = "MEDIUM", "#feca57"
@@ -1675,9 +1757,10 @@ if active_page == "Investigation":
 
     u1.metric("Overall Risk", u_risk_label)
     u2.metric("Peak Percentile", f"{u_max_pctl:.1f}")
-    u3.metric("High-Risk Days", u_high_days)
-    u4.metric("Medium-Risk Days", u_med_days)
-    u5.metric("Days Observed", u_total_days)
+    u3.metric("Critical-Risk Days", u_crit_days)
+    u4.metric("High-Risk Days", u_high_days)
+    u5.metric("Medium-Risk Days", u_med_days)
+    u6.metric("Days Observed", u_total_days)
 
         # ── Alert Context Summary (shown when navigating from Alerts tab) ──
     _alert_ctx = st.session_state.get("inv_alert_context")
@@ -1900,17 +1983,17 @@ if active_page == "Investigation":
     section_header("Anomaly Score Timeline", "sh_score_timeline")
     fig_timeline = go.Figure()
     fig_timeline.add_trace(go.Scatter(
-        x=user_data["day"], y=user_data["anomaly_scores"],
+        x=user_data["day"], y=user_data["if_anomaly_score"],
         mode="lines+markers", name="Anomaly Score",
         line=dict(color="#ffffff", width=1.5),
         marker=dict(size=4, color="#ffffff"),
     ))
     # Color markers by risk level
     for risk, color in RISK_COLORS.items():
-        subset = user_data[user_data["risk_levels"] == risk]
+        subset = user_data[user_data["ae_risk_band"] == risk]
         if not subset.empty:
             fig_timeline.add_trace(go.Scatter(
-                x=subset["day"], y=subset["anomaly_scores"],
+                x=subset["day"], y=subset["if_anomaly_score"],
                 mode="markers", name=risk,
                 marker=dict(size=8, color=color, symbol="square", line=dict(width=1, color="#000")),
 
@@ -1932,7 +2015,7 @@ if active_page == "Investigation":
             if valid_feats:
                 radar_categories.append(channel)
                 user_vals.append(user_data[valid_feats].mean().sum())
-                pop_vals.append(filtered_df[valid_feats].mean().sum())
+                pop_vals.append(_pop_channel_avgs().get(channel, 0.0))
 
         if radar_categories:
             fig_radar = go.Figure()
@@ -1978,9 +2061,13 @@ if active_page == "Investigation":
     if CROSS_FLAGS:
         section_header("Cross-Channel Risk Indicators", "sh_cross_ind")
         _flag_detail = [
-            ("usb_file_activity_flag",     "USB + File Write",   "USB + file write on same day", "#e84545"),
-            ("off_hours_activity_flag",    "Off-Hours Activity", "Outside 9 AM \u2013 5 PM",     "#d4a017"),
-            ("external_comm_activity_flag","External Comms",     "Emails to external domains",   "#3a86a8"),
+            ("usb_file_activity_flag",      "USB + File Write",   "USB + file write on same day",           "#e84545"),
+            ("off_hours_activity_flag",     "Off-Hours Activity", "Outside 9 AM \u2013 5 PM",               "#d4a017"),
+            ("external_comm_activity_flag", "External Comms",     "Emails to external domains",             "#3a86a8"),
+            ("jobsite_usb_activity_flag",   "Job Site + USB",     "Job-site browsing + USB on same day",    "#9b59b6"),
+            ("suspicious_upload_flag",      "Suspicious Upload",  "HTTP upload to suspicious domain",       "#e67e22"),
+            ("cloud_upload_flag",           "Cloud Upload",       "HTTP upload to cloud storage",           "#00b4d8"),
+            ("non_primary_pc_risk_flag",    "Non-Primary PC",     "Sensitive activity from atypical endpoint", "#7f8c8d"),
         ]
         _total = len(user_data)
         _ucards = ""
@@ -1991,15 +2078,15 @@ if active_page == "Investigation":
                 _ucards += (
                     f"<div style='flex:1;background:#0a0a0a;border:1px solid #1a1a1a;"
                     f"border-left:3px solid {color};padding:14px 18px;min-width:160px;'>"
-                    f"<div style='font-family:JetBrains Mono,monospace;font-size:10px;color:#555;"
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;color:#555;"
                     f"text-transform:uppercase;letter-spacing:1.5px;'>{label}</div>"
                     f"<div style='display:flex;align-items:baseline;gap:8px;margin-top:8px;'>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:20px;"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:22px;"
                     f"color:{color};font-weight:600;'>{triggered}</span>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
                     f"color:#444;'>/ {_total} days &middot; {pct:.0f}%</span>"
                     f"</div>"
-                    f"<div style='font-family:Inter,sans-serif;font-size:10px;color:#333;"
+                    f"<div style='font-family:Inter,sans-serif;font-size:11px;color:#333;"
                     f"margin-top:6px;'>{desc}</div>"
                     f"</div>"
                 )
@@ -2010,7 +2097,7 @@ if active_page == "Investigation":
 
     # ── Raw Activity Table ──
     section_header("Raw Activity Records", "sh_raw_records")
-    display_cols = ["day", "risk_levels", "anomaly_scores", "percentile_rank"] + RAW_FEATURES + CROSS_FLAGS
+    display_cols = ["day", "ae_risk_band", "if_anomaly_score", "ae_percentile_rank"] + RAW_FEATURES + CROSS_FLAGS
     display_cols = [c for c in display_cols if c in user_data.columns]
     st.dataframe(
         user_data[display_cols].sort_values("day", ascending=False),
@@ -2022,12 +2109,6 @@ if active_page == "Investigation":
 # PAGE: Alerts
 # ══════════════════════════════════════════════════════════════
 
-# ── Initialise live-mode session state ────────────────────────
-if "live_mode" not in st.session_state:
-    st.session_state.live_mode = False
-if "live_proc" not in st.session_state:
-    st.session_state.live_proc = None  # subprocess.Popen or None
-
 if active_page == "Alerts":
     st.markdown(
         "<div class='page-header-block'>"
@@ -2038,13 +2119,15 @@ if active_page == "Alerts":
     )
 
     # ── Live-simulation control row ────────────────────────────
-    ctrl_left, ctrl_right = st.columns([3, 9])
-    with ctrl_left:
+    ctrl_start, ctrl_pause, ctrl_right = st.columns([3, 2, 7])
+    with ctrl_start:
         if not st.session_state.live_mode:
             if st.button("▶ START LIVE SIMULATION", key="start_live", use_container_width=True):
-                # Clear any previous output
+                # Clear any previous output and stale pause flag
                 if os.path.exists(LIVE_OUTPUT):
                     os.remove(LIVE_OUTPUT)
+                if os.path.exists(LIVE_PAUSE_FLAG):
+                    os.remove(LIVE_PAUSE_FLAG)
                 # Launch the unified simulation script as a subprocess
                 proc = subprocess.Popen(
                     [sys.executable, LIVE_SIM_SCRIPT, "--interval", "0.5"],
@@ -2052,6 +2135,7 @@ if active_page == "Alerts":
                 )
                 st.session_state.live_proc = proc
                 st.session_state.live_mode = True
+                st.session_state.live_paused = False
                 st.rerun()
         else:
             if st.button("⏹ STOP LIVE SIMULATION", key="stop_live", use_container_width=True):
@@ -2062,9 +2146,27 @@ if active_page == "Alerts":
                         proc.wait(timeout=3)
                     except subprocess.TimeoutExpired:
                         proc.kill()
+                # Remove pause flag so the process isn't blocked on next start
+                if os.path.exists(LIVE_PAUSE_FLAG):
+                    os.remove(LIVE_PAUSE_FLAG)
                 st.session_state.live_proc = None
                 st.session_state.live_mode = False
+                st.session_state.live_paused = False
                 st.rerun()
+    with ctrl_pause:
+        if st.session_state.live_mode:
+            if not st.session_state.live_paused:
+                if st.button("⏸ PAUSE", key="pause_live", use_container_width=True):
+                    with open(LIVE_PAUSE_FLAG, "w", encoding="utf-8") as _pf:
+                        pass  # existence of the file signals pause
+                    st.session_state.live_paused = True
+                    st.rerun()
+            else:
+                if st.button("▶ RESUME", key="resume_live", use_container_width=True):
+                    if os.path.exists(LIVE_PAUSE_FLAG):
+                        os.remove(LIVE_PAUSE_FLAG)
+                    st.session_state.live_paused = False
+                    st.rerun()
 
     # ── LIVE mode ─────────────────────────────────────────────
     if st.session_state.live_mode:
@@ -2091,8 +2193,15 @@ if active_page == "Alerts":
                         live_rows.append(obj)
 
         # Status strip
-        _status_color = "#3c9" if proc_running else "#e84545"
-        _status_label = "RUNNING" if proc_running else ("COMPLETE" if stream_done else "STOPPED")
+        if st.session_state.live_paused:
+            _status_color = "#f5a623"
+            _status_label = "PAUSED"
+        elif proc_running:
+            _status_color = "#3c9"
+            _status_label = "RUNNING"
+        else:
+            _status_color = "#e84545"
+            _status_label = "COMPLETE" if stream_done else "STOPPED"
         with ctrl_right:
             st.markdown(
                 f"<span style='font-family:JetBrains Mono,monospace; font-size:11px; "
@@ -2104,17 +2213,37 @@ if active_page == "Alerts":
 
         if live_rows:
             live_df = pd.DataFrame(live_rows)
-            # Keep only the columns users care about; drop the diagnostic field
-            live_df = live_df.drop(columns=[c for c in ("_score_ms", "event_index") if c in live_df.columns])
+            # Keep only the columns users care about; drop duplicate/diagnostic fields.
+            live_df = live_df.drop(columns=[c for c in ("day", "_score_ms") if c in live_df.columns])
 
-            # Most-recent rows first; cap at 500 to keep the table snappy
-            live_df = live_df.tail(500).iloc[::-1].reset_index(drop=True)
+            # Most-recent rows first using original CERT timestamp when available.
+            if "cert_timestamp" in live_df.columns:
+                live_df["_sort_ts"] = pd.to_datetime(live_df["cert_timestamp"], errors="coerce")
+                _sort_cols = ["_sort_ts"]
+                _sort_dirs = [False]
+                if "event_index" in live_df.columns:
+                    # Tie-break equal timestamps by latest arrival first.
+                    _sort_cols.append("event_index")
+                    _sort_dirs.append(False)
+                elif "if_percentile_rank" in live_df.columns:
+                    _sort_cols.append("if_percentile_rank")
+                    _sort_dirs.append(False)
+                live_df = live_df.sort_values(by=_sort_cols, ascending=_sort_dirs, kind="stable")
+                live_df = live_df.drop(columns=[c for c in ("_sort_ts", "event_index") if c in live_df.columns])
+            else:
+                # Fallback for older payloads that do not include source timestamps.
+                live_df = live_df.iloc[::-1]
+                live_df = live_df.drop(columns=[c for c in ("event_index",) if c in live_df.columns])
+
+            # Cap at 500 to keep the table snappy
+            live_df = live_df.head(500).reset_index(drop=True)
 
             # Column config for the live table
             _live_col_cfg = {
+                "cert_timestamp": st.column_config.TextColumn("CERT Timestamp"),
                 "risk_level":     st.column_config.TextColumn("Risk Level"),
                 "anomaly_score":  st.column_config.NumberColumn("Anomaly Score", format="%.6f"),
-                "percentile_rank":st.column_config.ProgressColumn("Percentile", min_value=0, max_value=100, format="%.1f"),
+                "ae_percentile_rank":st.column_config.ProgressColumn("Percentile", min_value=0, max_value=100, format="%.1f"),
             }
             st.dataframe(live_df, use_container_width=True, height=500, column_config=_live_col_cfg)
 
@@ -2124,11 +2253,68 @@ if active_page == "Alerts":
                 file_name="live_alerts.csv",
                 mime="text/csv",
             )
+
+            st.markdown("<div style='margin-top:14px;'></div>", unsafe_allow_html=True)
+
+            # ── Live charts (based solely on current live alerts table data) ──
+            live_chart_df = live_df.copy()
+
+            col_live_left, col_live_right = st.columns(2)
+
+            with col_live_left:
+                section_header("Risk Distribution", "sh_live_risk_dist")
+                if "if_risk_band" in live_chart_df.columns and not live_chart_df.empty:
+                    _risk_counts = (
+                        live_chart_df["if_risk_band"]
+                        .fillna("LOW")
+                        .value_counts()
+                        .rename_axis("Risk Level")
+                        .reset_index(name="Count")
+                    )
+                    fig_live_donut = px.pie(
+                        _risk_counts,
+                        values="Count",
+                        names="Risk Level",
+                        color="Risk Level",
+                        color_discrete_map=RISK_COLORS,
+                        hole=0.6,
+                    )
+                    fig_live_donut.update_layout(
+                        **PLOTLY_LAYOUT,
+                        showlegend=True,
+                        height=340,
+                        legend=dict(font=dict(size=10, family="JetBrains Mono")),
+                    )
+                    fig_live_donut.update_traces(
+                        textinfo="label+percent",
+                        textfont_size=11,
+                        textfont_family="JetBrains Mono",
+                    )
+                    st.plotly_chart(fig_live_donut, use_container_width=True)
+                else:
+                    st.info("Risk band data is not available in live alerts yet.")
+
+            with col_live_right:
+                section_header("Anomaly Score Distribution", "sh_live_score_dist")
+                if "if_anomaly_score" in live_chart_df.columns and "if_risk_band" in live_chart_df.columns:
+                    fig_live_hist = px.histogram(
+                        live_chart_df,
+                        x="if_anomaly_score",
+                        nbins=50,
+                        color="if_risk_band",
+                        color_discrete_map=RISK_COLORS,
+                        labels={"if_anomaly_score": "Anomaly Score", "if_risk_band": "Risk Level"},
+                    )
+                    fig_live_hist.update_layout(**PLOTLY_LAYOUT, height=340, barmode="overlay")
+                    fig_live_hist.update_traces(opacity=0.75)
+                    st.plotly_chart(fig_live_hist, use_container_width=True)
+                else:
+                    st.info("Anomaly-score or risk-band fields are not available in live alerts yet.")
         else:
             st.info("Waiting for first scored row… (models are loading)")
 
-        # Auto-refresh while the process is still running
-        if proc_running:
+        # Auto-refresh while the process is running and not paused
+        if proc_running and not st.session_state.live_paused:
             time.sleep(1)
             st.rerun()
         elif stream_done and st.session_state.live_mode:
@@ -2142,7 +2328,7 @@ if active_page == "Alerts":
         _filter_bar("al_flt")
         filtered_df = _get_filtered_df()
 
-        # Alert severity filter + sort controls
+x        # Alert severity filter + sort controls
         alert_cols = st.columns([2, 2, 2, 4])
         with alert_cols[0]:
             alert_risk = st.multiselect("Severity", ["HIGH", "MEDIUM", "LOW"], default=["HIGH", "MEDIUM"], key="alert_sev")
@@ -2166,6 +2352,101 @@ if active_page == "Alerts":
                 index=0,
                 key="alert_sort_choice",
             )
+
+        # ── Top 10 Riskiest Users in Alerts ──
+        section_header("Top 10 Riskiest Users", "sh_top_users")
+        st.markdown(
+            "<p style='font-family:Inter,sans-serif;font-size:12px;color:#555;margin:0 0 12px 0;'>"
+            "Click a user to open their investigation profile.</p>",
+            unsafe_allow_html=True,
+        )
+        top_users = (
+            filtered_df.groupby("user", observed=True)
+            .agg(
+                max_percentile=("ae_percentile_rank", "max"),
+                critical_count=("ae_risk_band", lambda x: (x == "CRITICAL").sum()),
+                high_count=("ae_risk_band", lambda x: (x == "HIGH").sum()),
+            )
+            .reset_index()
+            .sort_values("max_percentile", ascending=False)
+            .head(10)
+        )
+
+        if top_users.empty:
+            st.info("No users available in the current filter range.")
+        else:
+            for rank, row in enumerate(top_users.itertuples(), start=1):
+                uid = row.user
+                score = row.max_percentile
+                days = int(row.critical_count + row.high_count)
+                if score >= 95:
+                    badge_color = "#bb44f0"
+                    badge_label = "CRITICAL"
+                elif score >= 90:
+                    badge_color = "#e84545"
+                    badge_label = "HIGH"
+                elif score >= 80:
+                    badge_color = "#d4a017"
+                    badge_label = "MEDIUM"
+                else:
+                    badge_color = "#3a86a8"
+                    badge_label = "LOW"
+
+                col_rank, col_info, col_btn = st.columns([1, 5, 3])
+                with col_rank:
+                    st.markdown(
+                        f"<div style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                        f"color:#444;font-weight:600;padding-top:4px;text-align:center;'>#{rank}</div>",
+                        unsafe_allow_html=True,
+                    )
+                with col_info:
+                    st.markdown(
+                        f"<div style='padding:2px 0 1px 0;'>"
+                        f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                        f"color:#e0e0e0;font-weight:600;'>{uid}</span>"
+                        f"&nbsp;&nbsp;<span style='background:{badge_color}22;color:{badge_color};font-size:9px;"
+                        f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 5px;"
+                        f"border:1px solid {badge_color}55;'>{badge_label}</span>"
+                        f"<br><span style='font-family:Inter,sans-serif;font-size:10px;"
+                        f"color:#555;line-height:1.5;'>"
+                        f"Percentile {score:.1f} &middot; {days} high-risk day{'s' if days != 1 else ''}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                with col_btn:
+                    if st.button("Investigate →", key=f"al_top_inv_{uid}", use_container_width=True):
+                        st.session_state["inv_user_select"] = uid
+                        st.session_state["_nav_request"] = "Investigation"
+                        st.rerun()
+                st.markdown("<div style='border-bottom:1px solid #111;margin:0;'></div>", unsafe_allow_html=True)
+
+        # Alert severity filter within this tab
+        _severity_counts = {
+            tier: int((filtered_df["ae_risk_band"] == tier).sum()) for tier in RISK_TIERS
+        }
+
+        section_header("Filter by severity", "sh_top_users")
+
+        _sev_cols = st.columns([1, 1, 1, 1, 4])
+        _tier_checked = {}
+        for _idx, _tier in enumerate(RISK_TIERS):
+            _color = RISK_COLORS[_tier]
+            _count = _severity_counts[_tier]
+            with _sev_cols[_idx]:
+                _tier_checked[_tier] = st.checkbox(
+                    _tier,
+                    value=(_tier in ["CRITICAL", "HIGH"]),
+                    key=f"alert_sev_{_tier}",
+                )
+                st.markdown(
+                    f"<span style='background:{_color}22;color:{_color};font-size:9px;"
+                    f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 6px;"
+                    f"border:1px solid {_color}55;display:inline-block;margin-top:-6px;'>"
+                    f"{_count:,} alert{'s' if _count != 1 else ''}</span>",
+                    unsafe_allow_html=True,
+                )
+
+        alert_risk = [t for t, checked in _tier_checked.items() if checked]
 
         # Centralised severity mapping — extend here when new bands are added
         _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
@@ -2202,7 +2483,7 @@ if active_page == "Alerts":
         alert_data = alert_data.head(int(max_results))
 
         # Cap card rendering to keep the UI responsive
-        CARD_LIMIT = 100
+        CARD_LIMIT = 10
         total_alerts = len(alert_data)
         card_data = alert_data.head(CARD_LIMIT)
 
@@ -2232,11 +2513,11 @@ if active_page == "Alerts":
 
             # ── Per-alert card rows ──
             for i, row in enumerate(card_data.itertuples()):
-                risk    = getattr(row, "risk_levels",    "LOW")
+                risk    = getattr(row, "ae_risk_band",    "LOW")
                 user    = getattr(row, "user",           "—")
                 day_val = getattr(row, "day",            None)
                 day_str = day_val.strftime("%Y-%m-%d") if hasattr(day_val, "strftime") else str(day_val)
-                pctl    = getattr(row, "percentile_rank", 0.0)
+                pctl    = getattr(row, "ae_percentile_rank", 0.0)
                 top_raw = getattr(row, "top_contributors", None)
                 summary = build_alert_summary(top_raw)
 
@@ -2247,7 +2528,7 @@ if active_page == "Alerts":
                 with c_risk:
                     st.markdown(
                         f"<div style='padding-top:5px;'>"
-                        f"<span style='background:{risk_color}22;color:{risk_color};font-size:9px;"
+                        f"<span style='background:{risk_color}22;color:{risk_color};font-size:10px;"
                         f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:2px 6px;"
                         f"border:1px solid {risk_color}55;display:inline-block;'>{risk}</span>"
                         f"</div>",
@@ -2257,9 +2538,9 @@ if active_page == "Alerts":
                 with c_info:
                     st.markdown(
                         f"<div style='padding:2px 0 4px 0;'>"
-                        f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                        f"<span style='font-family:JetBrains Mono,monospace;font-size:13px;"
                         f"color:#e0e0e0;font-weight:600;'>{user}</span>"
-                        f"<br><span style='font-family:Inter,sans-serif;font-size:11px;"
+                        f"<br><span style='font-family:Inter,sans-serif;font-size:12px;"
                         f"color:#666;line-height:1.5;'>{summary}</span>"
                         f"</div>",
                         unsafe_allow_html=True,
@@ -2267,14 +2548,14 @@ if active_page == "Alerts":
 
                 with c_day:
                     st.markdown(
-                        f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                        f"<div style='font-family:JetBrains Mono,monospace;font-size:12px;"
                         f"color:#888;padding-top:5px;'>{day_str}</div>",
                         unsafe_allow_html=True,
                     )
 
                 with c_pctl:
                     st.markdown(
-                        f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                        f"<div style='font-family:JetBrains Mono,monospace;font-size:12px;"
                         f"color:{risk_color};padding-top:5px;'>P{pctl:.1f}</div>",
                         unsafe_allow_html=True,
                     )
@@ -2298,7 +2579,7 @@ if active_page == "Alerts":
                 )
 
         # ── Export (columns + top_contributors if present) ──
-        alert_display_cols = ["user", "day", "risk_levels", "anomaly_scores", "percentile_rank"]
+        alert_display_cols = ["user", "day", "ae_risk_band", "if_anomaly_score", "ae_percentile_rank"]
         alert_display_cols += [c for c in CROSS_FLAGS if c in alert_data.columns]
         if "top_contributors" in alert_data.columns:
             alert_display_cols.append("top_contributors")
@@ -2332,16 +2613,12 @@ if active_page == "Channels":
 
     with ch1:
         section_header("Channel Activity Volume", "sh_chan_vol")
-        channel_ts = []
-        for channel, feats in CHANNELS.items():
-            valid = [f for f in feats if f in filtered_df.columns]
-            if valid:
-                daily = filtered_df.groupby(filtered_df["day"].dt.date)[valid].sum().sum(axis=1).reset_index()
-                daily.columns = ["Date", "Volume"]
-                daily["Channel"] = channel
-                channel_ts.append(daily)
-        if channel_ts:
-            channel_ts_df = pd.concat(channel_ts)
+        channel_ts_df = _channel_time_series(
+            st.session_state.flt_date_start,
+            st.session_state.flt_date_end,
+            tuple(sorted(st.session_state.flt_risk)),
+        )
+        if not channel_ts_df.empty:
             fig_ch_ts = px.line(channel_ts_df, x="Date", y="Volume", color="Channel",
                                 color_discrete_map=CHANNEL_COLOR_MAP)
             fig_ch_ts.update_layout(**PLOTLY_LAYOUT, height=400)
@@ -2369,20 +2646,23 @@ if active_page == "Channels":
         # Downsample for box plot — browser can't handle 2M+ points
         box_df = filtered_df if len(filtered_df) <= MAX_PLOT_POINTS else filtered_df.sample(MAX_PLOT_POINTS, random_state=42)
         fig_box = px.box(
-            box_df, x="risk_levels", y=selected_feature,
-            color="risk_levels", color_discrete_map=RISK_COLORS,
-            category_orders={"risk_levels": ["HIGH", "MEDIUM", "LOW"]},
+            box_df, x="ae_risk_band", y=selected_feature,
+            color="ae_risk_band", color_discrete_map=RISK_COLORS,
+            category_orders={"ae_risk_band": RISK_TIERS},
         )
         fig_box.update_layout(**PLOTLY_LAYOUT, height=400, xaxis_title="Risk Level", yaxis_title=selected_feature)
         st.plotly_chart(fig_box, use_container_width=True)
 
     # ── Correlation heatmap ──
     section_header("Feature Correlation Matrix", "sh_feat_corr")
-    corr_feats = [f for f in RAW_FEATURES if f in filtered_df.columns]
+    corr_feats = [f for f in RAW_FEATURES if f in merged_df.columns]
     if len(corr_feats) >= 2:
-        # Correlation converges fast — 50k rows is more than enough
-        corr_sample = filtered_df if len(filtered_df) <= MAX_PLOT_POINTS else filtered_df.sample(MAX_PLOT_POINTS, random_state=42)
-        corr_matrix = corr_sample[corr_feats].corr()
+        corr_matrix = _corr_matrix(
+            st.session_state.flt_date_start,
+            st.session_state.flt_date_end,
+            tuple(sorted(st.session_state.flt_risk)),
+            tuple(corr_feats),
+        )
         fig_corr = px.imshow(
             corr_matrix, x=corr_feats, y=corr_feats,
             color_continuous_scale=[[0, "#3a86a8"], [0.5, "#0a0a0a"], [1, "#e84545"]],
@@ -2393,26 +2673,17 @@ if active_page == "Channels":
         st.plotly_chart(fig_corr, use_container_width=True)
 
 
+# Keep live row counter and status fresh while browsing non-Alerts pages.
+if active_page != "Alerts" and st.session_state.live_mode:
+    _proc = st.session_state.live_proc
+    _proc_running = _proc is not None and _proc.poll() is None
+    if _proc_running and not st.session_state.live_paused:
+        time.sleep(1)
+        st.rerun()
+
+
 # ──────────────────────────────────────────────────────────────
 # Footer — Data & Feature Gaps Note
 # ──────────────────────────────────────────────────────────────
 
 st.markdown("---")
-with st.expander("DATA GAPS & RECOMMENDED ENHANCEMENTS"):
-    st.markdown("""
-    The following features appear on industry UEBA dashboards but are **not yet available** in our current CERT dataset.  
-    If we want to bring these in, the preprocessing pipeline would need to be updated:
-
-    | Feature | Why It Matters | Status |
-    |---------|---------------|--------|
-    | **User Department / Role** | Contextualize risk — a DBA accessing databases is normal, a marketing user is not | Not in dataset |
-    | **Incident Response Status** | Track alert lifecycle (New → Investigating → Resolved) | No workflow layer |
-    | **IP / Geo-location** | Detect impossible travel or unusual network source | Not in CERT r6.2 |
-    | **Data Volume Transferred** | Flag large exfiltrations (MB/GB moved) | Not in current features |
-    | **Application Usage** | Which apps a user opened (especially sensitive ones) | Not in CERT r6.2 |
-    | **Peer Group Comparison** | Compare user to their department/role peers | No department info |
-    | **Historical Baseline Trends** | 30/60/90 day rolling baselines with drift detection | Partially available via rolling deltas |
-    | **Alert Acknowledge / Dismiss** | Analyst feedback loop to reduce false positives | No persistence layer |
-    
-    *Bring these up with the team to decide which are feasible for our scope.*
-    """)

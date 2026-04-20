@@ -25,22 +25,21 @@ import numpy as np
 import pandas as pd
 import websockets
 
-# ── Paths (all relative to the repo root, i.e. this file's directory) ────────
-BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-SCALER_PATH = os.path.join(BASE_DIR, "encoders",         "encoder_model_1", "feature_scaler.pkl")
-ENCODER_PATH= os.path.join(BASE_DIR, "encoders",         "encoder_model_1", "encoder_model.keras")
-IF_PATH     = os.path.join(BASE_DIR, "isolation_forests","iforest_model_1", "iforest_model.pkl")
-# Reference distribution used to compute global percentile ranks
-ALERT_TABLE_PARQUET = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_2.parquet")
-ALERT_TABLE_CSV     = os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_2.csv")
-# Default simulation input
-DEFAULT_INPUT  = os.path.join(BASE_DIR, "processed_datasets", "test_stream.csv")
-# Live output (one JSON object per line, appended as rows arrive)
-DEFAULT_OUTPUT = os.path.join(BASE_DIR, "processed_datasets", "live_results.jsonl")
+# Paths (loaded from config.py)
+import config
+BASE_DIR       = config.BASE_DIR
+SCALER_PATH    = config.LIVE_SCALER_PATH
+ENCODER_PATH   = config.LIVE_ENCODER_PATH
+IF_PATH        = config.LIVE_IF_PATH
+IF_SCORES_PATH = config.LIVE_IF_SCORES_PATH
+DEFAULT_INPUT  = config.LIVE_DEFAULT_INPUT
+DEFAULT_OUTPUT = config.LIVE_OUTPUT
+PAUSE_FLAG     = config.LIVE_PAUSE_FLAG
 
-# Risk-band thresholds (percentile cutoffs, consistent with the dashboard)
-HIGH_THRESH   = 95.0
-MEDIUM_THRESH = 80.0
+# Risk-band thresholds (percentile cutoffs, consistent with AlertObjectBuilder)
+CRITICAL_THRESH = 95.0
+HIGH_THRESH     = 90.0
+MEDIUM_THRESH   = 80.0
 
 # ── Global WebSocket client registry ─────────────────────────────────────────
 _ws_clients: set = set()
@@ -72,11 +71,7 @@ class LiveScorer:
 
         # Load historical scores for global percentile computation
         print("[live_simulation] Loading reference score distribution …", flush=True)
-        if os.path.exists(ALERT_TABLE_PARQUET):
-            ref = pd.read_parquet(ALERT_TABLE_PARQUET, columns=["if_anomaly_score"])
-        else:
-            ref = pd.read_csv(ALERT_TABLE_CSV, usecols=["if_anomaly_score"])
-        self.ref_scores: np.ndarray = ref["if_anomaly_score"].dropna().values
+        self.ref_scores: np.ndarray = np.load(IF_SCORES_PATH)
         print(
             f"[live_simulation] Ready. Reference distribution: {len(self.ref_scores):,} rows.",
             flush=True,
@@ -90,10 +85,17 @@ class LiveScorer:
             if col in row_df.columns:
                 meta[col] = str(row_df[col].iloc[0])
 
-        # Feature matrix — drop metadata columns
-        feat_df = row_df.drop(
-            columns=[c for c in ("user", "pc", "day") if c in row_df.columns]
-        )
+        # Keep original CERT time context for downstream sorting/display.
+        for ts_col in ("timestamp", "datetime", "date", "day"):
+            if ts_col in row_df.columns:
+                meta["cert_timestamp"] = str(row_df[ts_col].iloc[0])
+                break
+
+        # Feature matrix — drop metadata columns and any unnamed index columns
+        # (parquet files created without index_col=0 retain an "Unnamed: 0" column)
+        drop_cols = [c for c in row_df.columns
+                     if c in ("user", "pc", "day") or str(c).startswith("Unnamed:")]
+        feat_df = row_df.drop(columns=drop_cols)
 
         t0 = time.perf_counter()
         scaled    = self.scaler.transform(feat_df.values.astype("float32"))
@@ -104,18 +106,19 @@ class LiveScorer:
         # Global percentile (fraction of reference scores strictly below this score)
         percentile = float(np.mean(self.ref_scores < raw_score) * 100)
 
-        risk_level = (
-            "HIGH"   if percentile >= HIGH_THRESH   else
-            "MEDIUM" if percentile >= MEDIUM_THRESH else
+        if_risk_band = (
+            "CRITICAL" if percentile >= CRITICAL_THRESH else
+            "HIGH"     if percentile >= HIGH_THRESH     else
+            "MEDIUM"   if percentile >= MEDIUM_THRESH   else
             "LOW"
         )
 
         payload = {
             **meta,
-            "anomaly_score":    round(raw_score,  6),
-            "percentile_rank":  round(percentile, 2),
-            "risk_level":       risk_level,
-            "_score_ms":        round(elapsed_ms, 1),   # diagnostic; dashboard ignores this
+            "if_anomaly_score":  round(raw_score,  6),
+            "if_percentile_rank": round(percentile, 2),
+            "if_risk_band":      if_risk_band,
+            "_score_ms":         round(elapsed_ms, 1),   # diagnostic; dashboard ignores this
         }
         return payload
 
@@ -165,7 +168,16 @@ async def _run_simulation(
         _stop_event.set()
         return
 
-    test_df = pd.read_csv(input_path)
+    # Remove any stale pause flag left by a previously interrupted run.
+    if os.path.exists(PAUSE_FLAG):
+        os.remove(PAUSE_FLAG)
+
+    # Preserve source order: stream rows exactly as they appear in the file.
+    if input_path.endswith(".parquet"):
+        test_df = pd.read_parquet(input_path)
+    else:
+        test_df = pd.read_csv(input_path, index_col=0)
+
     total   = len(test_df)
     print(f"[live_simulation] Streaming {total:,} rows from {os.path.basename(input_path)}", flush=True)
 
@@ -191,13 +203,21 @@ async def _run_simulation(
 
         print(
             f"[live_simulation] [{idx+1:>5}/{total}]  user={payload.get('user','?')}"
-            f"  score={payload['anomaly_score']:.4f}  pct={payload['percentile_rank']:.1f}"
-            f"  risk={payload['risk_level']}  ({payload['_score_ms']} ms)",
+            f"  score={payload['if_anomaly_score']:.4f}  pct={payload['if_percentile_rank']:.1f}"
+            f"  risk={payload['if_risk_band']}  ({payload['_score_ms']} ms)",
             flush=True,
         )
 
         # Throttle to simulate real-time arrival
         await asyncio.sleep(interval)
+
+        # Honour pause flag: spin-wait until the dashboard removes it or a stop is signalled.
+        if os.path.exists(PAUSE_FLAG):
+            print("[live_simulation] Paused — waiting for resume …", flush=True)
+            while os.path.exists(PAUSE_FLAG) and not _stop_event.is_set():
+                await asyncio.sleep(0.25)
+            if not _stop_event.is_set():
+                print("[live_simulation] Resumed.", flush=True)
 
     # Write end-of-stream sentinel so the dashboard can detect natural completion
     with open(output_path, "a", encoding="utf-8") as f:

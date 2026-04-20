@@ -5,6 +5,7 @@
         - Contamination: 0.05
         - Random State: 42
 
+
 - Isolation Forest Model 2 (isolation_forests\iforest_model_2):
     * This model was trained on Autoencoder Model 2's latent embeddings
     * Hyperparameters:
@@ -12,9 +13,48 @@
         - Contamination: 0.05
         - Random State: 42
 
+
 - Isolation Forest Model 3 (isolation_forests\iforest_model_3):
     * This model was trained on Autoencoder Model 3's latent embeddings
     * Hyperparameters:
         - N-Estimators: 200
         - Contamination: 0.05
         - Random State: 42
+
+
+- Isolation Forest Model 4 (isolation_forests\iforest_model_4):
+    * This model was trained on Autoencoder Model 4's normal-behavior latent embeddings
+    * Hyperparameters:
+        - N-Estimators: 200
+        - Contamination: 0.001
+        - Random State: 42
+    * Performance:
+        - Anomalies Flagged: 1,271 (0.10%)    
+        - Mean Insider Score: 0.5030
+        - Mean Normal SCore: 0.3958
+        - Separation Ratio: 1.27
+        - AUROC: 0.7514
+        - AUPRC: 0.0229
+        - Recall:
+            * 80th pct: 0.578
+            * 90th pct: 0.438
+            * 95th pct: 0.344
+
+
+- Isolation Forest Model 5 (isolation_forests\iforest_model_5):
+    * This model was trained on Autoencoder Model 5's normal-behavior latent embeddings
+    * Hyperparameters:
+        - N-Estimators: 200
+        - Contamination: 0.001
+        - Random State: 42
+    * Performance:
+        - Anomalies Flagged: 1,270 (0.10%)    
+        - Mean Insider Score: 0.4810
+        - Mean Normal SCore: 0.3775
+        - Separation Ratio: 1.27
+        - AUROC: 0.7654
+        - AUPRC: 0.0064
+        - Recall:
+            * 80th pct: 0.547
+            * 90th pct: 0.438
+            * 95th pct: 0.266     
