@@ -895,14 +895,18 @@ def _render_login():
                 st.rerun()
             except Exception as exc:
                 msg = str(exc)
-                if any(k in msg for k in ("INVALID_PASSWORD", "EMAIL_NOT_FOUND", "INVALID_LOGIN_CREDENTIALS")):
+                if any(k in msg for k in ("INVALID_PASSWORD", "EMAIL_NOT_FOUND", "INVALID_LOGIN_CREDENTIALS", "INVALID_EMAIL")):
                     st.session_state["_login_error"] = "Invalid email or password."
                 elif "TOO_MANY_ATTEMPTS_TRY_LATER" in msg:
                     st.session_state["_login_error"] = "Too many failed attempts. Try again later."
                 elif "USER_DISABLED" in msg:
                     st.session_state["_login_error"] = "This account has been disabled."
+                elif "OPERATION_NOT_ALLOWED" in msg:
+                    st.session_state["_login_error"] = "Email/password sign-in is not enabled in Firebase."
+                elif "EMAIL_NOT_VERIFIED" in msg:
+                    st.session_state["_login_error"] = "Please verify your email address before signing in."
                 else:
-                    st.session_state["_login_error"] = "Sign-in failed. Please check your credentials."
+                    st.session_state["_login_error"] = f"Sign-in failed: {msg}"
                 st.rerun()
 
     st.markdown(
