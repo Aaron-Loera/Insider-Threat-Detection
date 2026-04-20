@@ -91,10 +91,11 @@ class LiveScorer:
                 meta["cert_timestamp"] = str(row_df[ts_col].iloc[0])
                 break
 
-        # Feature matrix — drop metadata columns
-        feat_df = row_df.drop(
-            columns=[c for c in ("user", "pc", "day") if c in row_df.columns]
-        )
+        # Feature matrix — drop metadata columns and any unnamed index columns
+        # (parquet files created without index_col=0 retain an "Unnamed: 0" column)
+        drop_cols = [c for c in row_df.columns
+                     if c in ("user", "pc", "day") or str(c).startswith("Unnamed:")]
+        feat_df = row_df.drop(columns=drop_cols)
 
         t0 = time.perf_counter()
         scaled    = self.scaler.transform(feat_df.values.astype("float32"))
@@ -171,8 +172,11 @@ async def _run_simulation(
     if os.path.exists(PAUSE_FLAG):
         os.remove(PAUSE_FLAG)
 
-    # Preserve source order: stream rows exactly as they appear in the CSV.
-    test_df = pd.read_csv(input_path, index_col=0)
+    # Preserve source order: stream rows exactly as they appear in the file.
+    if input_path.endswith(".parquet"):
+        test_df = pd.read_parquet(input_path)
+    else:
+        test_df = pd.read_csv(input_path, index_col=0)
 
     total   = len(test_df)
     print(f"[live_simulation] Streaming {total:,} rows from {os.path.basename(input_path)}", flush=True)

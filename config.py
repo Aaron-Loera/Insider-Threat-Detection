@@ -133,9 +133,11 @@ LIVE_IF_SCORES_PATH = _local_or(
     "LIVE_IF_SCORES_PATH",
     os.path.join(BASE_DIR, "isolation_forests", f"iforest_model_{LV}", "anomaly_scores.npy"),
 )
+_live_input_parquet = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{LV}", f"ueba_dataset_{LV}_test_stream.parquet")
+_live_input_csv     = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{LV}", f"ueba_dataset_{LV}_test_stream.csv")
 LIVE_DEFAULT_INPUT = _local_or(
     "LIVE_DEFAULT_INPUT",
-    os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{LV}", f"ueba_dataset_{LV}_test_stream.csv"),
+    _live_input_parquet if os.path.exists(_live_input_parquet) else _live_input_csv,
 )
 
 
