@@ -74,5 +74,5 @@
         - Epochs: 100
         - Batch Size: 256
     * Loss (Best Epoch):
-        - Training Loss: 26.66%
-        - Validation Loss: 17.04%
+        - Training Loss: 26.78%
+        - Validation Loss: 16.90%

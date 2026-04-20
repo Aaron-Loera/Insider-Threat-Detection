@@ -29,7 +29,7 @@ This is a UEBA (User and Entity Behavior Analytics) insider threat detection sys
 ### Two Runtime Components
 
 **1. `dashboard/app.py`** — Streamlit web UI for security analysts
-- Loads two pre-computed datasets at startup (cached via `@st.cache_data`): `explainability/alert_table/alert_table_4.parquet` and `processed_datasets/ueba_dataset_4/ueba_dataset_4_train.parquet`
+- Loads two pre-computed datasets at startup (cached via `@st.cache_data`): `explainability/alert_table/alert_table_5.parquet` and `processed_datasets/ueba_dataset_5/ueba_dataset_5_train.parquet`
 - Merges them on `(user, day)` keys
 - Four tabs: Overview (KPIs + charts), Investigation (per-user deep dive), Alerts (filterable feed), Channels (feature analysis)
 - Global sidebar filters (date range, risk level, user search) drive all views
@@ -48,7 +48,7 @@ Raw CERT logs (logon/file/device/email/http CSVs)
   → CERT_Preprocessing.ipynb     # Feature engineering → ueba_dataset_4/ (train/test split, 108 features)
   → Autoencoder.ipynb            # Train autoencoder on insider-filtered normal data, extract 16-dim embeddings + scaler
   → Isolation_Forest.ipynb       # Train IF on normal-behavior embeddings, compute anomaly scores
-  → Alert_Object_Builder.ipynb   # Merge scores + features → alert_table_4.parquet
+  → Alert_Object_Builder.ipynb   # Merge scores + features → alert_table_5.parquet, cases_5.parquet
 ```
 
 `prepare_data.py` provides shared utilities for the notebooks: `chronological_split` (90/10 train/test), `get_insiders`, `build_insider_mask`, and `get_scores`.
@@ -56,11 +56,12 @@ Raw CERT logs (logon/file/device/email/http CSVs)
 ### Model Artifacts
 
 - `encoders/encoder_model_1/` — used by `live_simulation.py` (trained on ueba_dataset v1, 54 features)
-- `encoders/encoder_model_4/` — latest offline model; trained on insider-filtered normal behavior from ueba_dataset_4; adds dropout (0.2), linear latent activation, early stopping (patience=10); 90/10 chronological split; 85/15 train/val split on normal data
-- `encoders/encoder_model_4a/` — variant of 4 with learning rate 0.001 (vs 0.0005 in model 4)
+- `encoders/encoder_model_5/` — **recommended offline model**; trained on insider-filtered normal behavior from ueba_dataset_5; same architecture as model 4 (dropout 0.2, linear latent activation, early stopping patience=10, 90/10 chronological split, 85/15 train/val split on normal data); learning rate 0.001; training loss 26.66%, validation loss 17.04%
+- `encoders/encoder_model_4/` — previous offline model; identical architecture to model 5 but learning rate 0.0005; trained on ueba_dataset_4
 - `isolation_forests/iforest_model_1/` — used by `live_simulation.py` (contamination=0.05)
-- `isolation_forests/iforest_model_4/` — latest offline IF; trained on model 4's normal-behavior embeddings; contamination=0.001; separation ratio 1.27 (mean insider score 0.503 vs normal 0.396)
-- Numbered suffixes (2, 3, 3a) are older experimental variants
+- `isolation_forests/iforest_model_5/` — **recommended offline IF**; trained on model 5's normal-behavior embeddings; contamination=0.001; AUROC 0.750, separation ratio 1.25 (mean insider score 0.471 vs normal 0.377)
+- `isolation_forests/iforest_model_4/` — previous offline IF; trained on model 4's embeddings; contamination=0.001; AUROC 0.751, separation ratio 1.27
+- Numbered suffixes (2, 3) are older experimental variants
 
 ### Risk Scoring
 
@@ -98,8 +99,9 @@ Raw CERT logs (logon/file/device/email/http CSVs)
 - v1 (`ueba_dataset.csv`): 54 features
 - v2 (`ueba_dataset_2.csv`): 78 features, adds PC-related signals
 - v3b (`ueba_dataset_3b.csv/parquet`): 108 features, adds HTTP behavioral data
-- v4 (`processed_datasets/ueba_dataset_4/`): 108 features — **currently active version**; introduces chronological 90/10 train/test split at preprocessing time, producing:
-  - `ueba_dataset_4a.csv` — (user, pc, day) level for drill-down
-  - `ueba_dataset_4b.csv` — (user, day) level for model training
-  - `ueba_dataset_4_train.csv/parquet` — first 90% chronologically (model training)
-  - `ueba_dataset_4_test_stream.csv` — last 10% chronologically (live simulation / inference)
+- v4 (`processed_datasets/ueba_dataset_4/`): 108 features; introduces chronological 90/10 train/test split at preprocessing time
+- v5 (`processed_datasets/ueba_dataset_5/`): 108 features — **currently active version**; fixes unique counting bugs from prior versions, adds z-score clipping for improved model performance, pipeline optimizations; same split structure as v4:
+  - `ueba_dataset_5a.csv/parquet` — (user, pc, day) level for drill-down
+  - `ueba_dataset_5b.csv/parquet` — (user, day) level for model training
+  - `ueba_dataset_5_train.csv/parquet` — first 90% chronologically (model training)
+  - `ueba_dataset_5_test_stream.csv/parquet` — last 10% chronologically (live simulation / inference)

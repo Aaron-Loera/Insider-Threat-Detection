@@ -1,9 +1,11 @@
 import os
 import numpy as np
+import pandas as pd
 import tensorflow as tf
 import matplotlib.pyplot as plt
 from tensorflow.keras import layers, models
 from tensorflow.keras.callbacks import EarlyStopping, CSVLogger
+from sklearn.metrics import roc_auc_score, average_precision_score, roc_curve, precision_recall_curve
 
 class Autoencoder:
     """
@@ -146,19 +148,167 @@ class Autoencoder:
         return self.encoder.predict(feature_matrix)
     
     
+    def load(self, load_path: str) -> None:
+        """
+        Loads previously trained autoencoder and encoder models.
+
+        Args:
+            load_path: Directory path containing autoencoder_model.keras and encoder_model.keras
+
+        Returns:
+            None:
+        """
+        self.autoencoder = models.load_model(os.path.join(load_path, "autoencoder_model.keras"), compile=False)
+        self.encoder = models.load_model(os.path.join(load_path, "encoder_model.keras"), compile=False)
+
+
     def reconstruction_error(self, feature_matrix: np.ndarray) -> np.ndarray:
         """
         Computes the reconstruction error per sample.
-        
+
         Args:
             feature_matrix: The scaled UEBA feature matrix
-            
+
         Returns:
             np.ndarray: Reconstruction MSE per sample
         """
         reconstruction = self.autoencoder.predict(feature_matrix)
         error = np.mean(np.square(feature_matrix - reconstruction), axis=1)
         return error
+
+
+    def compute_roc_auc_score(self, feature_matrix: np.ndarray, insider_labels: pd.Series | np.ndarray, save_path: str | None = None) -> float:
+        """
+        Computes AUROC of reconstruction errors against insider labels. Renders the ROC
+        curve with a random-guess diagonal reference.
+
+        Args:
+            feature_matrix: The scaled UEBA feature matrix
+            insider_labels: Binary labels (1 = insider, 0 = normal)
+            save_path: Optional path to persist the figure as PNG
+
+        Returns:
+            float: ROC AUC score
+        """
+        errors = self.reconstruction_error(feature_matrix)
+
+        if isinstance(insider_labels, pd.Series):
+            insider_labels = insider_labels.astype(int).values
+
+        score = roc_auc_score(insider_labels, errors)
+        fpr, tpr, _ = roc_curve(insider_labels, errors)
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(fpr, tpr, color="steelblue", label=f"ROC (AUROC = {score:.4f})")
+        plt.plot([0, 1], [0, 1], color="gray", linestyle="--", alpha=0.7, label="Random")
+        plt.xlabel("False Positive Rate")
+        plt.ylabel("True Positive Rate")
+        plt.title(f"ROC Curve (AUROC = {score:.4f})")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(os.path.join(save_path, "roc_curve.png"), dpi=150)
+        plt.show()
+
+        return score
+
+
+    def compute_avg_prec_score(self, feature_matrix: np.ndarray, insider_labels: pd.Series | np.ndarray, save_path: str | None = None) -> float:
+        """
+        Computes average precision of reconstruction errors against insider labels. Renders
+        the Precision-Recall curve with a baseline at the positive-class prevalence.
+
+        Args:
+            feature_matrix: The scaled UEBA feature matrix
+            insider_labels: Binary labels (1 = insider, 0 = normal)
+            save_path: Optional path to persist the figure as PNG
+
+        Returns:
+            float: Average precision score
+        """
+        errors = self.reconstruction_error(feature_matrix)
+
+        if isinstance(insider_labels, pd.Series):
+            insider_labels = insider_labels.astype(int).values
+
+        score = average_precision_score(insider_labels, errors)
+        precision, recall, _ = precision_recall_curve(insider_labels, errors)
+        base_rate = insider_labels.mean()
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(recall, precision, color="steelblue", label=f"PR (AUPRC = {score:.4f})")
+        plt.axhline(base_rate, color="gray", linestyle="--", alpha=0.7,
+                    label=f"Baseline (class balance = {base_rate:.4f})")
+        plt.xlabel("Recall")
+        plt.ylabel("Precision")
+        plt.title(f"Precision-Recall Curve (AUPRC = {score:.4f})")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(os.path.join(save_path, "pr_curve.png"), dpi=150)
+        plt.show()
+
+        return score
+
+
+    def compute_recall_thresholds(self, feature_matrix: np.ndarray, insider_labels: pd.Series | np.ndarray, percentiles: list = [80, 90, 95], save_path: str | None = None) -> dict[str, float]:
+        """
+        Computes recall at several percentile thresholds of reconstruction error. Renders
+        a bar chart of recall per percentile with captured/total annotations above each bar.
+
+        Args:
+            feature_matrix: The scaled UEBA feature matrix
+            insider_labels: Binary labels (1 = insider, 0 = normal)
+            percentiles: List of percentile thresholds
+            save_path: Optional path to persist the figure as PNG
+
+        Returns:
+            dict: Recall values {percentile: recall score}
+        """
+        errors = self.reconstruction_error(feature_matrix)
+
+        if isinstance(insider_labels, pd.Series):
+            insider_labels = insider_labels.astype(int).values
+
+        values = {}
+        captured_per_pct = {}
+        total_insiders = insider_labels.sum()
+
+        for pct in percentiles:
+            threshold = np.percentile(errors, pct)
+            flagged = errors >= threshold
+            captured = insider_labels[flagged].sum()
+            recall = captured / total_insiders
+            values[str(pct)] = recall
+            captured_per_pct[pct] = captured
+
+        labels = [f"{pct}th" for pct in percentiles]
+        recalls = [values[str(pct)] for pct in percentiles]
+
+        plt.figure(figsize=(10, 5))
+        bars = plt.bar(labels, recalls, color="steelblue", alpha=0.85)
+        for bar, pct in zip(bars, percentiles):
+            height = bar.get_height()
+            plt.text(
+                bar.get_x() + bar.get_width() / 2,
+                height + 0.02,
+                f"{captured_per_pct[pct]}/{total_insiders}",
+                ha="center",
+                va="bottom",
+            )
+        plt.xlabel("Percentile Threshold")
+        plt.ylabel("Recall")
+        plt.title("Recall at Percentile Thresholds (Reconstruction Error)")
+        plt.ylim(0, 1.05)
+        plt.grid(True, alpha=0.3, axis="y")
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(os.path.join(save_path, "recall_percentiles.png"), dpi=150)
+        plt.show()
+
+        return values
 
 
 def plot_loss(history, save_path) -> None:

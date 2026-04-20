@@ -75,27 +75,68 @@ class ReconstructionErrorExplainer:
         return contribution_ratio
     
     
+    def _build_family_map(self, features: list) -> dict:
+        """
+        Groups features by their underlying behavioral concept.
+
+        Features sharing the same base name (e.g., logon_count, logon_count_zscore,
+        logon_count_rolling_delta) are placed in one family so they count as a single
+        concept during group aggregation rather than inflating the group score.
+        
+        Args:
+            features: List of feature columns
+            
+        Returns:
+            dict: Family dictionary to use for group reconstruction error
+        """
+        families = {}
+        for f in features:
+            if f.endswith("_zscore"):
+                base = f[: -len("_zscore")]
+            elif f.endswith("_rolling_delta"):
+                base = f[: -len("_rolling_delta")]
+            else:
+                base = f
+            families.setdefault(base, []).append(f)
+        return families
+
+
     def compute_group_error(self, feature_error: np.ndarray) -> np.ndarray | None:
         """
         Aggregates feature errors by behavioral groups.
-        
+
+        Returns the mean of concept-family means so that:
+        - Groups with different feature counts are directly comparable (no size inflation)
+        - Correlated representations (raw, zscore, rolling_delta) of the same concept
+          count as one
+
         Args:
             feature_error: An array containing feature-level errors
-            
+
         Returns:
             np.ndarray: An aggregate array of shape: (n_samples, n_groups)
         """
         if self.feature_groups is None:
             return None
-        
+
         group_errors = []
-        
+
         for group, features in self.feature_groups.items():
-            indices = [self.feature_index_map[f] for f in features if f in self.feature_index_map]
-            
-            group_error = np.sum(feature_error[:, indices], axis=1)
+            families = self._build_family_map(features)
+
+            family_means = []
+            for family_features in families.values():
+                indices = [self.feature_index_map[f] for f in family_features if f in self.feature_index_map]
+                if indices:
+                    family_means.append(np.mean(feature_error[:, indices], axis=1))
+
+            if family_means:
+                group_error = np.mean(np.stack(family_means, axis=1), axis=1)
+            else:
+                group_error = np.zeros(feature_error.shape[0])
+
             group_errors.append(group_error)
-            
+
         return np.vstack(group_errors).T
     
     

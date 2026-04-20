@@ -19,11 +19,11 @@ import pandas as pd
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CSV_FILES = [
-    os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_4", "ueba_dataset_4a.csv"),
-    os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_4", "ueba_dataset_4b.csv"),
-    os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_4", "ueba_dataset_4_train.csv"),
-    os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_4", "ueba_dataset_4_test_stream.csv"),    
-    os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_4.csv"),
+    os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_5", "ueba_dataset_5a.csv"),
+    os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_5", "ueba_dataset_5b.csv"),
+    os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_5", "ueba_dataset_5_train.csv"),
+    os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_5", "ueba_dataset_5_test_stream.csv"),    
+    os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_5.csv"),
 ]
 
 

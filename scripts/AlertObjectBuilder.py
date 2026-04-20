@@ -171,7 +171,7 @@ class AlertObjectBuilder:
         narrative_parts = []
         for feat, contrib_val in top_features:
             zscore_col = f"{feat}_zscore"
-            delta_col  = f"{feat}_rolling_delta"
+            delta_col = f"{feat}_rolling_delta"
             if zscore_col in row.index and not pd.isna(row[zscore_col]):
                 z = row[zscore_col]
                 delta = row[delta_col] if delta_col in row.index and not pd.isna(row[delta_col]) else None
