@@ -13,6 +13,7 @@ import time
 import ast as _ast
 import hmac
 import hashlib
+import html as _html_mod
 
 try:
     import pyrebase
