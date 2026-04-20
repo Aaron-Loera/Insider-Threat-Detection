@@ -344,6 +344,52 @@ st.markdown("""
         letter-spacing: 2px;
         font-family: 'JetBrains Mono', monospace;
     }
+            
+    /* ── Investigation card labels (Alert Summary, Raw Alert Record, etc.) ── */
+    .inv-card-label {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 15px;
+        font-weight: 900;
+        color: #bbbbbb;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        margin-bottom: 14px;
+    }
+
+    /* ── Investigation field labels (User, Day, AE Risk Band …) ── */
+    .inv-field-label {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+        font-weight: 600;
+        color: #999999;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        padding: 6px 0 4px 0;
+        align-self: center;
+    }
+
+    /* ── Investigation table: column headers ── */
+    .inv-th {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+        font-weight: 600;
+        color: #999999;
+        text-align: left;
+        padding: 0 16px 10px 0;
+        text-transform: uppercase;
+        letter-spacing: 1.2px;
+        border-bottom: 1px solid #1a1a1a;
+    }
+
+    /* ── Investigation table: feature-name cells ── */
+    .inv-feat-name {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+        color: #888888;
+        padding: 8px 16px 8px 0;
+        border-bottom: 1px solid #111;
+        vertical-align: middle;
+    }
 
     /* ── Risk badges ── */
     .risk-high   { color: #e84545; font-weight: 600; }
@@ -379,6 +425,10 @@ st.markdown("""
         background-color: #0a0a0a !important;
     }
     .stSlider > div > div > div { border-radius: 0 !important; }
+    [data-baseweb="select"] > div,
+    [data-baseweb="select"] > div * {
+        cursor: pointer !important;
+    }
     button[kind="primary"], .stDownloadButton > button {
         border-radius: 0 !important;
         text-transform: uppercase;
@@ -564,6 +614,21 @@ UEBA_COLS = [
 ]
 
 
+@st.cache_data(show_spinner=False)
+def load_ueba_3a():
+    """Load UEBA Table A — (user, pc, day) granular rows used for PC-level drill-down."""
+    if os.path.exists(UEBA_3A_PARQUET):
+        df = pd.read_parquet(UEBA_3A_PARQUET)
+    elif os.path.exists(UEBA_3A_CSV):
+        df = pd.read_csv(UEBA_3A_CSV)
+        if "Unnamed: 0" in df.columns:
+            df = df.drop(columns=["Unnamed: 0"])
+    else:
+        return None
+    df["day"] = pd.to_datetime(df["day"], errors="coerce")
+    return df
+
+
 @st.cache_data(show_spinner="Loading dataset...")
 def load_data():
     """Load analyst table + UEBA dataset, merge, pre-compute user_risk."""
@@ -647,6 +712,7 @@ try:
     merged_df, user_risk, user_data_dict = load_data()
     DATA_LOADED = True
 except Exception:
+    ueba_3a_df = None
     DATA_LOADED = False
 
 
@@ -917,6 +983,35 @@ def parse_top_contributors(raw) -> list[str]:
             parsed = _ast.literal_eval(raw)
             if isinstance(parsed, list):
                 return parse_top_contributors(parsed)
+        except Exception:
+            pass
+    return []
+
+
+def parse_top_contributors_with_values(raw) -> list[tuple]:
+    """Return list of (feature_name, contribution_value) tuples from top_contributors."""
+    if raw is None:
+        return []
+    if isinstance(raw, float):
+        return []  # NaN from a left-join miss
+    if isinstance(raw, list):
+        pairs = []
+        for item in raw:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                pairs.append((str(item[0]), item[1]))
+            elif isinstance(item, (list, tuple)) and len(item) == 1:
+                pairs.append((str(item[0]), None))
+            elif isinstance(item, str):
+                pairs.append((item, None))
+        return pairs
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return []
+        try:
+            parsed = _ast.literal_eval(raw)
+            if isinstance(parsed, list):
+                return parse_top_contributors_with_values(parsed)
         except Exception:
             pass
     return []
@@ -1667,6 +1762,223 @@ if active_page == "Investigation":
     u5.metric("Medium-Risk Days", u_med_days)
     u6.metric("Days Observed", u_total_days)
 
+        # ── Alert Context Summary (shown when navigating from Alerts tab) ──
+    _alert_ctx = st.session_state.get("inv_alert_context")
+    if _alert_ctx and _alert_ctx.get("user") == selected_user:
+        _ctx_risk = _alert_ctx.get("risk", "")
+        _ctx_risk_color = RISK_COLORS.get(_ctx_risk, "#666666")
+        _ctx_day = _alert_ctx.get("day", "")
+        _ctx_pctl = _alert_ctx.get("percentile", 0.0)
+        _ctx_summary = _alert_ctx.get("summary") or "Summary unavailable for this alert."
+        st.markdown(
+            f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+            f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 20px 0;'>"
+            "<div class='inv-card-label'>Alert Summary</div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;color:#888;margin-bottom:6px;'>"
+            f"<span style='background:{_ctx_risk_color}22;color:{_ctx_risk_color};font-size:9px;"
+            f"letter-spacing:1px;padding:2px 6px;border:1px solid {_ctx_risk_color}55;"
+            f"margin-right:10px;'>{_ctx_risk}</span>"
+            f"Day: {_ctx_day}&nbsp;&nbsp;&middot;&nbsp;&nbsp;Percentile: P{_ctx_pctl:.1f}</div>"
+            f"<div style='font-family:Inter,sans-serif;font-size:12px;color:#bbb;line-height:1.6;'>"
+            f"{_ctx_summary}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Raw Alert Record ──
+        _ctx_day_ts = pd.to_datetime(_ctx_day, errors="coerce")
+        _raw_row = merged_df[
+            (merged_df["user"] == selected_user) &
+            (merged_df["day"] == _ctx_day_ts)
+        ]
+
+        _ALERT_RECORD_FIELDS = [
+            ("user",               "User"),
+            ("day",                "Day"),
+            ("risk_levels",        "AE Risk Band"),
+            ("percentile_rank",    "AE Percentile"),
+            ("anomaly_scores",     "IF Score"),
+            ("if_percentile_rank", "IF Percentile"),
+            ("if_risk_band",       "IF Risk Band"),
+        ]
+
+        def _fmt_alert_val(col, val):
+            if col == "day" and hasattr(val, "strftime"):
+                return val.strftime("%Y-%m-%d")
+            if isinstance(val, str):
+                return val
+            try:
+                fv = float(val)
+                return str(int(fv)) if fv == int(fv) else f"{fv:.2f}"
+            except (TypeError, ValueError, OverflowError):
+                return str(val)
+            
+        _BADGE_COLS = {"risk_levels", "if_risk_band"}
+        _kv_parts = []
+        if not _raw_row.empty:
+            _rec0 = _raw_row.iloc[0]
+            for _c, _l in _ALERT_RECORD_FIELDS:
+                if _c not in _raw_row.columns:
+                    continue
+                _v = _rec0[_c]
+                if not isinstance(_v, str) and pd.isnull(_v):
+                    continue
+                _val_str = _fmt_alert_val(_c, _v)
+                if _c in _BADGE_COLS:
+                    _bc = RISK_COLORS.get(str(_val_str).upper(), "#666666")
+                    _val_html = (
+                        f"<span style='background:{_bc}22;color:{_bc};font-size:10px;"
+                        f"font-family:JetBrains Mono,monospace;letter-spacing:1px;"
+                        f"padding:2px 8px;border:1px solid {_bc}55;'>{_val_str}</span>"
+                    )
+                elif _c == "explanation":
+                    _val_html = (
+                        f"<span style='font-family:Inter,sans-serif;font-size:12px;"
+                        f"color:#bbb;line-height:1.6;'>{_val_str}</span>"
+                    )
+                else:
+                    _val_html = (
+                        f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                        f"color:#ccc;'>{_val_str}</span>"
+                    )
+                _kv_parts.append(
+                    f"<span class='inv-field-label'>{_l}</span>"
+                    f"<span style='padding:5px 0 3px 0;align-self:center;'>{_val_html}</span>"
+                )
+
+        _kv_grid = "".join(_kv_parts) if _kv_parts else (
+            "<span style='font-family:Inter,sans-serif;font-size:12px;color:#666;"
+            "grid-column:1/-1;'>Raw alert record unavailable.</span>"
+        )
+        st.markdown(
+            f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+            f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 12px 0;'>"
+            "<div class='inv-card-label'>Raw Alert Record</div>"
+            f"<div style='display:grid;grid-template-columns:140px 1fr;gap:2px 16px;'>{_kv_grid}</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Top Reconstruction Error Contributors ──
+        _tc_raw = (
+            _raw_row.iloc[0]["top_contributors"]
+            if not _raw_row.empty and "top_contributors" in _raw_row.columns
+            else None
+        )
+        _tc_pairs = parse_top_contributors_with_values(_tc_raw)
+
+        if _tc_pairs:
+            _tc_table_rows = []
+            _seen_feats: set = set()
+            for _feat, _contrib_val in _tc_pairs:
+                # Deduplicate on the original feature name only — not on the
+                # resolved base column. Two contributors like
+                # file_copy_count_zscore and file_copy_count_rolling_delta
+                # are distinct contributors even if they share a base feature.
+                if _feat in _seen_feats:
+                    continue
+                _seen_feats.add(_feat)
+                try:
+                    _rv_str = f"{float(_contrib_val) * 100:.1f}%" if _contrib_val is not None else "—"
+                except (TypeError, ValueError):
+                    _rv_str = "—"
+                _tc_table_rows.append((_feat, prettify_feature_name(_feat), _rv_str))
+
+            if _tc_table_rows:
+                _tc_tbody_html = "".join(
+                    f"<tr>"
+                    f"<td class='inv-feat-name'>{_f}</td>"
+                    f"<td style='font-family:Inter,sans-serif;font-size:12px;color:#999;"
+                    f"padding:8px 16px 8px 0;text-align:left;border-bottom:1px solid #111;"
+                    f"vertical-align:middle;'>{_l}</td>"
+                    f"<td style='font-family:JetBrains Mono,monospace;font-size:12px;color:#e0e0e0;"
+                    f"padding:8px 0;border-bottom:1px solid #111;vertical-align:middle;"
+                    f"font-weight:600;text-align:right;white-space:nowrap;'>{_r}</td>"
+                    f"</tr>"
+                    for _f, _l, _r in _tc_table_rows
+                )
+                st.markdown(
+                    f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+                    f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 20px 0;'>"
+                    "<div class='inv-card-label'>Top Reconstruction Error Contributors</div>"
+                    "<table style='width:100%;border-collapse:collapse;'>"
+                    "<thead><tr>"
+                    "<th class='inv-th' style='width:44%;text-align:left;'>Feature</th>"
+                    "<th class='inv-th' style='width:38%;text-align:left;padding-left:0;'>Description</th>"
+                    "<th class='inv-th' style='width:18%;text-align:right;padding-right:0;white-space:nowrap;'>Error Contribution</th>"
+                    "</tr></thead>"
+                    f"<tbody>{_tc_tbody_html}</tbody>"
+                    "</table></div>",
+                    unsafe_allow_html=True,
+                )
+
+
+        # ── PC-Level Drill-Down (UEBA Table A) ──
+        if ueba_3a_df is not None:
+            _drill = ueba_3a_df[
+                (ueba_3a_df["user"] == selected_user) &
+                (ueba_3a_df["day"] == _ctx_day_ts)
+            ].copy()
+            _drop_cols = [c for c in ("user", "day") if c in _drill.columns]
+            if _drop_cols:
+                _drill = _drill.drop(columns=_drop_cols)
+            if "pc" in _drill.columns:
+                _drill = _drill.sort_values("pc").reset_index(drop=True)
+            else:
+                _drill = _drill.reset_index(drop=True)
+            
+            if _drill.empty:
+                st.markdown(
+                    f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+                    f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 20px 0;'>"
+                    "<div class='inv-card-label'>PC-Level Drill-Down &mdash; UEBA Table A</div>"
+                    "<div style='font-family:Inter,sans-serif;font-size:11px;color:#555;'>"
+                    "No PC-level UEBA Table A rows found for this user/day.</div>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+               
+                _drill_display = _drill.drop(columns=["pc"], errors="ignore")
+                _drill_cols = list(_drill_display.columns)
+                _drill_last = _drill_cols[-1] if _drill_cols else None
+                _drill_th_html = "".join(
+                    f"<th style='font-family:JetBrains Mono,monospace;font-size:11px;font-weight:600;"
+                    f"color:#aaaaaa;text-align:left;text-transform:uppercase;letter-spacing:1.2px;"
+                    f"white-space:nowrap;padding-top:0;padding-bottom:12px;"
+                    f"padding-right:{'0' if col == _drill_last else '20px'};"
+                    f"padding-left:{'0' if col == _drill_cols[0] else '20px'};"
+                    f"border-bottom:1px solid #1a1a1a;"
+                    f"border-right:{'none' if col == _drill_last else '1px solid #2e2e2e'};"
+                    f"min-width:130px;'>{col.replace('_', ' ')}</th>"
+                    for col in _drill_cols
+                )
+                _drill_tbody_html = "".join(
+                    "<tr>" + "".join(
+                        f"<td style='font-family:JetBrains Mono,monospace;font-size:12px;color:#cccccc;"
+                        f"padding-top:10px;padding-bottom:10px;"
+                        f"padding-right:{'0' if col == _drill_last else '20px'};"
+                        f"padding-left:{'0' if col == _drill_cols[0] else '20px'};"
+                        f"border-bottom:1px solid #111;vertical-align:middle;white-space:nowrap;"
+                        f"border-right:{'none' if col == _drill_last else '1px solid #2e2e2e'};"
+                        f"min-width:130px;'>{_fmt_alert_val(col, row[col])}</td>"
+                        for col in _drill_cols
+                    ) + "</tr>"
+                    for _, row in _drill_display.iterrows()
+                )
+                st.markdown(
+                    f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+                    f"border-left:3px solid {_ctx_risk_color};padding:14px 18px 18px 18px;margin:0 0 20px 0;'>"
+                    "<div class='inv-card-label'>PC-Level Drill-Down &mdash; UEBA Table A</div>"
+                    "<div style='overflow-x:auto;-webkit-overflow-scrolling:touch;'>"
+                    "<table style='border-collapse:collapse;width:max-content;min-width:100%;'>"
+                    f"<thead><tr>{_drill_th_html}</tr></thead>"
+                    f"<tbody>{_drill_tbody_html}</tbody>"
+                    "</table></div></div>",
+                    unsafe_allow_html=True,
+                )
+
+
     # ── Anomaly Timeline ──
     section_header("Anomaly Score Timeline", "sh_score_timeline")
     fig_timeline = go.Figure()
@@ -2016,6 +2328,30 @@ if active_page == "Alerts":
         _filter_bar("al_flt")
         filtered_df = _get_filtered_df()
 
+x        # Alert severity filter + sort controls
+        alert_cols = st.columns([2, 2, 2, 4])
+        with alert_cols[0]:
+            alert_risk = st.multiselect("Severity", ["HIGH", "MEDIUM", "LOW"], default=["HIGH", "MEDIUM"], key="alert_sev")
+        with alert_cols[1]:
+            min_pctl = st.slider("Min Percentile", 0.0, 100.0, 0.0, key="min_pctl")
+        with alert_cols[2]:
+            max_results = st.number_input("Max Rows", min_value=10, max_value=10000, value=500, step=50, key="max_rows")
+        with alert_cols[3]:
+            sort_choice = st.selectbox(
+                "Sort alerts by",
+                [
+                    "Highest score first",
+                    "Lowest score first",
+                    "Highest severity first",
+                    "Lowest severity first",
+                    "Most recent first",
+                    "Oldest first",
+                    "User A–Z",
+                    "User Z–A",
+                ],
+                index=0,
+                key="alert_sort_choice",
+            )
 
         # ── Top 10 Riskiest Users in Alerts ──
         section_header("Top 10 Riskiest Users", "sh_top_users")
@@ -2112,9 +2448,39 @@ if active_page == "Alerts":
 
         alert_risk = [t for t, checked in _tier_checked.items() if checked]
 
+        # Centralised severity mapping — extend here when new bands are added
+        _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+
+        # Filter first
         alert_data = filtered_df[
-            (filtered_df["ae_risk_band"].isin(alert_risk))
-        ].sort_values("ae_percentile_rank", ascending=False)
+            (filtered_df["risk_levels"].isin(alert_risk)) &
+            (filtered_df["percentile_rank"] >= min_pctl)
+        ].copy()
+
+        # Sort based on explicit outcome label
+        if sort_choice == "Highest score first":
+            alert_data = alert_data.sort_values("percentile_rank", ascending=False)
+        elif sort_choice == "Lowest score first":
+            alert_data = alert_data.sort_values("percentile_rank", ascending=True)
+        elif sort_choice in ("Highest severity first", "Lowest severity first"):
+            _asc = sort_choice == "Lowest severity first"
+            alert_data["_risk_sort_key"] = alert_data["risk_levels"].map(_RISK_ORDER).fillna(-1)
+            alert_data = alert_data.sort_values(
+                ["_risk_sort_key", "percentile_rank"],
+                ascending=[_asc, False],
+            ).drop(columns=["_risk_sort_key"])
+        elif sort_choice == "Most recent first":
+            alert_data["day"] = pd.to_datetime(alert_data["day"], errors="coerce")
+            alert_data = alert_data.sort_values("day", ascending=False)
+        elif sort_choice == "Oldest first":
+            alert_data["day"] = pd.to_datetime(alert_data["day"], errors="coerce")
+            alert_data = alert_data.sort_values("day", ascending=True)
+        elif sort_choice == "User A–Z":
+            alert_data = alert_data.sort_values("user", ascending=True)
+        else:  # User Z–A
+            alert_data = alert_data.sort_values("user", ascending=False)
+
+        alert_data = alert_data.head(int(max_results))
 
         # Cap card rendering to keep the UI responsive
         CARD_LIMIT = 10
@@ -2131,19 +2497,17 @@ if active_page == "Alerts":
                 )
 
             # ── Column header row ──
+            _HDR = (
+                "font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+                "text-transform:uppercase;letter-spacing:1.5px;"
+            )
+            _h_risk, _h_info, _h_day, _h_pctl, _h_btn = st.columns([1, 5, 2, 1, 2])
+            _h_risk.markdown(f"<span style='{_HDR}'>Risk</span>", unsafe_allow_html=True)
+            _h_info.markdown(f"<span style='{_HDR}'>User / Investigation hint</span>", unsafe_allow_html=True)
+            _h_day.markdown(f"<span style='{_HDR}'>Day</span>", unsafe_allow_html=True)
+            _h_pctl.markdown(f"<span style='{_HDR}'>Percentile</span>", unsafe_allow_html=True)
             st.markdown(
-                "<div style='display:grid;grid-template-columns:72px 1fr 108px 90px 130px;"
-                "gap:8px;padding:6px 4px;border-bottom:1px solid #1a1a1a;margin-bottom:2px;'>"
-                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                "text-transform:uppercase;letter-spacing:1.5px;'>Risk</span>"
-                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                "text-transform:uppercase;letter-spacing:1.5px;'>User / Investigation hint</span>"
-                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                "text-transform:uppercase;letter-spacing:1.5px;'>Day</span>"
-                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                "text-transform:uppercase;letter-spacing:1.5px;'>Percentile</span>"
-                "<span></span>"
-                "</div>",
+                "<div style='border-bottom:1px solid #1a1a1a;margin:0 0 2px 0;'></div>",
                 unsafe_allow_html=True,
             )
 
@@ -2198,7 +2562,14 @@ if active_page == "Alerts":
 
                 with c_btn:
                     if st.button("Investigate →", key=f"al_inv_{i}", use_container_width=True):
-                        st.session_state["inv_user_select"] = user
+                        st.session_state["inv_user_search"] = user
+                        st.session_state["inv_alert_context"] = {
+                            "user": user,
+                            "day": day_str,
+                            "risk": risk,
+                            "percentile": pctl,
+                            "summary": summary,
+                        }
                         st.session_state["_nav_request"] = "Investigation"
                         st.rerun()
 
