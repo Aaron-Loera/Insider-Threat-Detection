@@ -668,6 +668,7 @@ def load_data():
     analyst_cols = [
         "user", "day", "if_anomaly_score", "ae_percentile_rank", "ae_risk_band",
         "top_contributors", "if_percentile_rank", "if_risk_band", "explanation",
+        "composite_score", "composite_risk_band", "both_signals_high",
     ]
     analyst_cols = [c for c in analyst_cols if c in analyst.columns]
     merged = ueba.merge(analyst[analyst_cols], on=["user", "day"], how="left")
@@ -676,13 +677,13 @@ def load_data():
     user_risk = (
         merged.groupby("user")
         .agg(
-            max_score=("if_anomaly_score", "max"),
-            mean_score=("if_anomaly_score", "mean"),
-            max_percentile=("ae_percentile_rank", "max"),
+            max_score=("composite_score", "max"),
+            mean_score=("composite_score", "mean"),
+            max_percentile=("composite_score", "max"),
             alert_days=("day", "nunique"),
-            critical_count=("ae_risk_band", lambda x: (x == "CRITICAL").sum()),
-            high_count=("ae_risk_band", lambda x: (x == "HIGH").sum()),
-            medium_count=("ae_risk_band", lambda x: (x == "MEDIUM").sum()),
+            critical_count=("composite_risk_band", lambda x: (x == "CRITICAL").sum()),
+            high_count=("composite_risk_band", lambda x: (x == "HIGH").sum()),
+            medium_count=("composite_risk_band", lambda x: (x == "MEDIUM").sum()),
         )
         .reset_index()
         .sort_values("max_percentile", ascending=False)
@@ -692,7 +693,7 @@ def load_data():
     _risk_cat = pd.CategoricalDtype(
         categories=["LOW", "MEDIUM", "HIGH", "CRITICAL"], ordered=True
     )
-    for _col in ("ae_risk_band", "if_risk_band"):
+    for _col in ("ae_risk_band", "if_risk_band", "composite_risk_band"):
         if _col in merged.columns:
             merged[_col] = merged[_col].astype(_risk_cat)
 
@@ -1249,7 +1250,7 @@ def show_filters():
 def _cached_filtered_df(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
     """Return a cached slice of merged_df. Only recomputes when filters change."""
     mask = (
-        merged_df["ae_risk_band"].isin(risk_levels)
+        merged_df["composite_risk_band"].isin(risk_levels)
         & (merged_df["day"].dt.date >= date_start)
         & (merged_df["day"].dt.date <= date_end)
     )
@@ -1509,11 +1510,11 @@ if active_page == "Overview":
 
     total_users = filtered_df["user"].nunique()
     total_records = len(filtered_df)
-    critical_risk_users = filtered_df[filtered_df["ae_risk_band"] == "CRITICAL"]["user"].nunique()
-    high_risk_users = filtered_df[filtered_df["ae_risk_band"] == "HIGH"]["user"].nunique()
-    medium_risk_users = filtered_df[filtered_df["ae_risk_band"] == "MEDIUM"]["user"].nunique()
-    avg_anomaly = filtered_df["if_anomaly_score"].mean()
-    detection_rate = (filtered_df["ae_risk_band"].isin(["CRITICAL", "HIGH", "MEDIUM"]).sum() / max(len(filtered_df), 1)) * 100
+    critical_risk_users = filtered_df[filtered_df["composite_risk_band"] == "CRITICAL"]["user"].nunique()
+    high_risk_users = filtered_df[filtered_df["composite_risk_band"] == "HIGH"]["user"].nunique()
+    medium_risk_users = filtered_df[filtered_df["composite_risk_band"] == "MEDIUM"]["user"].nunique()
+    avg_anomaly = filtered_df["composite_score"].mean()
+    detection_rate = (filtered_df["composite_risk_band"].isin(["CRITICAL", "HIGH", "MEDIUM"]).sum() / max(len(filtered_df), 1)) * 100
 
     st.markdown(
         "<div class='kpi-scroll-wrapper'>"
@@ -1556,7 +1557,7 @@ if active_page == "Overview":
 
     with col_left:
         section_header("Risk Distribution", "sh_risk_dist")
-        risk_counts = filtered_df["ae_risk_band"].value_counts().reset_index()
+        risk_counts = filtered_df["composite_risk_band"].value_counts().reset_index()
         risk_counts.columns = ["Risk Level", "Count"]
         fig_donut = px.pie(
             risk_counts, values="Count", names="Risk Level",
@@ -1573,7 +1574,7 @@ if active_page == "Overview":
     with col_right:
         section_header("Alert Trend Over Time", "sh_alert_trend")
         daily_alerts = (
-            filtered_df.groupby([filtered_df["day"].dt.date, "ae_risk_band"])
+            filtered_df.groupby([filtered_df["day"].dt.date, "composite_risk_band"])
             .size()
             .reset_index(name="count")
         )
@@ -1647,9 +1648,9 @@ if active_page == "Overview":
         # Sample for histogram to avoid sending 2M+ points to Plotly
         hist_df = filtered_df if len(filtered_df) <= MAX_PLOT_POINTS else filtered_df.sample(MAX_PLOT_POINTS, random_state=42)
         fig_hist = px.histogram(
-            hist_df, x="if_anomaly_score", nbins=80,
-            color="ae_risk_band", color_discrete_map=RISK_COLORS,
-            labels={"if_anomaly_score": "Anomaly Score", "ae_risk_band": "Risk Level"},
+            hist_df, x="composite_score", nbins=80,
+            color="composite_risk_band", color_discrete_map=RISK_COLORS,
+            labels={"composite_score": "Composite Score", "composite_risk_band": "Risk Level"},
         )
         fig_hist.update_layout(**PLOTLY_LAYOUT, height=440, barmode="overlay")
         fig_hist.update_traces(opacity=0.75)
@@ -1726,7 +1727,7 @@ if active_page == "Investigation":
     _u_rows = user_data_dict.get(selected_user, pd.DataFrame())
     if not _u_rows.empty:
         _u_mask = (
-            _u_rows["ae_risk_band"].isin(st.session_state.flt_risk)
+            _u_rows["composite_risk_band"].isin(st.session_state.flt_risk)
             & (_u_rows["day"].dt.date >= st.session_state.flt_date_start)
             & (_u_rows["day"].dt.date <= st.session_state.flt_date_end)
         )
@@ -1740,11 +1741,11 @@ if active_page == "Investigation":
 
     # ── User KPI Row ──
     u1, u2, u3, u4, u5, u6 = st.columns(6)
-    u_max_score = user_data["if_anomaly_score"].max()
-    u_max_pctl = user_data["ae_percentile_rank"].max()
-    u_crit_days = (user_data["ae_risk_band"] == "CRITICAL").sum()
-    u_high_days = (user_data["ae_risk_band"] == "HIGH").sum()
-    u_med_days = (user_data["ae_risk_band"] == "MEDIUM").sum()
+    u_max_score = user_data["composite_score"].max()
+    u_max_pctl = user_data["composite_score"].max()
+    u_crit_days = (user_data["composite_risk_band"] == "CRITICAL").sum()
+    u_high_days = (user_data["composite_risk_band"] == "HIGH").sum()
+    u_med_days = (user_data["composite_risk_band"] == "MEDIUM").sum()
     u_total_days = len(user_data)
 
     # Determine overall user risk label
@@ -1797,16 +1798,22 @@ if active_page == "Investigation":
         _ALERT_RECORD_FIELDS = [
             ("user",               "User"),
             ("day",                "Day"),
-            ("risk_levels",        "AE Risk Band"),
-            ("ae_percentile_rank",    "AE Percentile"),
-            ("anomaly_scores",     "IF Score"),
-            ("if_percentile_rank", "IF Percentile"),
+            ("composite_risk_band","Composite Risk Band"),
+            ("composite_score",    "Composite Score"),
+            ("ae_risk_band",       "AE Risk Band"),
+            ("ae_percentile_rank", "AE Percentile"),
             ("if_risk_band",       "IF Risk Band"),
+            ("if_anomaly_score",   "IF Score"),
+            ("if_percentile_rank", "IF Percentile"),
+            ("both_signals_high",  "Both Signals High"),
+            ("explanation",        "Explanation"),
         ]
 
         def _fmt_alert_val(col, val):
             if col == "day" and hasattr(val, "strftime"):
                 return val.strftime("%Y-%m-%d")
+            if col == "both_signals_high":
+                return "Yes" if val else "No"
             if isinstance(val, str):
                 return val
             try:
@@ -1814,8 +1821,8 @@ if active_page == "Investigation":
                 return str(int(fv)) if fv == int(fv) else f"{fv:.2f}"
             except (TypeError, ValueError, OverflowError):
                 return str(val)
-            
-        _BADGE_COLS = {"risk_levels", "if_risk_band"}
+
+        _BADGE_COLS = {"composite_risk_band", "ae_risk_band", "if_risk_band"}
         _kv_parts = []
         if not _raw_row.empty:
             _rec0 = _raw_row.iloc[0]
@@ -1985,22 +1992,22 @@ if active_page == "Investigation":
     section_header("Anomaly Score Timeline", "sh_score_timeline")
     fig_timeline = go.Figure()
     fig_timeline.add_trace(go.Scatter(
-        x=user_data["day"], y=user_data["if_anomaly_score"],
-        mode="lines+markers", name="Anomaly Score",
+        x=user_data["day"], y=user_data["composite_score"],
+        mode="lines+markers", name="Composite Score",
         line=dict(color="#ffffff", width=1.5),
         marker=dict(size=4, color="#ffffff"),
     ))
     # Color markers by risk level
     for risk, color in RISK_COLORS.items():
-        subset = user_data[user_data["ae_risk_band"] == risk]
+        subset = user_data[user_data["composite_risk_band"] == risk]
         if not subset.empty:
             fig_timeline.add_trace(go.Scatter(
-                x=subset["day"], y=subset["if_anomaly_score"],
+                x=subset["day"], y=subset["composite_score"],
                 mode="markers", name=risk,
                 marker=dict(size=8, color=color, symbol="square", line=dict(width=1, color="#000")),
 
             ))
-    fig_timeline.update_layout(**PLOTLY_LAYOUT, height=320, xaxis_title="Date", yaxis_title="Anomaly Score")
+    fig_timeline.update_layout(**PLOTLY_LAYOUT, height=320, xaxis_title="Date", yaxis_title="Composite Score")
     st.plotly_chart(fig_timeline, use_container_width=True)
 
     # ── Behavioral Radar Chart + Activity Heatmap ──
@@ -2099,7 +2106,7 @@ if active_page == "Investigation":
 
     # ── Raw Activity Table ──
     section_header("Raw Activity Records", "sh_raw_records")
-    display_cols = ["day", "ae_risk_band", "if_anomaly_score", "ae_percentile_rank"] + RAW_FEATURES + CROSS_FLAGS
+    display_cols = ["day", "composite_risk_band", "composite_score", "if_anomaly_score", "ae_percentile_rank"] + RAW_FEATURES + CROSS_FLAGS
     display_cols = [c for c in display_cols if c in user_data.columns]
     st.dataframe(
         user_data[display_cols].sort_values("day", ascending=False),
@@ -2227,8 +2234,8 @@ if active_page == "Alerts":
                     # Tie-break equal timestamps by latest arrival first.
                     _sort_cols.append("event_index")
                     _sort_dirs.append(False)
-                elif "if_percentile_rank" in live_df.columns:
-                    _sort_cols.append("if_percentile_rank")
+                elif "composite_score" in live_df.columns:
+                    _sort_cols.append("composite_score")
                     _sort_dirs.append(False)
                 live_df = live_df.sort_values(by=_sort_cols, ascending=_sort_dirs, kind="stable")
                 live_df = live_df.drop(columns=[c for c in ("_sort_ts", "event_index") if c in live_df.columns])
@@ -2245,7 +2252,8 @@ if active_page == "Alerts":
                 "cert_timestamp": st.column_config.TextColumn("CERT Timestamp"),
                 "risk_level":     st.column_config.TextColumn("Risk Level"),
                 "anomaly_score":  st.column_config.NumberColumn("Anomaly Score", format="%.6f"),
-                "ae_percentile_rank":st.column_config.ProgressColumn("Percentile", min_value=0, max_value=100, format="%.1f"),
+                "composite_score": st.column_config.ProgressColumn("Composite Score", min_value=0, max_value=100, format="%.1f"),
+                "ae_percentile_rank":st.column_config.ProgressColumn("AE Percentile", min_value=0, max_value=100, format="%.1f"),
             }
             st.dataframe(live_df, use_container_width=True, height=500, column_config=_live_col_cfg)
 
@@ -2265,9 +2273,9 @@ if active_page == "Alerts":
 
             with col_live_left:
                 section_header("Risk Distribution", "sh_live_risk_dist")
-                if "if_risk_band" in live_chart_df.columns and not live_chart_df.empty:
+                if "composite_risk_band" in live_chart_df.columns and not live_chart_df.empty:
                     _risk_counts = (
-                        live_chart_df["if_risk_band"]
+                        live_chart_df["composite_risk_band"]
                         .fillna("LOW")
                         .value_counts()
                         .rename_axis("Risk Level")
@@ -2298,20 +2306,20 @@ if active_page == "Alerts":
 
             with col_live_right:
                 section_header("Anomaly Score Distribution", "sh_live_score_dist")
-                if "if_anomaly_score" in live_chart_df.columns and "if_risk_band" in live_chart_df.columns:
+                if "composite_score" in live_chart_df.columns and "composite_risk_band" in live_chart_df.columns:
                     fig_live_hist = px.histogram(
                         live_chart_df,
-                        x="if_anomaly_score",
+                        x="composite_score",
                         nbins=50,
-                        color="if_risk_band",
+                        color="composite_risk_band",
                         color_discrete_map=RISK_COLORS,
-                        labels={"if_anomaly_score": "Anomaly Score", "if_risk_band": "Risk Level"},
+                        labels={"composite_score": "Composite Score", "composite_risk_band": "Risk Level"},
                     )
                     fig_live_hist.update_layout(**PLOTLY_LAYOUT, height=340, barmode="overlay")
                     fig_live_hist.update_traces(opacity=0.75)
                     st.plotly_chart(fig_live_hist, use_container_width=True)
                 else:
-                    st.info("Anomaly-score or risk-band fields are not available in live alerts yet.")
+                    st.info("Composite score or risk-band fields are not available in live alerts yet.")
         else:
             st.info("Waiting for first scored row… (models are loading)")
 
@@ -2365,9 +2373,9 @@ if active_page == "Alerts":
         top_users = (
             filtered_df.groupby("user", observed=True)
             .agg(
-                max_percentile=("ae_percentile_rank", "max"),
-                critical_count=("ae_risk_band", lambda x: (x == "CRITICAL").sum()),
-                high_count=("ae_risk_band", lambda x: (x == "HIGH").sum()),
+                max_percentile=("composite_score", "max"),
+                critical_count=("composite_risk_band", lambda x: (x == "CRITICAL").sum()),
+                high_count=("composite_risk_band", lambda x: (x == "HIGH").sum()),
             )
             .reset_index()
             .sort_values("max_percentile", ascending=False)
@@ -2424,7 +2432,7 @@ if active_page == "Alerts":
 
         # Alert severity filter within this tab
         _severity_counts = {
-            tier: int((filtered_df["ae_risk_band"] == tier).sum()) for tier in RISK_TIERS
+            tier: int((filtered_df["composite_risk_band"] == tier).sum()) for tier in RISK_TIERS
         }
 
         section_header("Filter by severity", "sh_top_users")
@@ -2455,20 +2463,20 @@ if active_page == "Alerts":
 
         # Filter first
         alert_data = filtered_df[
-            (filtered_df["ae_risk_band"].isin(alert_risk)) &
-            (filtered_df["ae_percentile_rank"] >= min_pctl)
+            (filtered_df["composite_risk_band"].isin(alert_risk)) &
+            (filtered_df["composite_score"] >= min_pctl)
         ].copy()
 
         # Sort based on explicit outcome label
         if sort_choice == "Highest score first":
-            alert_data = alert_data.sort_values("ae_percentile_rank", ascending=False)
+            alert_data = alert_data.sort_values("composite_score", ascending=False)
         elif sort_choice == "Lowest score first":
-            alert_data = alert_data.sort_values("ae_percentile_rank", ascending=True)
+            alert_data = alert_data.sort_values("composite_score", ascending=True)
         elif sort_choice in ("Highest severity first", "Lowest severity first"):
             _asc = sort_choice == "Lowest severity first"
-            alert_data["_risk_sort_key"] = alert_data["ae_risk_band"].astype(str).map(_RISK_ORDER).fillna(-1)
+            alert_data["_risk_sort_key"] = alert_data["composite_risk_band"].astype(str).map(_RISK_ORDER).fillna(-1)
             alert_data = alert_data.sort_values(
-                ["_risk_sort_key", "ae_percentile_rank"],
+                ["_risk_sort_key", "composite_score"],
                 ascending=[_asc, False],
             ).drop(columns=["_risk_sort_key"])
         elif sort_choice == "Most recent first":
@@ -2515,11 +2523,11 @@ if active_page == "Alerts":
 
             # ── Per-alert card rows ──
             for i, row in enumerate(card_data.itertuples()):
-                risk    = getattr(row, "ae_risk_band",    "LOW")
+                risk    = getattr(row, "composite_risk_band", "LOW")
                 user    = getattr(row, "user",           "—")
                 day_val = getattr(row, "day",            None)
                 day_str = day_val.strftime("%Y-%m-%d") if hasattr(day_val, "strftime") else str(day_val)
-                pctl    = getattr(row, "ae_percentile_rank", 0.0)
+                pctl    = getattr(row, "composite_score", 0.0)
                 top_raw = getattr(row, "top_contributors", None)
                 summary = build_alert_summary(top_raw)
 
@@ -2581,7 +2589,7 @@ if active_page == "Alerts":
                 )
 
         # ── Export (columns + top_contributors if present) ──
-        alert_display_cols = ["user", "day", "ae_risk_band", "if_anomaly_score", "ae_percentile_rank"]
+        alert_display_cols = ["user", "day", "composite_risk_band", "composite_score", "if_anomaly_score", "ae_percentile_rank", "ae_risk_band"]
         alert_display_cols += [c for c in CROSS_FLAGS if c in alert_data.columns]
         if "top_contributors" in alert_data.columns:
             alert_display_cols.append("top_contributors")
@@ -2648,9 +2656,9 @@ if active_page == "Channels":
         # Downsample for box plot — browser can't handle 2M+ points
         box_df = filtered_df if len(filtered_df) <= MAX_PLOT_POINTS else filtered_df.sample(MAX_PLOT_POINTS, random_state=42)
         fig_box = px.box(
-            box_df, x="ae_risk_band", y=selected_feature,
-            color="ae_risk_band", color_discrete_map=RISK_COLORS,
-            category_orders={"ae_risk_band": RISK_TIERS},
+            box_df, x="composite_risk_band", y=selected_feature,
+            color="composite_risk_band", color_discrete_map=RISK_COLORS,
+            category_orders={"composite_risk_band": RISK_TIERS},
         )
         fig_box.update_layout(**PLOTLY_LAYOUT, height=400, xaxis_title="Risk Level", yaxis_title=selected_feature)
         st.plotly_chart(fig_box, use_container_width=True)
