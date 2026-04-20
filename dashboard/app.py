@@ -11,7 +11,14 @@ import subprocess
 import sys
 import time
 import ast as _ast
-import html as _html_mod
+import hmac
+import hashlib
+
+try:
+    import pyrebase
+    _PYREBASE_AVAILABLE = True
+except ImportError:
+    _PYREBASE_AVAILABLE = False
 
 # ──────────────────────────────────────────────────────────────
 # Page Config & Custom CSS
@@ -74,6 +81,51 @@ st.markdown("""
     section[data-testid="stSidebar"] > div > div {
         padding-top: 0 !important;
         margin-top: 0 !important;
+    }
+    /* Give sidebar content enough bottom padding so nothing hides behind the fixed panel */
+    [data-testid="stSidebarUserContent"] {
+        padding-bottom: 120px !important;
+    }
+    /* Fixed sign-out panel at sidebar bottom */
+    .signout-panel {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: var(--sidebar-width, 280px);
+        background: #0a0a0a;
+        border-top: 1px solid #1a1a1a;
+        padding: 14px 16px;
+        z-index: 999;
+    }
+    .signout-panel .so-email {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 9px;
+        color: #555;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        word-break: break-all;
+        margin: 0 0 8px 0;
+    }
+    .signout-panel .so-btn {
+        display: block;
+        width: 100%;
+        background: #0e0e0e;
+        border: 1px solid #2a2a2a;
+        color: #888;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        text-decoration: none;
+        text-align: center;
+        padding: 12px 0;
+        transition: border-color 0.15s, color 0.15s;
+    }
+    .signout-panel .so-btn:hover {
+        border-color: #e84545;
+        color: #e84545;
+        background: #1a0000;
     }
     /* Logo branding block: negative margin pulls it past any remaining offset */
     .sidebar-branding {
@@ -345,6 +397,52 @@ st.markdown("""
         letter-spacing: 2px;
         font-family: 'JetBrains Mono', monospace;
     }
+            
+    /* ── Investigation card labels (Alert Summary, Raw Alert Record, etc.) ── */
+    .inv-card-label {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 15px;
+        font-weight: 900;
+        color: #bbbbbb;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        margin-bottom: 14px;
+    }
+
+    /* ── Investigation field labels (User, Day, AE Risk Band …) ── */
+    .inv-field-label {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+        font-weight: 600;
+        color: #999999;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        padding: 6px 0 4px 0;
+        align-self: center;
+    }
+
+    /* ── Investigation table: column headers ── */
+    .inv-th {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+        font-weight: 600;
+        color: #999999;
+        text-align: left;
+        padding: 0 16px 10px 0;
+        text-transform: uppercase;
+        letter-spacing: 1.2px;
+        border-bottom: 1px solid #1a1a1a;
+    }
+
+    /* ── Investigation table: feature-name cells ── */
+    .inv-feat-name {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+        color: #888888;
+        padding: 8px 16px 8px 0;
+        border-bottom: 1px solid #111;
+        vertical-align: middle;
+    }
 
     /* ── Risk badges ── */
     .risk-high   { color: #e84545; font-weight: 600; }
@@ -380,6 +478,10 @@ st.markdown("""
         background-color: #0a0a0a !important;
     }
     .stSlider > div > div > div { border-radius: 0 !important; }
+    [data-baseweb="select"] > div,
+    [data-baseweb="select"] > div * {
+        cursor: pointer !important;
+    }
     button[kind="primary"], .stDownloadButton > button {
         border-radius: 0 !important;
         text-transform: uppercase;
@@ -522,6 +624,319 @@ st.markdown("""
 
 
 # ──────────────────────────────────────────────────────────────
+# Firebase Authentication
+# ──────────────────────────────────────────────────────────────
+
+def _make_auth_token(email: str) -> str:
+    secret = st.secrets["firebase"]["apiKey"].encode()
+    return hmac.new(secret, email.lower().encode(), hashlib.sha256).hexdigest()
+
+def _set_auth_cookie(email: str):
+    token = _make_auth_token(email)
+    components.html(
+        f"""<script>
+        document.cookie = "auth_email={email}; path=/; max-age=86400; SameSite=Strict";
+        document.cookie = "auth_token={token}; path=/; max-age=86400; SameSite=Strict";
+        </script>""",
+        height=0,
+    )
+
+def _clear_auth_cookie():
+    components.html(
+        """<script>
+        document.cookie = "auth_email=; path=/; max-age=0";
+        document.cookie = "auth_token=; path=/; max-age=0";
+        </script>""",
+        height=0,
+    )
+
+
+def _get_firebase_auth():
+    """Return a Pyrebase Auth object initialised from st.secrets."""
+    if not _PYREBASE_AVAILABLE:
+        st.error(
+            "**Missing dependency:** `pyrebase4` is required for authentication. "
+            "Run `pip install pyrebase4` then restart the app."
+        )
+        st.stop()
+    firebase_cfg = st.secrets.get("firebase", None)
+    if firebase_cfg is None:
+        st.error(
+            "**Firebase config missing.** Add a `[firebase]` section to "
+            "`.streamlit/secrets.toml`. See the dashboard README for setup instructions."
+        )
+        st.stop()
+    app = pyrebase.initialize_app(dict(firebase_cfg))
+    return app.auth()
+
+
+def _render_login():
+    """Render a full-page login form. Authenticates via Firebase Email/Password."""
+    st.markdown("""
+    <style>
+    /* ── Hide sidebar entirely on the login page ── */
+    [data-testid="stSidebar"],
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stExpandSidebarButton"] { display: none !important; }
+
+    /* ── Full-bleed black background ── */
+    html, body, [data-testid="stAppViewContainer"],
+    [data-testid="stMain"], .main {
+        background-color: #000000 !important;
+    }
+    /* Vertically + horizontally centre the login card */
+    [data-testid="stMain"] {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        min-height: 100vh !important;
+    }
+    .block-container {
+        padding: 24px 40px 36px 40px !important;
+        max-width: 460px !important;
+        width: 100% !important;
+        margin: 0 auto !important;
+        flex: none !important;
+        background: #0a0a0a;
+        border: 1px solid #1a1a1a;
+        border-top: 2px solid #e84545;
+    }
+
+    /* ── Input labels ── */
+    .block-container [data-testid="stTextInput"] label p {
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 10px !important;
+        font-weight: 600 !important;
+        letter-spacing: 2px !important;
+        text-transform: uppercase !important;
+        color: #555 !important;
+    }
+
+    /* ── Input fields ── */
+    .block-container [data-testid="stTextInput"] input {
+        background-color: #000000 !important;
+        border: 1px solid #2a2a2a !important;
+        border-radius: 0 !important;
+        color: #ffffff !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 13px !important;
+        padding: 10px 14px !important;
+        caret-color: #e84545 !important;
+        transition: border-color 0.15s ease !important;
+    }
+    .block-container [data-testid="stTextInput"] input:focus {
+        border-color: #e84545 !important;
+        box-shadow: none !important;
+        outline: none !important;
+    }
+    .block-container [data-testid="stTextInput"] input::placeholder {
+        color: #333 !important;
+    }
+    /* Hide "Press Enter to apply" helper on login inputs */
+    .block-container [data-testid="InputInstructions"] {
+        display: none !important;
+    }
+
+    /* ── Sign-in button ── */
+    div[data-testid="stColumn"]:nth-child(2) [data-testid="stButton"] button {
+        background-color: #e84545 !important;
+        border: none !important;
+        border-radius: 0 !important;
+        color: #ffffff !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 11px !important;
+        font-weight: 700 !important;
+        letter-spacing: 3px !important;
+        padding: 12px 0 !important;
+        width: 100% !important;
+        transition: background-color 0.15s ease !important;
+    }
+    .block-container [data-testid="stButton"] button:hover {
+        background-color: #c73333 !important;
+    }
+
+    /* ── Error alert ── */
+    .block-container [data-testid="stNotificationContentError"],
+    .block-container .stAlert {
+        background-color: #1a0000 !important;
+        border: 1px solid #e84545 !important;
+        border-radius: 0 !important;
+        color: #ee8888 !important;
+        font-size: 12px !important;
+    }
+
+    /* ── Logo heading ── */
+    .login-logo-row {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 22px;
+    }
+    .login-logo-dsk {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 28px;
+        font-weight: 700;
+        letter-spacing: 6px;
+        color: #ffffff;
+        display: block;
+        line-height: 1;
+    }
+    .login-logo-sub {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 8px;
+        letter-spacing: 2px;
+        color: #444;
+        text-transform: uppercase;
+        margin-top: 5px;
+        display: block;
+    }
+    .login-divider {
+        border: none;
+        border-top: 1px solid #1a1a1a;
+        margin: 0 0 22px 0;
+    }
+    .login-heading {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        color: #444;
+        margin: 0 0 20px 0;
+    }
+    .login-footer {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 8px;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        color: #2a2a2a;
+        text-align: center;
+        margin-top: 24px;
+    }
+
+    /* ── Responsive: phones / small screens ── */
+    @media (max-width: 640px) {
+        .block-container {
+            max-width: 100% !important;
+            padding: 24px 18px 22px 18px !important;
+        }
+        .login-logo-row svg { width: 36px; height: 36px; }
+        .login-logo-dsk { font-size: 22px; letter-spacing: 3px; }
+        .login-logo-sub { font-size: 7px; letter-spacing: 1.5px; }
+        .login-heading  { font-size: 8px; letter-spacing: 2px; margin-bottom: 14px; }
+        .login-divider  { margin: 16px 0 18px 0; }
+        .login-footer   { font-size: 7px; margin-top: 18px; }
+        .block-container [data-testid="stTextInput"] input {
+            font-size: 12px !important;
+            padding: 9px 12px !important;
+        }
+        .block-container [data-testid="stButton"] button {
+            font-size: 10px !important;
+            padding: 10px 0 !important;
+        }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown(
+        "<div class='login-logo-row'>"
+        "<svg width='48' height='48' viewBox='0 0 100 100' fill='none' xmlns='http://www.w3.org/2000/svg' style='flex-shrink:0;'>"
+        "<path d='M25 85 L25 40 L15 15 L30 30 L50 25 L70 30 L85 15 L75 40 L75 85 Z' "
+        "fill='#e84545' opacity='0.9'/>"
+        "<circle cx='38' cy='50' r='5' fill='#000'/>"
+        "<circle cx='62' cy='50' r='5' fill='#000'/>"
+        "<path d='M45 60 Q50 65 55 60' stroke='#000' stroke-width='2' fill='none'/>"
+        "<line x1='20' y1='55' x2='38' y2='52' stroke='#000' stroke-width='1.5'/>"
+        "<line x1='20' y1='60' x2='38' y2='58' stroke='#000' stroke-width='1.5'/>"
+        "<line x1='62' y1='52' x2='80' y2='55' stroke='#000' stroke-width='1.5'/>"
+        "<line x1='62' y1='58' x2='80' y2='60' stroke='#000' stroke-width='1.5'/>"
+        "</svg>"
+        "<div>"
+        "<span class='login-logo-dsk'>DSK</span>"
+        "<span class='login-logo-sub'>Data Structure Kittens</span>"
+        "</div>"
+        "</div>"
+        "<hr class='login-divider'>"
+        "<p class='login-heading'>Analyst Portal &mdash; Sign In</p>",
+        unsafe_allow_html=True,
+    )
+
+    email = st.text_input(
+        "Email address",
+        placeholder="analyst@organisation.com",
+        key="login_email",
+    )
+    password = st.text_input(
+        "Password",
+        type="password",
+        placeholder="••••••••",
+        key="login_password",
+    )
+
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+    if st.session_state.get("_login_error"):
+        st.error(st.session_state["_login_error"])
+
+    if st.button("SIGN IN", use_container_width=True, type="primary"):
+        if not email or not password:
+            st.session_state["_login_error"] = "Email and password are required."
+            st.rerun()
+        else:
+            try:
+                auth = _get_firebase_auth()
+                user = auth.sign_in_with_email_and_password(email, password)
+                st.session_state["authenticated"] = True
+                st.session_state["auth_user_email"] = user.get("email", email)
+                st.session_state["auth_id_token"] = user.get("idToken", "")
+                st.session_state["_set_cookie"] = True
+                st.session_state.pop("_login_error", None)
+                st.rerun()
+            except Exception as exc:
+                msg = str(exc)
+                if any(k in msg for k in ("INVALID_PASSWORD", "EMAIL_NOT_FOUND", "INVALID_LOGIN_CREDENTIALS")):
+                    st.session_state["_login_error"] = "Invalid email or password."
+                elif "TOO_MANY_ATTEMPTS_TRY_LATER" in msg:
+                    st.session_state["_login_error"] = "Too many failed attempts. Try again later."
+                elif "USER_DISABLED" in msg:
+                    st.session_state["_login_error"] = "This account has been disabled."
+                else:
+                    st.session_state["_login_error"] = "Sign-in failed. Please check your credentials."
+                st.rerun()
+
+    st.markdown(
+        "<p class='login-footer'>UEBA Insider Threat Detection &mdash; Senior Design Project &middot; 2026</p>",
+        unsafe_allow_html=True,
+    )
+
+
+# ── Handle logout via query param (set by the fixed sidebar button) ──
+_is_logout = st.query_params.get("logout") == "true"
+if _is_logout:
+    st.session_state.clear()
+    st.query_params.clear()
+    _clear_auth_cookie()
+
+# ── Restore session from auth cookie (survives page refresh) ──
+if not _is_logout and not st.session_state.get("authenticated", False):
+    _cookies = st.context.cookies
+    _c_email = _cookies.get("auth_email", "")
+    _c_token = _cookies.get("auth_token", "")
+    if _c_email and _c_token and hmac.compare_digest(_c_token, _make_auth_token(_c_email)):
+        st.session_state["authenticated"] = True
+        st.session_state["auth_user_email"] = _c_email
+
+# ── Auth gate — show login and stop until the user has signed in ──
+if not st.session_state.get("authenticated", False):
+    _render_login()
+    st.stop()
+
+# ── Set auth cookie after first successful login ──
+if st.session_state.pop("_set_cookie", False):
+    _set_auth_cookie(st.session_state.get("auth_user_email", ""))
+
+
+# ──────────────────────────────────────────────────────────────
 # Data Loading
 # ──────────────────────────────────────────────────────────────
 
@@ -535,6 +950,7 @@ if BASE_DIR not in sys.path:
 from config import (
     ANALYST_TABLE_PARQUET, ANALYST_TABLE_CSV,
     UEBA_PARQUET, UEBA_CSV,
+    UEBA_A_PARQUET, UEBA_A_CSV,
     LIVE_OUTPUT, LIVE_PAUSE_FLAG, LIVE_SIM_SCRIPT,
 )
 
@@ -563,6 +979,21 @@ UEBA_COLS = [
     "jobsite_usb_activity_flag", "suspicious_upload_flag", "cloud_upload_flag",
     "non_primary_pc_risk_flag",
 ]
+
+
+@st.cache_data(show_spinner=False)
+def load_ueba_a():
+    """Load UEBA Table A — (user, pc, day) granular rows used for PC-level drill-down."""
+    if os.path.exists(UEBA_A_PARQUET):
+        df = pd.read_parquet(UEBA_A_PARQUET)
+    elif os.path.exists(UEBA_A_CSV):
+        df = pd.read_csv(UEBA_A_CSV)
+        if "Unnamed: 0" in df.columns:
+            df = df.drop(columns=["Unnamed: 0"])
+    else:
+        return None
+    df["day"] = pd.to_datetime(df["day"], errors="coerce")
+    return df
 
 
 @st.cache_data(show_spinner="Loading dataset...")
@@ -646,8 +1077,10 @@ def load_data():
 
 try:
     merged_df, user_risk, user_data_dict = load_data()
+    ueba_a_df = load_ueba_a()
     DATA_LOADED = True
 except Exception:
+    ueba_a_df = None
     DATA_LOADED = False
 
 
@@ -923,6 +1356,35 @@ def parse_top_contributors(raw) -> list[str]:
     return []
 
 
+def parse_top_contributors_with_values(raw) -> list[tuple]:
+    """Return list of (feature_name, contribution_value) tuples from top_contributors."""
+    if raw is None:
+        return []
+    if isinstance(raw, float):
+        return []  # NaN from a left-join miss
+    if isinstance(raw, list):
+        pairs = []
+        for item in raw:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                pairs.append((str(item[0]), item[1]))
+            elif isinstance(item, (list, tuple)) and len(item) == 1:
+                pairs.append((str(item[0]), None))
+            elif isinstance(item, str):
+                pairs.append((item, None))
+        return pairs
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return []
+        try:
+            parsed = _ast.literal_eval(raw)
+            if isinstance(parsed, list):
+                return parse_top_contributors_with_values(parsed)
+        except Exception:
+            pass
+    return []
+
+
 def prettify_feature_name(name: str) -> str:
     """Convert a raw feature name to an analyst-readable investigation phrase."""
     cleaned = name.strip().replace("contribution_", "")
@@ -1089,10 +1551,18 @@ with st.sidebar:
     )
 
     st.markdown("<div style='border-top:1px solid #1a1a1a; margin:16px 0;'></div>", unsafe_allow_html=True)
+
+    # ── Signed-in user + logout (fixed to bottom of sidebar) ──
+    _signed_in_email = st.session_state.get("auth_user_email", "")
+    _email_html = (
+        f"<p class='so-email'>{_signed_in_email}</p>"
+        if _signed_in_email else ""
+    )
     st.markdown(
-        "<div style='font-family:JetBrains Mono,monospace; font-size:9px; color:#333; "
-        "text-transform:uppercase; letter-spacing:1.5px; line-height:1.8;'>"
-        "DSK &mdash; Data Structure Kittens<br>Senior Design Project &middot; 2026</div>",
+        f"<div class='signout-panel'>"
+        f"{_email_html}"
+        f"<a class='so-btn' href='?logout=true' target='_self'>SIGN OUT</a>"
+        f"</div>",
         unsafe_allow_html=True,
     )
 
@@ -1670,6 +2140,223 @@ if active_page == "Investigation":
     u5.metric("Medium-Risk Days", u_med_days)
     u6.metric("Days Observed", u_total_days)
 
+        # ── Alert Context Summary (shown when navigating from Alerts tab) ──
+    _alert_ctx = st.session_state.get("inv_alert_context")
+    if _alert_ctx and _alert_ctx.get("user") == selected_user:
+        _ctx_risk = _alert_ctx.get("risk", "")
+        _ctx_risk_color = RISK_COLORS.get(_ctx_risk, "#666666")
+        _ctx_day = _alert_ctx.get("day", "")
+        _ctx_pctl = _alert_ctx.get("percentile", 0.0)
+        _ctx_summary = _alert_ctx.get("summary") or "Summary unavailable for this alert."
+        st.markdown(
+            f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+            f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 20px 0;'>"
+            "<div class='inv-card-label'>Alert Summary</div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;color:#888;margin-bottom:6px;'>"
+            f"<span style='background:{_ctx_risk_color}22;color:{_ctx_risk_color};font-size:9px;"
+            f"letter-spacing:1px;padding:2px 6px;border:1px solid {_ctx_risk_color}55;"
+            f"margin-right:10px;'>{_ctx_risk}</span>"
+            f"Day: {_ctx_day}&nbsp;&nbsp;&middot;&nbsp;&nbsp;Percentile: P{_ctx_pctl:.1f}</div>"
+            f"<div style='font-family:Inter,sans-serif;font-size:12px;color:#bbb;line-height:1.6;'>"
+            f"{_ctx_summary}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Raw Alert Record ──
+        _ctx_day_ts = pd.to_datetime(_ctx_day, errors="coerce")
+        _raw_row = merged_df[
+            (merged_df["user"] == selected_user) &
+            (merged_df["day"] == _ctx_day_ts)
+        ]
+
+        _ALERT_RECORD_FIELDS = [
+            ("user",               "User"),
+            ("day",                "Day"),
+            ("risk_levels",        "AE Risk Band"),
+            ("ae_percentile_rank",    "AE Percentile"),
+            ("anomaly_scores",     "IF Score"),
+            ("if_percentile_rank", "IF Percentile"),
+            ("if_risk_band",       "IF Risk Band"),
+        ]
+
+        def _fmt_alert_val(col, val):
+            if col == "day" and hasattr(val, "strftime"):
+                return val.strftime("%Y-%m-%d")
+            if isinstance(val, str):
+                return val
+            try:
+                fv = float(val)
+                return str(int(fv)) if fv == int(fv) else f"{fv:.2f}"
+            except (TypeError, ValueError, OverflowError):
+                return str(val)
+            
+        _BADGE_COLS = {"risk_levels", "if_risk_band"}
+        _kv_parts = []
+        if not _raw_row.empty:
+            _rec0 = _raw_row.iloc[0]
+            for _c, _l in _ALERT_RECORD_FIELDS:
+                if _c not in _raw_row.columns:
+                    continue
+                _v = _rec0[_c]
+                if not isinstance(_v, str) and pd.isnull(_v):
+                    continue
+                _val_str = _fmt_alert_val(_c, _v)
+                if _c in _BADGE_COLS:
+                    _bc = RISK_COLORS.get(str(_val_str).upper(), "#666666")
+                    _val_html = (
+                        f"<span style='background:{_bc}22;color:{_bc};font-size:10px;"
+                        f"font-family:JetBrains Mono,monospace;letter-spacing:1px;"
+                        f"padding:2px 8px;border:1px solid {_bc}55;'>{_val_str}</span>"
+                    )
+                elif _c == "explanation":
+                    _val_html = (
+                        f"<span style='font-family:Inter,sans-serif;font-size:12px;"
+                        f"color:#bbb;line-height:1.6;'>{_val_str}</span>"
+                    )
+                else:
+                    _val_html = (
+                        f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
+                        f"color:#ccc;'>{_val_str}</span>"
+                    )
+                _kv_parts.append(
+                    f"<span class='inv-field-label'>{_l}</span>"
+                    f"<span style='padding:5px 0 3px 0;align-self:center;'>{_val_html}</span>"
+                )
+
+        _kv_grid = "".join(_kv_parts) if _kv_parts else (
+            "<span style='font-family:Inter,sans-serif;font-size:12px;color:#666;"
+            "grid-column:1/-1;'>Raw alert record unavailable.</span>"
+        )
+        st.markdown(
+            f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+            f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 12px 0;'>"
+            "<div class='inv-card-label'>Raw Alert Record</div>"
+            f"<div style='display:grid;grid-template-columns:140px 1fr;gap:2px 16px;'>{_kv_grid}</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Top Reconstruction Error Contributors ──
+        _tc_raw = (
+            _raw_row.iloc[0]["top_contributors"]
+            if not _raw_row.empty and "top_contributors" in _raw_row.columns
+            else None
+        )
+        _tc_pairs = parse_top_contributors_with_values(_tc_raw)
+
+        if _tc_pairs:
+            _tc_table_rows = []
+            _seen_feats: set = set()
+            for _feat, _contrib_val in _tc_pairs:
+                # Deduplicate on the original feature name only — not on the
+                # resolved base column. Two contributors like
+                # file_copy_count_zscore and file_copy_count_rolling_delta
+                # are distinct contributors even if they share a base feature.
+                if _feat in _seen_feats:
+                    continue
+                _seen_feats.add(_feat)
+                try:
+                    _rv_str = f"{float(_contrib_val) * 100:.1f}%" if _contrib_val is not None else "—"
+                except (TypeError, ValueError):
+                    _rv_str = "—"
+                _tc_table_rows.append((_feat, prettify_feature_name(_feat), _rv_str))
+
+            if _tc_table_rows:
+                _tc_tbody_html = "".join(
+                    f"<tr>"
+                    f"<td class='inv-feat-name'>{_f}</td>"
+                    f"<td style='font-family:Inter,sans-serif;font-size:12px;color:#999;"
+                    f"padding:8px 16px 8px 0;text-align:left;border-bottom:1px solid #111;"
+                    f"vertical-align:middle;'>{_l}</td>"
+                    f"<td style='font-family:JetBrains Mono,monospace;font-size:12px;color:#e0e0e0;"
+                    f"padding:8px 0;border-bottom:1px solid #111;vertical-align:middle;"
+                    f"font-weight:600;text-align:right;white-space:nowrap;'>{_r}</td>"
+                    f"</tr>"
+                    for _f, _l, _r in _tc_table_rows
+                )
+                st.markdown(
+                    f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+                    f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 20px 0;'>"
+                    "<div class='inv-card-label'>Top Reconstruction Error Contributors</div>"
+                    "<table style='width:100%;border-collapse:collapse;'>"
+                    "<thead><tr>"
+                    "<th class='inv-th' style='width:44%;text-align:left;'>Feature</th>"
+                    "<th class='inv-th' style='width:38%;text-align:left;padding-left:0;'>Description</th>"
+                    "<th class='inv-th' style='width:18%;text-align:right;padding-right:0;white-space:nowrap;'>Error Contribution</th>"
+                    "</tr></thead>"
+                    f"<tbody>{_tc_tbody_html}</tbody>"
+                    "</table></div>",
+                    unsafe_allow_html=True,
+                )
+
+
+        # ── PC-Level Drill-Down (UEBA Table A) ──
+        if ueba_a_df is not None:
+            _drill = ueba_a_df[
+                (ueba_a_df["user"] == selected_user) &
+                (ueba_a_df["day"] == _ctx_day_ts)
+            ].copy()
+            _drop_cols = [c for c in ("user", "day") if c in _drill.columns]
+            if _drop_cols:
+                _drill = _drill.drop(columns=_drop_cols)
+            if "pc" in _drill.columns:
+                _drill = _drill.sort_values("pc").reset_index(drop=True)
+            else:
+                _drill = _drill.reset_index(drop=True)
+            
+            if _drill.empty:
+                st.markdown(
+                    f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+                    f"border-left:3px solid {_ctx_risk_color};padding:14px 18px;margin:0 0 20px 0;'>"
+                    "<div class='inv-card-label'>PC-Level Drill-Down &mdash; UEBA Table A</div>"
+                    "<div style='font-family:Inter,sans-serif;font-size:11px;color:#555;'>"
+                    "No PC-level UEBA Table A rows found for this user/day.</div>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+               
+                _drill_display = _drill.drop(columns=["pc"], errors="ignore")
+                _drill_cols = list(_drill_display.columns)
+                _drill_last = _drill_cols[-1] if _drill_cols else None
+                _drill_th_html = "".join(
+                    f"<th style='font-family:JetBrains Mono,monospace;font-size:11px;font-weight:600;"
+                    f"color:#aaaaaa;text-align:left;text-transform:uppercase;letter-spacing:1.2px;"
+                    f"white-space:nowrap;padding-top:0;padding-bottom:12px;"
+                    f"padding-right:{'0' if col == _drill_last else '20px'};"
+                    f"padding-left:{'0' if col == _drill_cols[0] else '20px'};"
+                    f"border-bottom:1px solid #1a1a1a;"
+                    f"border-right:{'none' if col == _drill_last else '1px solid #2e2e2e'};"
+                    f"min-width:130px;'>{col.replace('_', ' ')}</th>"
+                    for col in _drill_cols
+                )
+                _drill_tbody_html = "".join(
+                    "<tr>" + "".join(
+                        f"<td style='font-family:JetBrains Mono,monospace;font-size:12px;color:#cccccc;"
+                        f"padding-top:10px;padding-bottom:10px;"
+                        f"padding-right:{'0' if col == _drill_last else '20px'};"
+                        f"padding-left:{'0' if col == _drill_cols[0] else '20px'};"
+                        f"border-bottom:1px solid #111;vertical-align:middle;white-space:nowrap;"
+                        f"border-right:{'none' if col == _drill_last else '1px solid #2e2e2e'};"
+                        f"min-width:130px;'>{_fmt_alert_val(col, row[col])}</td>"
+                        for col in _drill_cols
+                    ) + "</tr>"
+                    for _, row in _drill_display.iterrows()
+                )
+                st.markdown(
+                    f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
+                    f"border-left:3px solid {_ctx_risk_color};padding:14px 18px 18px 18px;margin:0 0 20px 0;'>"
+                    "<div class='inv-card-label'>PC-Level Drill-Down &mdash; UEBA Table A</div>"
+                    "<div style='overflow-x:auto;-webkit-overflow-scrolling:touch;'>"
+                    "<table style='border-collapse:collapse;width:max-content;min-width:100%;'>"
+                    f"<thead><tr>{_drill_th_html}</tr></thead>"
+                    f"<tbody>{_drill_tbody_html}</tbody>"
+                    "</table></div></div>",
+                    unsafe_allow_html=True,
+                )
+
+
     # ── Anomaly Timeline ──
     section_header("Anomaly Score Timeline", "sh_score_timeline")
     fig_timeline = go.Figure()
@@ -2179,6 +2866,30 @@ if active_page == "Alerts":
         _filter_bar("al_flt")
         filtered_df = _get_filtered_df()
 
+        # Alert severity filter + sort controls
+        alert_cols = st.columns([2, 2, 2, 4])
+        with alert_cols[0]:
+            alert_risk = st.multiselect("Severity", ["HIGH", "MEDIUM", "LOW"], default=["HIGH", "MEDIUM"], key="alert_sev")
+        with alert_cols[1]:
+            min_pctl = st.slider("Min Percentile", 0.0, 100.0, 0.0, key="min_pctl")
+        with alert_cols[2]:
+            max_results = st.number_input("Max Rows", min_value=10, max_value=10000, value=500, step=50, key="max_rows")
+        with alert_cols[3]:
+            sort_choice = st.selectbox(
+                "Sort alerts by",
+                [
+                    "Highest score first",
+                    "Lowest score first",
+                    "Highest severity first",
+                    "Lowest severity first",
+                    "Most recent first",
+                    "Oldest first",
+                    "User A–Z",
+                    "User Z–A",
+                ],
+                index=0,
+                key="alert_sort_choice",
+            )
 
         # ── Top 10 Riskiest Users in Alerts ──
         section_header("Top 10 Riskiest Users", "sh_top_users")
@@ -2275,9 +2986,39 @@ if active_page == "Alerts":
 
         alert_risk = [t for t, checked in _tier_checked.items() if checked]
 
+        # Centralised severity mapping — extend here when new bands are added
+        _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+
+        # Filter first
         alert_data = filtered_df[
-            (filtered_df["ae_risk_band"].isin(alert_risk))
-        ].sort_values("ae_percentile_rank", ascending=False)
+            (filtered_df["ae_risk_band"].isin(alert_risk)) &
+            (filtered_df["ae_percentile_rank"] >= min_pctl)
+        ].copy()
+
+        # Sort based on explicit outcome label
+        if sort_choice == "Highest score first":
+            alert_data = alert_data.sort_values("ae_percentile_rank", ascending=False)
+        elif sort_choice == "Lowest score first":
+            alert_data = alert_data.sort_values("ae_percentile_rank", ascending=True)
+        elif sort_choice in ("Highest severity first", "Lowest severity first"):
+            _asc = sort_choice == "Lowest severity first"
+            alert_data["_risk_sort_key"] = alert_data["ae_risk_band"].astype(str).map(_RISK_ORDER).fillna(-1)
+            alert_data = alert_data.sort_values(
+                ["_risk_sort_key", "ae_percentile_rank"],
+                ascending=[_asc, False],
+            ).drop(columns=["_risk_sort_key"])
+        elif sort_choice == "Most recent first":
+            alert_data["day"] = pd.to_datetime(alert_data["day"], errors="coerce")
+            alert_data = alert_data.sort_values("day", ascending=False)
+        elif sort_choice == "Oldest first":
+            alert_data["day"] = pd.to_datetime(alert_data["day"], errors="coerce")
+            alert_data = alert_data.sort_values("day", ascending=True)
+        elif sort_choice == "User A–Z":
+            alert_data = alert_data.sort_values("user", ascending=True)
+        else:  # User Z–A
+            alert_data = alert_data.sort_values("user", ascending=False)
+
+        alert_data = alert_data.head(int(max_results))
 
         # Cap card rendering to keep the UI responsive
         CARD_LIMIT = 10
@@ -2294,19 +3035,17 @@ if active_page == "Alerts":
                 )
 
             # ── Column header row ──
+            _HDR = (
+                "font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+                "text-transform:uppercase;letter-spacing:1.5px;"
+            )
+            _h_risk, _h_info, _h_day, _h_pctl, _h_btn = st.columns([1, 5, 2, 1, 2])
+            _h_risk.markdown(f"<span style='{_HDR}'>Risk</span>", unsafe_allow_html=True)
+            _h_info.markdown(f"<span style='{_HDR}'>User / Investigation hint</span>", unsafe_allow_html=True)
+            _h_day.markdown(f"<span style='{_HDR}'>Day</span>", unsafe_allow_html=True)
+            _h_pctl.markdown(f"<span style='{_HDR}'>Percentile</span>", unsafe_allow_html=True)
             st.markdown(
-                "<div style='display:grid;grid-template-columns:72px 1fr 108px 90px 130px;"
-                "gap:8px;padding:6px 4px;border-bottom:1px solid #1a1a1a;margin-bottom:2px;'>"
-                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                "text-transform:uppercase;letter-spacing:1.5px;'>Risk</span>"
-                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                "text-transform:uppercase;letter-spacing:1.5px;'>User / Investigation hint</span>"
-                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                "text-transform:uppercase;letter-spacing:1.5px;'>Day</span>"
-                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                "text-transform:uppercase;letter-spacing:1.5px;'>Percentile</span>"
-                "<span></span>"
-                "</div>",
+                "<div style='border-bottom:1px solid #1a1a1a;margin:0 0 2px 0;'></div>",
                 unsafe_allow_html=True,
             )
 
@@ -2362,6 +3101,13 @@ if active_page == "Alerts":
                 with c_btn:
                     if st.button("Investigate →", key=f"al_inv_{i}", use_container_width=True):
                         st.session_state["inv_user_select"] = user
+                        st.session_state["inv_alert_context"] = {
+                            "user": user,
+                            "day": day_str,
+                            "risk": risk,
+                            "percentile": pctl,
+                            "summary": summary,
+                        }
                         st.session_state["_nav_request"] = "Investigation"
                         st.rerun()
 
