@@ -18,6 +18,7 @@ The application is located at [`dashboard/app.py`](app.py) and is designed with 
 | NumPy | 2.4.0 |
 | Plotly | 6.5.0 |
 | PyArrow | 23.0.0 |
+| pyrebase4 | 4.6.0 |
 
 All dependencies are listed in the project root [`requirements.txt`](../requirements.txt). Install them with:
 
@@ -26,6 +27,70 @@ py -m pip install -r requirements.txt
 ```
 
 > On macOS/Linux, replace `py` with `python3` (or `python`).
+
+---
+
+## Authentication Setup (Firebase)
+
+The dashboard requires a Firebase account before it can be accessed. Follow these steps once to set it up.
+
+### 1 — Create a Firebase project
+
+1. Go to [console.firebase.google.com](https://console.firebase.google.com/) and sign in with a Google account.
+2. Click **Add project**, give it a name (e.g. `ueba-dashboard`), and follow the wizard.
+
+### 2 — Enable Email/Password sign-in
+
+1. In your project, open **Authentication** (left-hand menu) → **Sign-in method** tab.
+2. Click **Email/Password**, toggle **Enable**, and click **Save**.
+
+### 3 — Create analyst accounts
+
+1. Go to **Authentication** → **Users** tab → **Add user**.
+2. Enter the analyst's email address and a temporary password. Repeat for each team member.
+
+### 4 — Get the web app config
+
+1. Go to **Project Settings** (gear icon, top-left) → **General** tab → scroll to **Your apps**.
+2. Click the **Web** icon (`</>`), register an app name, and click **Register app**.
+3. Copy the `firebaseConfig` object — you need the values in the next step.
+
+### 5 — Add credentials to Streamlit secrets
+
+Edit (or create) `.streamlit/secrets.toml` in the project root and fill in the values from step 4:
+
+```toml
+[firebase]
+apiKey            = "AIza..."
+authDomain        = "your-project-id.firebaseapp.com"
+databaseURL       = ""
+projectId         = "your-project-id"
+storageBucket     = "your-project-id.appspot.com"
+messagingSenderId = "123456789"
+appId             = "1:123456789:web:abc123"
+```
+
+> **Security note:** `.streamlit/secrets.toml` is listed in `.gitignore` and will never be committed to version control.
+
+### 6 — Install the dependency
+
+```bash
+py -m pip install pyrebase4
+```
+
+This is also included in `requirements.txt`, so `pip install -r requirements.txt` covers it.
+
+---
+
+## Authentication Flow
+
+| State | Behaviour |
+|---|---|
+| Not signed in | A login screen is shown; no dashboard content is visible |
+| Signed in | Full dashboard loads; signed-in email is shown at the bottom of the sidebar |
+| Sign Out | Click **SIGN OUT** in the sidebar to end the session |
+
+---
 
 ### Data Files (must be generated first)
 
