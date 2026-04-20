@@ -166,6 +166,85 @@ def build_user_profiles(ldap_raw: pd.DataFrame) -> pd.DataFrame:
     return user_profiles
 
 
+# Sensitivity weights by role. Executives/finance/IT-admin: 0.8–1.0; standard employees: 0.3–0.5.
+_ROLE_SENSITIVITY: dict[str, float] = {
+    "President": 1.00,
+    "VicePresident": 0.95,
+    "Director": 0.90,
+    "ITAdmin": 0.90,
+    "Accountant": 0.85,
+    "FinancialAnalyst": 0.85,
+    "Attorney": 0.80,
+    "Economist": 0.80,
+    "Manager": 0.75,
+    "ProjectManager": 0.75,
+    "LabManager": 0.70,
+    "HumanResourceSpecialist": 0.70,
+    "Supervisor": 0.65,
+    "ComputerScientist": 0.50,
+    "Physicist": 0.50,
+    "Mathematician": 0.50,
+    "Statistician": 0.50,
+    "Scientist": 0.50,
+    "SoftwareDeveloper": 0.50,
+    "SoftwareEngineer": 0.50,
+    "WebDeveloper": 0.50,
+    "ComputerProgrammer": 0.50,
+    "PurchasingClerk": 0.45,
+    "SystemsEngineer": 0.45,
+    "SoftwareQualityEngineer": 0.45,
+    "ChiefEngineer": 0.45,
+    "HardwareEngineer": 0.40,
+    "ElectricalEngineer": 0.40,
+    "MechanicalEngineer": 0.40,
+    "MaterialsEngineer": 0.40,
+    "IndustrialEngineer": 0.40,
+    "HealthSafetyEngineer": 0.40,
+    "TestEngineer": 0.40,
+    "FieldServiceEngineer": 0.40,
+    "Engineer": 0.40,
+    "SecurityGuard": 0.40,
+    "Nurse": 0.40,
+    "NursePractitioner": 0.40,
+    "Salesman": 0.35,
+    "Technician": 0.35,
+    "TechnicalWriter": 0.35,
+    "InstructionalCoordinator": 0.30,
+    "ProductionLineWorker": 0.30,
+    "StockroomClerk": 0.30,
+    "AdministrativeAssistant": 0.30,
+    "AdministrativeStaff": 0.30,
+}
+
+# Finance departments receive a floor of 0.70 regardless of role.
+_FINANCE_DEPARTMENTS: frozenset[str] = frozenset({
+    "1 - Accounting",
+    "2 - Payroll",
+    "3 - FinancialPlanning",
+    "2 - Pricing",
+})
+
+
+def compute_role_sensitivity(role: pd.Series, department: pd.Series) -> pd.Series:
+    """
+    Maps role and department to a 0–1 sensitivity weight.
+
+    Executives, finance roles/departments, and IT-admin receive 0.8–1.0.
+    Standard employees receive 0.3–0.5. Users with an unrecognised role default to 0.5.
+
+    Args:
+        role: Series of role strings (may contain NaN or "UNKNOWN").
+        department: Series of department strings aligned with role.
+
+    Returns:
+        pd.Series of float32 sensitivity scores in [0.0, 1.0].
+    """
+    sensitivity = role.map(_ROLE_SENSITIVITY)
+    finance_mask = department.isin(_FINANCE_DEPARTMENTS)
+    sensitivity = sensitivity.where(~finance_mask, sensitivity.clip(lower=0.70))
+    return sensitivity.fillna(0.5).astype("float32")
+
+
 def normalize_shared_columns(df: pd.DataFrame, remove_cols: list=["id"], sort: bool=True) -> pd.DataFrame:
     """
     Normalizes CERT log files across commonly shared columns. Additionally drops columns that are deemed irrelevant.
