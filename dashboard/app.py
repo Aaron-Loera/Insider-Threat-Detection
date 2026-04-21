@@ -987,33 +987,48 @@ UEBA_COLS = [
 
 
 @st.cache_data(show_spinner=False)
-def load_alert_details() -> dict:
-    """Load only 'explanation' and 'top_contributors' keyed by (user, day) string.
+def fetch_alert_detail(user: str, day_str: str) -> dict:
+    """Return top_contributors and explanation for one (user, day) record.
 
-    These two columns total ~618 MB when loaded into a full DataFrame, so they
-    are kept out of the main merged_df and fetched on demand instead.
-    Returns an empty dict if the columns don't exist.
+    Uses PyArrow predicate pushdown so only the matching row is read from the
+    parquet file — never loading the full 618 MB string columns into RAM.
+    Returns an empty dict when the record is not found.
     """
     _HF_REPO = "DSKittens/ueba-dashboard-dat"
     _hf_token = st.secrets.get("huggingface", {}).get("token", None)
     _COLS = ["user", "day", "top_contributors", "explanation"]
     try:
+        import pyarrow.parquet as pq
+        import pyarrow.compute as pc
+
+        day_ts = pd.Timestamp(day_str)
+
+        filt = (
+            (pc.field("user") == user) &
+            (pc.field("day") == day_ts)
+        )
         if os.path.exists(ANALYST_TABLE_PARQUET):
-            import pyarrow.parquet as pq
-            _avail = set(pq.read_schema(ANALYST_TABLE_PARQUET).names)
-            _use = [c for c in _COLS if c in _avail]
-            df = pd.read_parquet(ANALYST_TABLE_PARQUET, columns=_use)
+            pf = pq.ParquetFile(ANALYST_TABLE_PARQUET)
+            avail = set(pf.schema_arrow.names)
+            use = [c for c in _COLS if c in avail]
+            tbl = pf.read(columns=use, filters=filt)
         else:
-            url = f"hf://datasets/{_HF_REPO}/alert_table_5.parquet"
-            df = pd.read_parquet(url, columns=_COLS,
-                                 storage_options={"token": _hf_token})
-        df["day"] = pd.to_datetime(df["day"], errors="coerce")
+            import pyarrow.dataset as ds
+            import fsspec
+            hf_fs = fsspec.filesystem("hf", token=_hf_token)
+            src = f"datasets/{_HF_REPO}/alert_table_5.parquet"
+            with hf_fs.open(src, "rb") as f:
+                pf = pq.ParquetFile(f)
+                avail = set(pf.schema_arrow.names)
+                use = [c for c in _COLS if c in avail]
+                tbl = pf.read(columns=use, filters=filt)
+
+        if tbl.num_rows == 0:
+            return {}
+        row = tbl.to_pydict()
         return {
-            (str(r.user), str(r.day.date())): {
-                "top_contributors": getattr(r, "top_contributors", None),
-                "explanation": getattr(r, "explanation", ""),
-            }
-            for r in df.itertuples(index=False)
+            "top_contributors": row.get("top_contributors", [None])[0],
+            "explanation": row.get("explanation", [""])[0] or "",
         }
     except Exception:
         return {}
@@ -1137,12 +1152,10 @@ def load_data():
 try:
     merged_df, user_risk, all_users, _DS_MIN, _DS_MAX = load_data()
     ueba_a_df = load_ueba_a()
-    alert_details = load_alert_details()
     DATA_LOADED = True
 except Exception as _load_err:
     import traceback as _tb
     ueba_a_df = None
-    alert_details = {}
     DATA_LOADED = False
     _LOAD_ERROR = _tb.format_exc()
 else:
@@ -1151,7 +1164,7 @@ else:
 def _get_alert_detail(user, day, key):
     """Fetch explanation or top_contributors for a single (user, day) record."""
     day_str = str(day.date()) if hasattr(day, "date") else str(day)
-    return (alert_details or {}).get((str(user), day_str), {}).get(key, None)
+    return fetch_alert_detail(str(user), day_str).get(key, None)
 
 
 # ──────────────────────────────────────────────────────────────
