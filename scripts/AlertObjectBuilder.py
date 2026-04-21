@@ -195,9 +195,10 @@ class AlertObjectBuilder:
 
         # Creating alert dictionary
         alert = {
+            "alert_sequence_id": None,
             "user": row["user"],
             "day": row["day"],
-            "department": ldap["department"],
+            "department": ldap["department"] if ldap["department"] is not None else "UNKNOWN",
             "role": ldap["role"],
             "functional_unit": ldap["functional_unit"],
             "supervisor": ldap["supervisor"],
@@ -211,7 +212,9 @@ class AlertObjectBuilder:
             "if_risk_band": if_risk_band,
             "composite_score": composite_score,
             "composite_risk_band": composite_risk_band,
+            "composite_priority": max(ae_percentile, if_percentile),
             "both_signals_high": both_signals_high,
+            "status": "NEW",
             "explanation": explanation
         }
 
@@ -242,6 +245,12 @@ class AlertObjectBuilder:
         # Extracting optional LDAP identity columns when present in the input
         _ldap_fields = ("department", "role", "functional_unit", "supervisor", "role_sensitivity")
         ldap_cols = {f: df[f].values if f in df.columns else np.full(n, None, dtype=object) for f in _ldap_fields}
+
+        # department must never be null; fall back to UNKNOWN for unmatched users
+        dept = ldap_cols["department"].copy()
+        null_mask = pd.isnull(dept)
+        dept[null_mask] = "UNKNOWN"
+        ldap_cols["department"] = dept
 
         # Vectorized percentile computation
         ae_errors = df["total_reconstruction_error"].values
@@ -319,6 +328,7 @@ class AlertObjectBuilder:
 
         # Assembling result DataFrame ---
         return pd.DataFrame({
+            "alert_sequence_id":  np.full(n, None, dtype=object),
             "user":               df["user"].values,
             "day":                df["day"].values,
             "department":         ldap_cols["department"],
@@ -329,13 +339,15 @@ class AlertObjectBuilder:
             "ae_percentile_rank": ae_pct,
             "ae_risk_band":       ae_bands,
             "top_contributors":   top_contributors_list,
-            "threat_category":    threat_categories,       
+            "threat_category":    threat_categories,
             "if_anomaly_score":   if_scores,
             "if_percentile_rank": if_pct,
             "if_risk_band":       if_bands,
             "composite_score":    composite,
             "composite_risk_band": comp_bands,
+            "composite_priority": np.maximum(ae_pct, if_pct),
             "both_signals_high":  both_high,
+            "status":             np.full(n, "NEW", dtype=object),
             "explanation":        explanations,
         })
 
