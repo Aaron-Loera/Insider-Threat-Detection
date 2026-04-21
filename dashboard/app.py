@@ -1007,22 +1007,32 @@ def fetch_alert_detail(user: str, day_str: str) -> dict:
         filt_dnf = [[("user", "=", user), ("day", "=", day_ts)]]
 
         if os.path.exists(ANALYST_TABLE_PARQUET):
+            # Local: pq.read_table with DNF predicate pushdown (fast, minimal RAM)
             tbl = pq.read_table(ANALYST_TABLE_PARQUET, columns=_COLS, filters=filt_dnf)
+            if tbl.num_rows == 0:
+                return {}
+            row = tbl.to_pydict()
         else:
-            import fsspec
-            hf_fs = fsspec.filesystem("hf", token=_hf_token)
-            src = f"datasets/{_HF_REPO}/alert_table_5.parquet"
-            with hf_fs.open(src, "rb") as f:
-                tbl = pq.read_table(f, columns=_COLS, filters=filt_dnf)
+            # Cloud: pd.read_parquet via hf:// — same approach as load_data(), confirmed working.
+            # Filters use pyarrow predicate pushdown over the sorted 1268-row-group parquet,
+            # reading only ~1-3 row groups (~500 KB) instead of the full 193 MB file.
+            url = f"hf://datasets/{_HF_REPO}/alert_table_5.parquet"
+            df = pd.read_parquet(
+                url, columns=_COLS, filters=filt_dnf,
+                storage_options={"token": _hf_token},
+            )
+            if df.empty:
+                return {}
+            row = df.iloc[0].to_dict()
+            row = {k: [v] for k, v in row.items()}  # match to_pydict() shape
 
-        if tbl.num_rows == 0:
-            return {}
-        row = tbl.to_pydict()
         return {
             "top_contributors": row.get("top_contributors", [None])[0],
             "explanation": row.get("explanation", [""])[0] or "",
         }
-    except Exception:
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("fetch_alert_detail failed: %s", _e)
         return {}
 
 
