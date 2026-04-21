@@ -1005,23 +1005,50 @@ def load_ueba_a():
 def load_data():
     """Load analyst table + UEBA dataset, merge, pre-compute user_risk."""
     import gc
+    import tempfile
+    from huggingface_hub import hf_hub_download
+
+    _HF_REPO = "DSKittens/ueba-dashboard-dat"
+    _hf_token = st.secrets.get("huggingface", {}).get("token", None)
+
+    def _resolve(local_parquet, local_csv, hf_filename):
+        """Return a local path to the file, downloading from HF Hub if needed."""
+        if os.path.exists(local_parquet):
+            return local_parquet, "parquet"
+        if os.path.exists(local_csv):
+            return local_csv, "csv"
+        # Running on Streamlit Cloud — pull from HF Hub
+        path = hf_hub_download(
+            repo_id=_HF_REPO,
+            filename=hf_filename,
+            repo_type="dataset",
+            token=_hf_token,
+            local_dir=tempfile.gettempdir(),
+        )
+        return path, "parquet"
 
     # ── Load analyst table ──
-    if os.path.exists(ANALYST_TABLE_PARQUET):
-        analyst = pd.read_parquet(ANALYST_TABLE_PARQUET)
+    analyst_path, analyst_fmt = _resolve(
+        ANALYST_TABLE_PARQUET, ANALYST_TABLE_CSV, "alert_table_5.parquet"
+    )
+    if analyst_fmt == "parquet":
+        analyst = pd.read_parquet(analyst_path)
     else:
-        analyst = pd.read_csv(ANALYST_TABLE_CSV)
+        analyst = pd.read_csv(analyst_path)
 
     # ── Load UEBA dataset ──
-    if os.path.exists(UEBA_PARQUET):
+    ueba_path, ueba_fmt = _resolve(
+        UEBA_PARQUET, UEBA_CSV, "ueba_dataset_5_train.parquet"
+    )
+    if ueba_fmt == "parquet":
         import pyarrow.parquet as pq
-        schema_cols = pq.read_schema(UEBA_PARQUET).names
+        schema_cols = pq.read_schema(ueba_path).names
         use = [c for c in UEBA_COLS if c in schema_cols]
-        ueba = pd.read_parquet(UEBA_PARQUET, columns=use)
+        ueba = pd.read_parquet(ueba_path, columns=use)
     else:
-        all_cols = pd.read_csv(UEBA_CSV, nrows=0).columns.tolist()
+        all_cols = pd.read_csv(ueba_path, nrows=0).columns.tolist()
         use_idx = [i for i, c in enumerate(all_cols) if c in UEBA_COLS]
-        ueba = pd.read_csv(UEBA_CSV, usecols=use_idx)
+        ueba = pd.read_csv(ueba_path, usecols=use_idx)
 
     # Downcast numeric columns to reduce memory
     for df in [analyst, ueba]:
@@ -2928,7 +2955,7 @@ if active_page == "Alerts":
                 st.session_state.live_paused = False
                 st.session_state.live_page = 0
                 st.rerun()
-        with _ctrl_pause:
+    with ctrl_pause:
             if not st.session_state.live_paused:
                 if st.button("⏸   PAUSE", key="pause_live", use_container_width=True):
                     with open(LIVE_PAUSE_FLAG, "w", encoding="utf-8") as _pf:
