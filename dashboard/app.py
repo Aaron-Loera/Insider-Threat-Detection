@@ -1113,9 +1113,13 @@ try:
     merged_df, user_risk, user_data_dict, all_users, _DS_MIN, _DS_MAX = load_data()
     ueba_a_df = load_ueba_a()
     DATA_LOADED = True
-except Exception:
+except Exception as _load_err:
+    import traceback as _tb
     ueba_a_df = None
     DATA_LOADED = False
+    _LOAD_ERROR = _tb.format_exc()
+else:
+    _LOAD_ERROR = None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1124,13 +1128,9 @@ except Exception:
 
 if not DATA_LOADED:
     st.title("INSIDER THREAT DETECTION")
-    st.error(
-        "**Data files not found.** Please run the preprocessing and model notebooks first:\n\n"
-        "1. `CERT_Preprocessing.ipynb` → generates `processed_datasets/ueba_dataset_4/ueba_dataset_4_train.csv`\n"
-        "2. `Autoencoder.ipynb` → trains the encoder model\n"
-        "3. `Isolation_Forest.ipynb` → generates anomaly scores\n"
-        "4. `Alert_Object_Builder.ipynb` → generates `explainability/alert_table/alert_table_4.csv`"
-    )
+    st.error("**Failed to load data.** See details below.")
+    if _LOAD_ERROR:
+        st.code(_LOAD_ERROR, language="text")
     st.stop()
 
 
