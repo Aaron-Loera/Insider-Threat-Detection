@@ -1005,81 +1005,79 @@ def load_ueba_a():
 def load_data():
     """Load analyst table + UEBA dataset, merge, pre-compute user_risk."""
     import gc
-    from huggingface_hub import hf_hub_download
 
     _HF_REPO = "DSKittens/ueba-dashboard-dat"
     _hf_token = st.secrets.get("huggingface", {}).get("token", None)
+    _HF_OPTS = {"token": _hf_token}
 
-    def _resolve(local_parquet, local_csv, hf_filename):
-        """Return a local path to the file, downloading from HF Hub if needed."""
-        if os.path.exists(local_parquet):
-            return local_parquet, "parquet"
-        if os.path.exists(local_csv):
-            return local_csv, "csv"
-        # Running on Streamlit Cloud — pull from HF Hub
-        path = hf_hub_download(
-            repo_id=_HF_REPO,
-            filename=hf_filename,
-            repo_type="dataset",
-            token=_hf_token,
-        )
-        return path, "parquet"
-
-    # ── Load analyst table (only the columns actually used in the merge) ──
-    _analyst_needed = [
+    _ANALYST_COLS = [
         "user", "day", "if_anomaly_score", "ae_percentile_rank", "ae_risk_band",
         "top_contributors", "if_percentile_rank", "if_risk_band", "explanation",
     ]
-    analyst_path, analyst_fmt = _resolve(
-        ANALYST_TABLE_PARQUET, ANALYST_TABLE_CSV, "alert_table_5.parquet"
-    )
-    if analyst_fmt == "parquet":
-        import pyarrow.parquet as pq
-        _analyst_schema_cols = pq.read_schema(analyst_path).names
-        _analyst_use = [c for c in _analyst_needed if c in _analyst_schema_cols]
-        analyst = pd.read_parquet(analyst_path, columns=_analyst_use)
-    else:
-        _all_analyst_cols = pd.read_csv(analyst_path, nrows=0).columns.tolist()
-        _analyst_use_idx = [i for i, c in enumerate(_all_analyst_cols) if c in _analyst_needed]
-        analyst = pd.read_csv(analyst_path, usecols=_analyst_use_idx)
+
+    def _read(local_parquet, local_csv, hf_filename, columns):
+        """Load DataFrame selecting only needed columns.
+        Local parquet/CSV is used when available; otherwise streams directly
+        from HF Hub via fsspec (no disk write, no permission issues).
+        """
+        if os.path.exists(local_parquet):
+            import pyarrow.parquet as pq
+            schema_cols = set(pq.read_schema(local_parquet).names)
+            use = [c for c in columns if c in schema_cols]
+            return pd.read_parquet(local_parquet, columns=use)
+        if os.path.exists(local_csv):
+            existing = pd.read_csv(local_csv, nrows=0).columns.tolist()
+            use = [c for c in columns if c in existing]
+            return pd.read_csv(local_csv, usecols=use)
+        # Cloud: stream via HF Hub fsspec — no temp file, no disk permissions needed
+        url = f"hf://datasets/{_HF_REPO}/{hf_filename}"
+        try:
+            return pd.read_parquet(url, columns=columns, storage_options=_HF_OPTS)
+        except Exception:
+            # Fall back to reading all columns if selection fails
+            df = pd.read_parquet(url, storage_options=_HF_OPTS)
+            return df[[c for c in columns if c in df.columns]]
+
+    def _downcast(df):
+        """Shrink numeric column dtypes to reduce RAM (pandas-3.0 compatible)."""
+        for col in df.select_dtypes(include=["float64"]).columns:
+            df[col] = df[col].astype("float32")
+        for col in df.select_dtypes(include=["int64"]).columns:
+            df[col] = df[col].astype("int32")
+        return df
+
+    # ── Load analyst table ──
+    analyst = _read(ANALYST_TABLE_PARQUET, ANALYST_TABLE_CSV, "alert_table_5.parquet", _ANALYST_COLS)
+    _downcast(analyst)
+    analyst["day"] = pd.to_datetime(analyst["day"], errors="coerce")
+    # Categorize high-cardinality string cols before merge — saves ~160 MB each
+    for _col in ("user", "ae_risk_band", "if_risk_band"):
+        if _col in analyst.columns:
+            analyst[_col] = analyst[_col].astype("category")
 
     # ── Load UEBA dataset ──
-    ueba_path, ueba_fmt = _resolve(
-        UEBA_PARQUET, UEBA_CSV, "ueba_dataset_5_train.parquet"
-    )
-    if ueba_fmt == "parquet":
-        import pyarrow.parquet as pq
-        schema_cols = pq.read_schema(ueba_path).names
-        use = [c for c in UEBA_COLS if c in schema_cols]
-        ueba = pd.read_parquet(ueba_path, columns=use)
-    else:
-        all_cols = pd.read_csv(ueba_path, nrows=0).columns.tolist()
-        use_idx = [i for i, c in enumerate(all_cols) if c in UEBA_COLS]
-        ueba = pd.read_csv(ueba_path, usecols=use_idx)
+    ueba = _read(UEBA_PARQUET, UEBA_CSV, "ueba_dataset_5_train.parquet", UEBA_COLS)
+    _downcast(ueba)
+    ueba["day"] = pd.to_datetime(ueba["day"], errors="coerce")
+    for _col in ("user", "pc"):
+        if _col in ueba.columns:
+            ueba[_col] = ueba[_col].astype("category")
 
-    # Downcast numeric columns to reduce memory
-    for df in [analyst, ueba]:
-        for col in df.select_dtypes(include=["float64"]).columns:
-            df[col] = pd.to_numeric(df[col], downcast="float")
-        for col in df.select_dtypes(include=["int64"]).columns:
-            df[col] = pd.to_numeric(df[col], downcast="integer")
+    # ── Merge ──
+    _merge_analyst_cols = [c for c in _ANALYST_COLS if c in analyst.columns]
+    merged = ueba.merge(analyst[_merge_analyst_cols], on=["user", "day"], how="left")
+    del ueba, analyst
+    gc.collect()
 
-    # Normalize day column
-    for df in [analyst, ueba]:
-        if "day" in df.columns:
-            df["day"] = pd.to_datetime(df["day"], errors="coerce")
+    # Cast risk bands to ordered categorical
+    _risk_cat = pd.CategoricalDtype(categories=["LOW", "MEDIUM", "HIGH", "CRITICAL"], ordered=True)
+    for _col in ("ae_risk_band", "if_risk_band"):
+        if _col in merged.columns:
+            merged[_col] = merged[_col].astype(_risk_cat)
 
-    # Merge — include alert-context columns from the alert table
-    analyst_cols = [
-        "user", "day", "if_anomaly_score", "ae_percentile_rank", "ae_risk_band",
-        "top_contributors", "if_percentile_rank", "if_risk_band", "explanation",
-    ]
-    analyst_cols = [c for c in analyst_cols if c in analyst.columns]
-    merged = ueba.merge(analyst[analyst_cols], on=["user", "day"], how="left")
-
-    # Pre-compute per-user risk summary (expensive groupby, do once)
+    # ── Pre-compute per-user risk summary ──
     user_risk = (
-        merged.groupby("user")
+        merged.groupby("user", observed=True)
         .agg(
             max_score=("if_anomaly_score", "max"),
             mean_score=("if_anomaly_score", "mean"),
@@ -1093,18 +1091,7 @@ def load_data():
         .sort_values("max_percentile", ascending=False)
     )
 
-    # Cast risk band to ordered categorical — makes .isin() and groupby ~3x faster
-    _risk_cat = pd.CategoricalDtype(
-        categories=["LOW", "MEDIUM", "HIGH", "CRITICAL"], ordered=True
-    )
-    for _col in ("ae_risk_band", "if_risk_band"):
-        if _col in merged.columns:
-            merged[_col] = merged[_col].astype(_risk_cat)
-
-    del ueba, analyst
-    gc.collect()
-
-    _all_users = sorted(merged["user"].unique())
+    _all_users = sorted(merged["user"].unique().tolist())
     _ds_min = merged["day"].min().date()
     _ds_max = merged["day"].max().date()
 
