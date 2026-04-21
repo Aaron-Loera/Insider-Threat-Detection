@@ -1071,75 +1071,50 @@ def load_ueba_a():
 
 @st.cache_data(show_spinner="Loading dataset...")
 def load_data():
-    """Load analyst table + UEBA dataset, merge, pre-compute user_risk."""
+    """Load pre-merged parquet and pre-compute user_risk.
+
+    On cloud we load a single 62 MB file (merged_dataset_5.parquet) that was
+    pre-built locally by scripts/build_merged_parquet.py and uploaded to HF.
+    This replaces the old two-file approach (alert_table_5 + ueba_dataset_5_train)
+    which peaked at 700-800 MB RAM during the runtime merge — too close to the
+    1 GB Streamlit Cloud limit.  The new peak is ~250-300 MB.
+    """
     import gc
     print("[load_data] started", flush=True)
 
-    _HF_REPO = "DSKittens/ueba-dashboard-dat"
+    _HF_REPO  = "DSKittens/ueba-dashboard-dat"
     _hf_token = st.secrets.get("huggingface", {}).get("token", None)
-    _HF_OPTS = {"token": _hf_token}
+    _HF_OPTS  = {"token": _hf_token}
 
-    # NOTE: "explanation" (352 MB) and "top_contributors" (266 MB) are intentionally
-    # excluded here — they are loaded on demand via load_alert_details() to stay
-    # within Streamlit Cloud's 1 GB RAM limit.
-    _ANALYST_COLS = [
-        "user", "day", "if_anomaly_score", "ae_percentile_rank", "ae_risk_band",
-        "if_percentile_rank", "if_risk_band",
-    ]
-
-    def _read(local_parquet, local_csv, hf_filename, columns):
-        """Load DataFrame selecting only needed columns.
-        Local parquet/CSV is used when available; otherwise streams directly
-        from HF Hub via fsspec (no disk write, no permission issues).
-        """
-        if os.path.exists(local_parquet):
-            import pyarrow.parquet as pq
-            schema_cols = set(pq.read_schema(local_parquet).names)
-            use = [c for c in columns if c in schema_cols]
-            return pd.read_parquet(local_parquet, columns=use)
-        if os.path.exists(local_csv):
-            existing = pd.read_csv(local_csv, nrows=0).columns.tolist()
-            use = [c for c in columns if c in existing]
-            return pd.read_csv(local_csv, usecols=use)
-        # Cloud: stream via HF Hub fsspec — column selection prevents loading all 111 cols
-        url = f"hf://datasets/{_HF_REPO}/{hf_filename}"
-        # Never fall back to loading all columns — that would be ~1.1 GB RAM for UEBA
-        return pd.read_parquet(url, columns=columns, storage_options=_HF_OPTS)
+    # Local path for the pre-merged parquet (built by scripts/build_merged_parquet.py)
+    _MERGED_LOCAL = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "explainability", "alert_table", "merged_dataset_5.parquet",
+    )
 
     def _downcast(df):
-        """Shrink numeric column dtypes to reduce RAM (pandas-3.0 compatible)."""
         for col in df.select_dtypes(include=["float64"]).columns:
             df[col] = df[col].astype("float32")
         for col in df.select_dtypes(include=["int64"]).columns:
             df[col] = df[col].astype("int32")
         return df
 
-    # ── Load analyst table ──
-    print("[load_data] loading analyst table", flush=True)
-    analyst = _read(ANALYST_TABLE_PARQUET, ANALYST_TABLE_CSV, "alert_table_5.parquet", _ANALYST_COLS)
-    _downcast(analyst)
-    analyst["day"] = pd.to_datetime(analyst["day"], errors="coerce")
-    # Categorize high-cardinality string cols before merge — saves ~160 MB each
+    # ── Load single pre-merged file ──
+    print("[load_data] loading merged dataset", flush=True)
+    if os.path.exists(_MERGED_LOCAL):
+        merged = pd.read_parquet(_MERGED_LOCAL)
+        print("[load_data] loaded from local merged parquet", flush=True)
+    else:
+        # Cloud path: single 62 MB file on HF — no runtime merge required
+        url = f"hf://datasets/{_HF_REPO}/merged_dataset_5.parquet"
+        merged = pd.read_parquet(url, storage_options=_HF_OPTS)
+        print("[load_data] loaded from HF merged parquet", flush=True)
+
+    _downcast(merged)
+    merged["day"] = pd.to_datetime(merged["day"], errors="coerce")
     for _col in ("user", "ae_risk_band", "if_risk_band"):
-        if _col in analyst.columns:
-            analyst[_col] = analyst[_col].astype("category")
-    print(f"[load_data] analyst loaded: {analyst.shape}, {analyst.memory_usage(deep=True).sum()/1e6:.1f} MB", flush=True)
-
-    # ── Load UEBA dataset ──
-    print("[load_data] loading UEBA dataset", flush=True)
-    ueba = _read(UEBA_PARQUET, UEBA_CSV, "ueba_dataset_5_train.parquet", UEBA_COLS)
-    _downcast(ueba)
-    ueba["day"] = pd.to_datetime(ueba["day"], errors="coerce")
-    for _col in ("user", "pc"):
-        if _col in ueba.columns:
-            ueba[_col] = ueba[_col].astype("category")
-    print(f"[load_data] ueba loaded: {ueba.shape}, {ueba.memory_usage(deep=True).sum()/1e6:.1f} MB", flush=True)
-
-    # ── Merge ──
-    print("[load_data] merging", flush=True)
-    _merge_analyst_cols = [c for c in _ANALYST_COLS if c in analyst.columns]
-    merged = ueba.merge(analyst[_merge_analyst_cols], on=["user", "day"], how="left")
-    del ueba, analyst
+        if _col in merged.columns:
+            merged[_col] = merged[_col].astype("category")
     gc.collect()
     print(f"[load_data] merged: {merged.shape}, {merged.memory_usage(deep=True).sum()/1e6:.1f} MB", flush=True)
 
