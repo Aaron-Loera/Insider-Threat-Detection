@@ -2,7 +2,7 @@ import os
 import json
 import numpy as np
 import pandas as pd
-
+from scripts.ThreatClassifier import classify_threat
 
 class AlertObjectBuilder:
     """
@@ -156,6 +156,7 @@ class AlertObjectBuilder:
         ae_percentile = self.compute_ae_percentile(ae_error)
         ae_risk_band = self.assign_risk_band(ae_percentile)
         top_features = self.extract_top_contributors(row)
+        threat_category = classify_threat(top_features)
 
         # Computing IF percentile and risk band
         if_score = row["if_anomaly_score"]
@@ -194,6 +195,7 @@ class AlertObjectBuilder:
             "ae_percentile_rank": ae_percentile,
             "ae_risk_band": ae_risk_band,
             "top_contributors": top_features,
+            "threat_category": threat_category,          # ← add this line
             "if_anomaly_score": if_score,
             "if_percentile_rank": if_percentile,
             "if_risk_band": if_risk_band,
@@ -262,6 +264,9 @@ class AlertObjectBuilder:
                 [(feat_names[j], contrib_mat[i, j]) for j in sorted_k_idx]
             )
 
+        # Classify each alert's threat scenario from its top contributing features after list is complete
+        threat_categories = [classify_threat(tc) for tc in top_contributors_list]
+
         # Pre-extract z-score and delta arrays
         zscore_map = {}
         delta_map  = {}
@@ -305,6 +310,7 @@ class AlertObjectBuilder:
             "ae_percentile_rank": ae_pct,
             "ae_risk_band":       ae_bands,
             "top_contributors":   top_contributors_list,
+            "threat_category":    threat_categories,       
             "if_anomaly_score":   if_scores,
             "if_percentile_rank": if_pct,
             "if_risk_band":       if_bands,
