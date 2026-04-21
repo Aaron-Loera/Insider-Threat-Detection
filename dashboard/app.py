@@ -1005,7 +1005,6 @@ def load_ueba_a():
 def load_data():
     """Load analyst table + UEBA dataset, merge, pre-compute user_risk."""
     import gc
-    import tempfile
     from huggingface_hub import hf_hub_download
 
     _HF_REPO = "DSKittens/ueba-dashboard-dat"
@@ -1023,7 +1022,6 @@ def load_data():
             filename=hf_filename,
             repo_type="dataset",
             token=_hf_token,
-            local_dir=tempfile.gettempdir(),
         )
         return path, "parquet"
 
