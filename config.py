@@ -133,6 +133,10 @@ LIVE_IF_SCORES_PATH = _local_or(
     "LIVE_IF_SCORES_PATH",
     os.path.join(BASE_DIR, "isolation_forests", f"iforest_model_{LV}", "anomaly_scores.npy"),
 )
+LIVE_AE_PATH = _local_or(
+    "LIVE_AE_PATH",
+    os.path.join(BASE_DIR, "encoders", f"encoder_model_{LV}", "autoencoder_model.keras"),
+)
 _live_input_parquet = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{LV}", f"ueba_dataset_{LV}_test_stream.parquet")
 _live_input_csv     = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{LV}", f"ueba_dataset_{LV}_test_stream.csv")
 LIVE_DEFAULT_INPUT = _local_or(
