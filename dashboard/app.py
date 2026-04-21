@@ -1,4 +1,6 @@
-﻿import streamlit as st
+﻿import sys
+print("[APP] module-level execution started", flush=True)
+import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
@@ -8,7 +10,6 @@ from plotly.subplots import make_subplots
 import json
 import os
 import subprocess
-import sys
 import time
 import ast as _ast
 import hmac
@@ -945,7 +946,7 @@ if st.session_state.pop("_set_cookie", False):
 # Data Loading
 # ──────────────────────────────────────────────────────────────
 import datetime as _dt
-print(f"[STARTUP] authenticated user reached data-load section at {_dt.datetime.utcnow().isoformat()}")
+print(f"[STARTUP] authenticated — reached data-load section at {_dt.datetime.utcnow().isoformat()}", flush=True)
 
 # Resolve the project root so config.py (at the root) is importable.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1072,7 +1073,7 @@ def load_ueba_a():
 def load_data():
     """Load analyst table + UEBA dataset, merge, pre-compute user_risk."""
     import gc
-    print("[load_data] started")
+    print("[load_data] started", flush=True)
 
     _HF_REPO = "DSKittens/ueba-dashboard-dat"
     _hf_token = st.secrets.get("huggingface", {}).get("token", None)
@@ -1114,7 +1115,7 @@ def load_data():
         return df
 
     # ── Load analyst table ──
-    print("[load_data] loading analyst table")
+    print("[load_data] loading analyst table", flush=True)
     analyst = _read(ANALYST_TABLE_PARQUET, ANALYST_TABLE_CSV, "alert_table_5.parquet", _ANALYST_COLS)
     _downcast(analyst)
     analyst["day"] = pd.to_datetime(analyst["day"], errors="coerce")
@@ -1122,25 +1123,25 @@ def load_data():
     for _col in ("user", "ae_risk_band", "if_risk_band"):
         if _col in analyst.columns:
             analyst[_col] = analyst[_col].astype("category")
-    print(f"[load_data] analyst loaded: {analyst.shape}, {analyst.memory_usage(deep=True).sum()/1e6:.1f} MB")
+    print(f"[load_data] analyst loaded: {analyst.shape}, {analyst.memory_usage(deep=True).sum()/1e6:.1f} MB", flush=True)
 
     # ── Load UEBA dataset ──
-    print("[load_data] loading UEBA dataset")
+    print("[load_data] loading UEBA dataset", flush=True)
     ueba = _read(UEBA_PARQUET, UEBA_CSV, "ueba_dataset_5_train.parquet", UEBA_COLS)
     _downcast(ueba)
     ueba["day"] = pd.to_datetime(ueba["day"], errors="coerce")
     for _col in ("user", "pc"):
         if _col in ueba.columns:
             ueba[_col] = ueba[_col].astype("category")
-    print(f"[load_data] ueba loaded: {ueba.shape}, {ueba.memory_usage(deep=True).sum()/1e6:.1f} MB")
+    print(f"[load_data] ueba loaded: {ueba.shape}, {ueba.memory_usage(deep=True).sum()/1e6:.1f} MB", flush=True)
 
     # ── Merge ──
-    print("[load_data] merging")
+    print("[load_data] merging", flush=True)
     _merge_analyst_cols = [c for c in _ANALYST_COLS if c in analyst.columns]
     merged = ueba.merge(analyst[_merge_analyst_cols], on=["user", "day"], how="left")
     del ueba, analyst
     gc.collect()
-    print(f"[load_data] merged: {merged.shape}, {merged.memory_usage(deep=True).sum()/1e6:.1f} MB")
+    print(f"[load_data] merged: {merged.shape}, {merged.memory_usage(deep=True).sum()/1e6:.1f} MB", flush=True)
 
     # Cast risk bands to ordered categorical
     _risk_cat = pd.CategoricalDtype(categories=["LOW", "MEDIUM", "HIGH", "CRITICAL"], ordered=True)
@@ -1173,9 +1174,9 @@ def load_data():
 
 try:
     merged_df, user_risk, all_users, _DS_MIN, _DS_MAX = load_data()
-    print("[STARTUP] load_data() complete")
+    print("[STARTUP] load_data() complete", flush=True)
     ueba_a_df = load_ueba_a()
-    print("[STARTUP] load_ueba_a() complete — DATA_LOADED=True")
+    print("[STARTUP] load_ueba_a() complete — DATA_LOADED=True", flush=True)
     DATA_LOADED = True
 except Exception as _load_err:
     import traceback as _tb
