@@ -142,7 +142,8 @@ class AlertObjectBuilder:
         Args:
             row: A row consisting of metadata, reconstruction error data, and IF anomaly score.
                  Optionally includes {feature}_zscore and {feature}_rolling_delta columns for
-                 richer explanation text.
+                 richer explanation text. Also optionally includes LDAP identity fields:
+                 department, role, functional_unit, supervisor, role_sensitivity.
             w1: The weight to assign to AE percentile
             w2: The weight to assign to IF percentile
         Returns:
@@ -188,14 +189,23 @@ class AlertObjectBuilder:
             f"Drivers: " + "; ".join(narrative_parts)
         )
 
+        # Extracting optional LDAP identity fields
+        _ldap_fields = ("department", "role", "functional_unit", "supervisor", "role_sensitivity")
+        ldap = {f: (row[f] if f in row.index and not pd.isna(row[f]) else None) for f in _ldap_fields}
+
         # Creating alert dictionary
         alert = {
             "user": row["user"],
             "day": row["day"],
+            "department": ldap["department"],
+            "role": ldap["role"],
+            "functional_unit": ldap["functional_unit"],
+            "supervisor": ldap["supervisor"],
+            "role_sensitivity": ldap["role_sensitivity"],
             "ae_percentile_rank": ae_percentile,
             "ae_risk_band": ae_risk_band,
             "top_contributors": top_features,
-            "threat_category": threat_category,          # ← add this line
+            "threat_category": threat_category,
             "if_anomaly_score": if_score,
             "if_percentile_rank": if_percentile,
             "if_risk_band": if_risk_band,
@@ -228,6 +238,10 @@ class AlertObjectBuilder:
 
         df = explanation_df.reset_index(drop=True)
         n = len(df)
+
+        # Extracting optional LDAP identity columns when present in the input
+        _ldap_fields = ("department", "role", "functional_unit", "supervisor", "role_sensitivity")
+        ldap_cols = {f: df[f].values if f in df.columns else np.full(n, None, dtype=object) for f in _ldap_fields}
 
         # Vectorized percentile computation
         ae_errors = df["total_reconstruction_error"].values
@@ -307,6 +321,11 @@ class AlertObjectBuilder:
         return pd.DataFrame({
             "user":               df["user"].values,
             "day":                df["day"].values,
+            "department":         ldap_cols["department"],
+            "role":               ldap_cols["role"],
+            "functional_unit":    ldap_cols["functional_unit"],
+            "supervisor":         ldap_cols["supervisor"],
+            "role_sensitivity":   ldap_cols["role_sensitivity"],
             "ae_percentile_rank": ae_pct,
             "ae_risk_band":       ae_bands,
             "top_contributors":   top_contributors_list,
