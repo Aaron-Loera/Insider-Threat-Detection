@@ -30,7 +30,6 @@ import config
 BASE_DIR       = config.BASE_DIR
 SCALER_PATH    = config.LIVE_SCALER_PATH
 ENCODER_PATH   = config.LIVE_ENCODER_PATH
-AE_PATH        = config.LIVE_AE_PATH
 IF_PATH        = config.LIVE_IF_PATH
 IF_SCORES_PATH = config.LIVE_IF_SCORES_PATH
 DEFAULT_INPUT  = config.LIVE_DEFAULT_INPUT
@@ -42,20 +41,48 @@ CRITICAL_THRESH = 95.0
 HIGH_THRESH     = 90.0
 MEDIUM_THRESH   = 80.0
 
+# ── Column aliases: v5 dataset renamed some features; map back to v1 names ───
+_V5_TO_V1_RENAME: dict[str, str] = {
+    "external_emails_sent": "external_emails",
+    "attachments_sent":     "attachements_sent",   # v1 had typo; scaler was fitted on it
+    # z-scores
+    "external_emails_sent_zscore":  "external_emails_zscore",
+    "attachments_sent_zscore":      "attachements_sent_zscore",
+    # rolling deltas
+    "external_emails_sent_rolling_delta": "external_emails_rolling_delta",
+    "attachments_sent_rolling_delta":     "attachements_sent_rolling_delta",
+}
+
+# Ordered list of the 54 feature columns the v1 scaler/encoder were trained on
+_V1_FEATURE_COLS: list[str] = [
+    "logon_count", "logoff_count", "off_hours_logon",
+    "file_open_count", "file_write_count", "file_copy_count", "file_delete_count",
+    "unique_files_accessed", "off_hours_files_accessed",
+    "usb_insert_count", "usb_remove_count", "off_hours_usb_usage",
+    "emails_sent", "unique_recipients", "external_emails", "attachements_sent",
+    "off_hours_emails",
+    "logon_count_zscore", "logoff_count_zscore", "off_hours_logon_zscore",
+    "file_open_count_zscore", "file_write_count_zscore", "file_copy_count_zscore",
+    "file_delete_count_zscore", "unique_files_accessed_zscore",
+    "off_hours_files_accessed_zscore", "usb_insert_count_zscore",
+    "usb_remove_count_zscore", "off_hours_usb_usage_zscore",
+    "emails_sent_zscore", "unique_recipients_zscore", "external_emails_zscore",
+    "attachements_sent_zscore", "off_hours_emails_zscore",
+    "logon_count_rolling_delta", "logoff_count_rolling_delta",
+    "off_hours_logon_rolling_delta", "file_open_count_rolling_delta",
+    "file_write_count_rolling_delta", "file_copy_count_rolling_delta",
+    "file_delete_count_rolling_delta", "unique_files_accessed_rolling_delta",
+    "off_hours_files_accessed_rolling_delta", "usb_insert_count_rolling_delta",
+    "usb_remove_count_rolling_delta", "off_hours_usb_usage_rolling_delta",
+    "emails_sent_rolling_delta", "unique_recipients_rolling_delta",
+    "external_emails_rolling_delta", "attachements_sent_rolling_delta",
+    "off_hours_emails_rolling_delta",
+    "usb_file_activity_flag", "off_hours_activity_flag", "external_comm_activity_flag",
+]
+
 # ── Global WebSocket client registry ─────────────────────────────────────────
 _ws_clients: set = set()
 _stop_event: asyncio.Event | None = None
-
-
-def _to_serializable(v):
-    """Convert numpy scalar types to JSON-serializable Python native types."""
-    if isinstance(v, np.integer):
-        return int(v)
-    if isinstance(v, np.floating):
-        return float(v)
-    if isinstance(v, np.bool_):
-        return bool(v)
-    return v
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -67,9 +94,9 @@ class LiveScorer:
         print("[live_simulation] Loading scaler …", flush=True)
         self.scaler = joblib.load(SCALER_PATH)
 
-        print("[live_simulation] Loading autoencoder for explainability …", flush=True)
+        print("[live_simulation] Loading encoder …", flush=True)
         from tensorflow.keras.models import load_model  # deferred → faster cold import
-        self.autoencoder = load_model(AE_PATH, compile=False)
+        self.encoder = load_model(ENCODER_PATH, compile=False)
 
         print("[live_simulation] Loading isolation forest …", flush=True)
         # Add repo root to sys.path so the scripts package is importable when
@@ -84,24 +111,6 @@ class LiveScorer:
         # Load historical scores for global percentile computation
         print("[live_simulation] Loading reference score distribution …", flush=True)
         self.ref_scores: np.ndarray = np.load(IF_SCORES_PATH)
-        # Pre-sort once so score_row can use O(log n) searchsorted instead of O(n) mean
-        self.ref_scores_sorted: np.ndarray = np.sort(self.ref_scores)
-
-        # Build a combined model that outputs both reconstruction and latent embedding
-        # in a single forward pass, halving TF inference overhead per row.
-        # Both outputs are taken from the autoencoder's own graph to avoid the
-        # duplicate "ueba_input" layer name that arises when merging two separately
-        # loaded Keras models.
-        from tensorflow.keras.models import Model as _KerasModel
-        _latent_output = self.autoencoder.get_layer("latent_space").output
-        self.combined_model = _KerasModel(
-            inputs=self.autoencoder.input,
-            outputs=[self.autoencoder.output, _latent_output],
-        )
-
-        # Cache feature column names so score_row skips column detection after first call
-        self._feat_cols: list | None = None
-
         print(
             f"[live_simulation] Ready. Reference distribution: {len(self.ref_scores):,} rows.",
             flush=True,
@@ -123,51 +132,25 @@ class LiveScorer:
 
         # Feature matrix — drop metadata columns and any unnamed index columns
         # (parquet files created without index_col=0 retain an "Unnamed: 0" column)
-        # Column layout is identical for every row, so compute drop/feat lists once.
-        if self._feat_cols is None:
-            drop_cols = [c for c in row_df.columns
-                         if c in ("user", "pc", "day") or str(c).startswith("Unnamed:")]
-            self._feat_cols = [c for c in row_df.columns if c not in drop_cols]
-        feat_df   = row_df[self._feat_cols]
-        feat_cols = self._feat_cols
+        drop_cols = [c for c in row_df.columns
+                     if c in ("user", "pc", "day") or str(c).startswith("Unnamed:")]
+        feat_df = row_df.drop(columns=drop_cols)
 
-        # Capture raw (unscaled) feature values for Investigation page charts
-        raw_vals: dict = {
-            col: _to_serializable(feat_df[col].iloc[0]) for col in feat_cols
-        }
+        # Normalise column names: rename v5 aliases to the names the scaler was fitted on,
+        # then select exactly the expected feature columns (handles datasets with more or
+        # fewer columns than the model version requires).
+        feat_df = feat_df.rename(columns=_V5_TO_V1_RENAME)
+        expected_cols = [c for c in _V1_FEATURE_COLS if c in feat_df.columns]
+        feat_df = feat_df[expected_cols]
 
-        t0     = time.perf_counter()
-        scaled = self.scaler.transform(feat_df.values.astype("float32"))
-
-        # Single forward pass → reconstruction + latent embedding
-        reconstruction, embedding = self.combined_model.predict(scaled, verbose=0)
-
-        # Reconstruction → per-feature squared error → contribution ratios
-        sq_err    = (scaled - reconstruction) ** 2          # (1, n_features)
-        total_err = sq_err.sum(axis=1, keepdims=True)        # (1, 1)
-        contrib   = sq_err / np.where(total_err == 0, 1.0, total_err)  # (1, n_features)
-        contrib_row = contrib[0]                             # (n_features,)
-
-        # Top-3 contributors by contribution ratio
-        TOP_K   = 3
-        n_feats = len(contrib_row)
-        if n_feats >= TOP_K:
-            top_idx = np.argpartition(contrib_row, -TOP_K)[-TOP_K:]
-            top_idx = top_idx[np.argsort(contrib_row[top_idx])[::-1]]
-        else:
-            top_idx = np.argsort(contrib_row)[::-1]
-        top_contributors = [
-            [feat_cols[i], round(float(contrib_row[i]), 6)] for i in top_idx
-        ]
-
-        raw_score  = float(self.iforest.anomaly_score(embedding)[0])
+        t0 = time.perf_counter()
+        scaled    = self.scaler.transform(feat_df.values.astype("float32"))
+        embedding = self.encoder.predict(scaled, verbose=0)
+        raw_score = float(self.iforest.anomaly_score(embedding)[0])
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
-        # O(log n) percentile via binary search on pre-sorted reference distribution
-        percentile = float(
-            np.searchsorted(self.ref_scores_sorted, raw_score, side="left")
-            / len(self.ref_scores_sorted) * 100
-        )
+        # Global percentile (fraction of reference scores strictly below this score)
+        percentile = float(np.mean(self.ref_scores < raw_score) * 100)
 
         if_risk_band = (
             "CRITICAL" if percentile >= CRITICAL_THRESH else
@@ -178,12 +161,10 @@ class LiveScorer:
 
         payload = {
             **meta,
-            **raw_vals,                                      # raw feature values for Investigation charts
-            "if_anomaly_score":   round(raw_score,  6),
+            "if_anomaly_score":  round(raw_score,  6),
             "if_percentile_rank": round(percentile, 2),
-            "if_risk_band":       if_risk_band,
-            "top_contributors":   top_contributors,
-            "_score_ms":          round(elapsed_ms, 1),
+            "if_risk_band":      if_risk_band,
+            "_score_ms":         round(elapsed_ms, 1),   # diagnostic; dashboard ignores this
         }
         return payload
 
@@ -246,45 +227,47 @@ async def _run_simulation(
     total   = len(test_df)
     print(f"[live_simulation] Streaming {total:,} rows from {os.path.basename(input_path)}", flush=True)
 
-    # Open output file once for the entire run; flush after each row so the
-    # dashboard can read partial results without waiting for the file to close.
-    with open(output_path, "w", encoding="utf-8") as out_f:
-        for idx in range(total):
-            if _stop_event.is_set():
-                print("[live_simulation] Stop signal received — exiting.", flush=True)
-                break
+    # Clear / create fresh output file
+    with open(output_path, "w", encoding="utf-8") as f:
+        pass  # truncate
 
-            row_df = test_df.iloc[[idx]]
-            payload = scorer.score_row(row_df)
-            payload["event_index"] = idx  # helps dashboard deduplicate rows
+    for idx in range(total):
+        if _stop_event.is_set():
+            print("[live_simulation] Stop signal received — exiting.", flush=True)
+            break
 
-            # Append to JSONL output
-            out_f.write(json.dumps(payload) + "\n")
-            out_f.flush()
+        row_df = test_df.iloc[[idx]]
+        payload = scorer.score_row(row_df)
+        payload["event_index"] = idx  # helps dashboard deduplicate rows
 
-            # Broadcast to any connected WS clients
-            await _broadcast(payload)
+        # Append to JSONL output
+        with open(output_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
 
-            print(
-                f"[live_simulation] [{idx+1:>5}/{total}]  user={payload.get('user','?')}"
-                f"  score={payload['if_anomaly_score']:.4f}  pct={payload['if_percentile_rank']:.1f}"
-                f"  risk={payload['if_risk_band']}  ({payload['_score_ms']} ms)",
-                flush=True,
-            )
+        # Broadcast to any connected WS clients
+        await _broadcast(payload)
 
-            # Throttle to simulate real-time arrival
-            await asyncio.sleep(interval)
+        print(
+            f"[live_simulation] [{idx+1:>5}/{total}]  user={payload.get('user','?')}"
+            f"  score={payload['if_anomaly_score']:.4f}  pct={payload['if_percentile_rank']:.1f}"
+            f"  risk={payload['if_risk_band']}  ({payload['_score_ms']} ms)",
+            flush=True,
+        )
 
-            # Honour pause flag: spin-wait until the dashboard removes it or a stop is signalled.
-            if os.path.exists(PAUSE_FLAG):
-                print("[live_simulation] Paused — waiting for resume …", flush=True)
-                while os.path.exists(PAUSE_FLAG) and not _stop_event.is_set():
-                    await asyncio.sleep(0.25)
-                if not _stop_event.is_set():
-                    print("[live_simulation] Resumed.", flush=True)
+        # Throttle to simulate real-time arrival
+        await asyncio.sleep(interval)
 
-        # Write end-of-stream sentinel so the dashboard can detect natural completion
-        out_f.write(json.dumps({"_eos": True}) + "\n")
+        # Honour pause flag: spin-wait until the dashboard removes it or a stop is signalled.
+        if os.path.exists(PAUSE_FLAG):
+            print("[live_simulation] Paused — waiting for resume …", flush=True)
+            while os.path.exists(PAUSE_FLAG) and not _stop_event.is_set():
+                await asyncio.sleep(0.25)
+            if not _stop_event.is_set():
+                print("[live_simulation] Resumed.", flush=True)
+
+    # Write end-of-stream sentinel so the dashboard can detect natural completion
+    with open(output_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"_eos": True}) + "\n")
 
     print("[live_simulation] Stream complete.", flush=True)
     _stop_event.set()

@@ -1077,11 +1077,15 @@ def load_data():
     del ueba, analyst
     gc.collect()
 
-    return merged, user_risk, user_data_dict
+    _all_users = sorted(merged["user"].unique())
+    _ds_min = merged["day"].min().date()
+    _ds_max = merged["day"].max().date()
+
+    return merged, user_risk, user_data_dict, _all_users, _ds_min, _ds_max
 
 
 try:
-    merged_df, user_risk, user_data_dict = load_data()
+    merged_df, user_risk, user_data_dict, all_users, _DS_MIN, _DS_MAX = load_data()
     ueba_a_df = load_ueba_a()
     DATA_LOADED = True
 except Exception:
@@ -1161,12 +1165,12 @@ CHANNELS = {k: v for k, v in CHANNELS.items() if v}
 
 # Explicit channel→color mapping so each channel keeps its color regardless of which are present in filtered data
 CHANNEL_COLOR_MAP = {
-    "Authentication":  "#ffffff",
+    "Authentication":  "#00b4d8",
     "File Access":     "#e84545",
     "Removable Media": "#d4a017",
     "Email":           "#3a86a8",
-    "HTTP Activity":   "#7a7a7a",
-    "PC Activity":     "#6b4a2d",
+    "HTTP Activity":   "#9b59b6",
+    "PC Activity":     "#e67e22",
 }
 
 # user_risk is now pre-computed inside load_data() and cached
@@ -1641,8 +1645,7 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-# Users list (used across pages for search)
-all_users = sorted(merged_df["user"].unique())
+# all_users, _DS_MIN, _DS_MAX are returned from load_data() — no per-rerun scan needed
 
 # Cap data points sent to Plotly — browser rendering is the main bottleneck
 MAX_PLOT_POINTS = 50_000
@@ -1681,6 +1684,14 @@ if "flt_date_end" not in st.session_state:
     st.session_state.flt_date_end = _DS_MAX
 if "flt_risk" not in st.session_state:
     st.session_state.flt_risk = list(RISK_TIERS)
+if "flt_alert_sev" not in st.session_state:
+    st.session_state.flt_alert_sev = ["CRITICAL", "HIGH"]
+if "flt_min_pctl" not in st.session_state:
+    st.session_state.flt_min_pctl = 0.0
+if "flt_max_rows" not in st.session_state:
+    st.session_state.flt_max_rows = 500
+if "flt_sort_choice" not in st.session_state:
+    st.session_state.flt_sort_choice = "Highest score first"
 
 
 @st.dialog("Filters")
@@ -1702,6 +1713,60 @@ def show_filters():
         label_visibility="collapsed",
         key="dlg_risk",
     )
+
+    # ── Alerts-specific controls (only shown on the Alerts page) ──
+    _on_alerts = (active_page == "Alerts" and not st.session_state.get("live_mode", False))
+    if _on_alerts:
+        st.markdown("---")
+        st.markdown("**Alert Severity**")
+        _sev_options = list(RISK_TIERS)
+        dlg_alert_sev = st.multiselect(
+            "Alert Severity",
+            _sev_options,
+            default=st.session_state.flt_alert_sev,
+            label_visibility="collapsed",
+            key="dlg_alert_sev",
+        )
+        st.markdown("**Sort Alerts By**")
+        _sort_opts = [
+            "Highest score first",
+            "Lowest score first",
+            "Highest severity first",
+            "Lowest severity first",
+            "Most recent first",
+            "Oldest first",
+            "User A\u2013Z",
+            "User Z\u2013A",
+        ]
+        dlg_sort = st.selectbox(
+            "Sort Alerts By",
+            _sort_opts,
+            index=_sort_opts.index(st.session_state.flt_sort_choice)
+            if st.session_state.flt_sort_choice in _sort_opts else 0,
+            label_visibility="collapsed",
+            key="dlg_sort",
+        )
+        _pctl_col, _rows_col = st.columns(2)
+        with _pctl_col:
+            st.markdown("**Min Percentile**")
+            dlg_min_pctl = st.slider(
+                "Min Percentile",
+                0.0, 100.0,
+                st.session_state.flt_min_pctl,
+                label_visibility="collapsed",
+                key="dlg_min_pctl",
+            )
+        with _rows_col:
+            st.markdown("**Max Rows**")
+            dlg_max_rows = st.number_input(
+                "Max Rows",
+                min_value=10, max_value=10000,
+                value=st.session_state.flt_max_rows,
+                step=50,
+                label_visibility="collapsed",
+                key="dlg_max_rows",
+            )
+
     st.markdown("")
     apply_col, reset_col = st.columns(2)
     with apply_col:
@@ -1710,12 +1775,22 @@ def show_filters():
                 st.session_state.flt_date_start = dr[0]
                 st.session_state.flt_date_end = dr[1]
             st.session_state.flt_risk = rl if rl else list(RISK_TIERS)
+            if _on_alerts:
+                st.session_state.flt_alert_sev = dlg_alert_sev if dlg_alert_sev else ["CRITICAL", "HIGH"]
+                st.session_state.flt_sort_choice = dlg_sort
+                st.session_state.flt_min_pctl = float(dlg_min_pctl)
+                st.session_state.flt_max_rows = int(dlg_max_rows)
             st.rerun()
     with reset_col:
         if st.button("Reset", use_container_width=True):
             st.session_state.flt_date_start = _DS_MIN
             st.session_state.flt_date_end = _DS_MAX
             st.session_state.flt_risk = list(RISK_TIERS)
+            if _on_alerts:
+                st.session_state.flt_alert_sev = ["CRITICAL", "HIGH"]
+                st.session_state.flt_sort_choice = "Highest score first"
+                st.session_state.flt_min_pctl = 0.0
+                st.session_state.flt_max_rows = 500
             st.rerun()
 
 
@@ -1771,6 +1846,154 @@ def _corr_matrix(date_start, date_end, risk_levels: tuple, corr_feats: tuple) ->
     fdf = _cached_filtered_df(date_start, date_end, risk_levels)
     sample = fdf if len(fdf) <= MAX_PLOT_POINTS else fdf.sample(MAX_PLOT_POINTS, random_state=42)
     return sample[list(corr_feats)].corr()
+
+
+# ── Cached Overview aggregations ──────────────────────────────────────────────
+# These run on 1.2M rows so must be memoised; they recompute only when filters
+# change, not on every Streamlit rerun.
+
+@st.cache_data(show_spinner=False)
+def _ov_kpis(date_start, date_end, risk_levels: tuple) -> dict:
+    """All 7 Overview KPI values in one pass over the filtered frame."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    risk_str = fdf["ae_risk_band"].astype(str)
+    n = max(len(fdf), 1)
+    return {
+        "total_users":    int(fdf["user"].nunique()),
+        "total_records":  len(fdf),
+        "critical_users": int(fdf.loc[risk_str == "CRITICAL", "user"].nunique()),
+        "high_users":     int(fdf.loc[risk_str == "HIGH",     "user"].nunique()),
+        "medium_users":   int(fdf.loc[risk_str == "MEDIUM",   "user"].nunique()),
+        "avg_anomaly":    float(fdf["if_anomaly_score"].mean()),
+        "detection_rate": float(risk_str.isin(["CRITICAL", "HIGH", "MEDIUM"]).sum() / n * 100),
+    }
+
+
+@st.cache_data(show_spinner=False)
+def _ov_risk_counts(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
+    """Risk-band value counts for the donut chart."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    rc = fdf["ae_risk_band"].astype(str).value_counts().reset_index()
+    rc.columns = ["Risk Level", "Count"]
+    return rc
+
+
+@st.cache_data(show_spinner=False)
+def _ov_daily_alerts(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
+    """Daily alert counts by risk band for the trend bar chart."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    daily = (
+        fdf.groupby([fdf["day"].dt.date, fdf["ae_risk_band"].astype(str)])
+        .size()
+        .reset_index(name="Count")
+    )
+    daily.columns = ["Date", "Risk Level", "Count"]
+    return daily
+
+
+@st.cache_data(show_spinner=False)
+def _ov_histogram_sample(date_start, date_end, risk_levels: tuple, n: int = 50_000) -> pd.DataFrame:
+    """Sampled (score, risk_band) pairs for the anomaly score histogram."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    sub = fdf[["if_anomaly_score", "ae_risk_band"]].copy()
+    sub["ae_risk_band"] = sub["ae_risk_band"].astype(str)
+    return sub if len(sub) <= n else sub.sample(n, random_state=42)
+
+
+@st.cache_data(show_spinner=False)
+def _ov_flag_counts(date_start, date_end, risk_levels: tuple, flags: tuple) -> dict[str, tuple[int, float]]:
+    """Cross-channel flag sums: {flag: (count, pct)}."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    n = max(len(fdf), 1)
+    return {
+        f: (int(fdf[f].sum()), float(fdf[f].sum() / n * 100))
+        for f in flags if f in fdf.columns
+    }
+
+
+def _ov_args() -> tuple:
+    """Shorthand for the three filter keys used by all cached functions."""
+    return (
+        st.session_state.flt_date_start,
+        st.session_state.flt_date_end,
+        tuple(sorted(st.session_state.flt_risk)),
+    )
+
+
+# ── Cached Alerts aggregations ────────────────────────────────────────────────
+
+@st.cache_data(show_spinner=False)
+def _al_top_users(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
+    """Top 10 users by max percentile for the Alerts tab."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    return (
+        fdf.groupby("user", observed=True)
+        .agg(
+            max_percentile=("ae_percentile_rank", "max"),
+            critical_count=("ae_risk_band", lambda x: (x == "CRITICAL").sum()),
+            high_count=("ae_risk_band", lambda x: (x == "HIGH").sum()),
+        )
+        .reset_index()
+        .sort_values("max_percentile", ascending=False)
+        .head(10)
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _al_alert_data(
+    date_start, date_end, risk_levels: tuple,
+    alert_risk: tuple, min_pctl: float, max_results: int, sort_choice: str,
+) -> pd.DataFrame:
+    """Filtered + sorted alert feed for the Alerts tab."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+    data = fdf[
+        (fdf["ae_risk_band"].isin(alert_risk)) &
+        (fdf["ae_percentile_rank"] >= min_pctl)
+    ].copy()
+    if sort_choice == "Highest score first":
+        data = data.sort_values("ae_percentile_rank", ascending=False)
+    elif sort_choice == "Lowest score first":
+        data = data.sort_values("ae_percentile_rank", ascending=True)
+    elif sort_choice in ("Highest severity first", "Lowest severity first"):
+        _asc = sort_choice == "Lowest severity first"
+        data["_risk_sort_key"] = data["ae_risk_band"].astype(str).map(_RISK_ORDER).fillna(-1)
+        data = data.sort_values(
+            ["_risk_sort_key", "ae_percentile_rank"], ascending=[_asc, False]
+        ).drop(columns=["_risk_sort_key"])
+    elif sort_choice == "Most recent first":
+        data = data.sort_values("day", ascending=False)
+    elif sort_choice == "Oldest first":
+        data = data.sort_values("day", ascending=True)
+    elif sort_choice == "User A–Z":
+        data = data.sort_values("user", ascending=True)
+    else:
+        data = data.sort_values("user", ascending=False)
+    return data.head(int(max_results))
+
+
+# ── Cached Channels aggregations ──────────────────────────────────────────────
+
+@st.cache_data(show_spinner=False)
+def _ch_totals(date_start, date_end, risk_levels: tuple) -> dict[str, float]:
+    """Channel volume totals for the Channels tab donut chart."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    result: dict[str, float] = {}
+    for channel, feats in CHANNELS.items():
+        valid = [f for f in feats if f in fdf.columns]
+        if valid:
+            result[channel] = float(fdf[valid].sum().sum())
+    return result
+
+
+@st.cache_data(show_spinner=False)
+def _ch_box_sample(date_start, date_end, risk_levels: tuple, feature: str) -> pd.DataFrame:
+    """Down-sampled (ae_risk_band, feature) frame for the Channels box plot."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    if feature not in fdf.columns:
+        return pd.DataFrame()
+    subset = fdf[["ae_risk_band", feature]]
+    return subset if len(subset) <= MAX_PLOT_POINTS else subset.sample(MAX_PLOT_POINTS, random_state=42)
 
 
 _SECTION_INFO = {
@@ -1979,15 +2202,15 @@ if active_page == "Overview":
         unsafe_allow_html=True,
     )
     _filter_bar("ov_flt")
-    filtered_df = _get_filtered_df()
 
-    total_users = filtered_df["user"].nunique()
-    total_records = len(filtered_df)
-    critical_risk_users = filtered_df[filtered_df["ae_risk_band"] == "CRITICAL"]["user"].nunique()
-    high_risk_users = filtered_df[filtered_df["ae_risk_band"] == "HIGH"]["user"].nunique()
-    medium_risk_users = filtered_df[filtered_df["ae_risk_band"] == "MEDIUM"]["user"].nunique()
-    avg_anomaly = filtered_df["if_anomaly_score"].mean()
-    detection_rate = (filtered_df["ae_risk_band"].isin(["CRITICAL", "HIGH", "MEDIUM"]).sum() / max(len(filtered_df), 1)) * 100
+    _kpis = _ov_kpis(*_ov_args())
+    total_users        = _kpis["total_users"]
+    total_records      = _kpis["total_records"]
+    critical_risk_users = _kpis["critical_users"]
+    high_risk_users    = _kpis["high_users"]
+    medium_risk_users  = _kpis["medium_users"]
+    avg_anomaly        = _kpis["avg_anomaly"]
+    detection_rate     = _kpis["detection_rate"]
 
     st.markdown(
         "<div class='kpi-scroll-wrapper'>"
@@ -2030,8 +2253,7 @@ if active_page == "Overview":
 
     with col_left:
         section_header("Risk Distribution", "sh_risk_dist")
-        risk_counts = filtered_df["ae_risk_band"].value_counts().reset_index()
-        risk_counts.columns = ["Risk Level", "Count"]
+        risk_counts = _ov_risk_counts(*_ov_args())
         fig_donut = px.pie(
             risk_counts, values="Count", names="Risk Level",
             color="Risk Level",
@@ -2046,17 +2268,17 @@ if active_page == "Overview":
 
     with col_right:
         section_header("Alert Trend Over Time", "sh_alert_trend")
-        daily_alerts = (
-            filtered_df.groupby([filtered_df["day"].dt.date, "ae_risk_band"])
-            .size()
-            .reset_index(name="count")
-        )
-        daily_alerts.columns = ["Date", "Risk Level", "Count"]
-        fig_trend = px.area(
+        daily_alerts = _ov_daily_alerts(*_ov_args())
+        # Stack order: LOW at bottom, CRITICAL at top — reflects true data proportions
+        _trend_stack_order = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+        fig_trend = px.bar(
             daily_alerts, x="Date", y="Count", color="Risk Level",
             color_discrete_map=RISK_COLORS,
+            category_orders={"Risk Level": _trend_stack_order},
+            barmode="stack",
         )
-        fig_trend.update_layout(**PLOTLY_LAYOUT, height=340, xaxis_title="", yaxis_title="Alert Count")
+        fig_trend.update_layout(**PLOTLY_LAYOUT, height=340, xaxis_title="", yaxis_title="Alert Count",
+                                bargap=0, bargroupgap=0)
         st.plotly_chart(fig_trend, use_container_width=True)
 
     # ── Row 3: Top Risky Users + Score Distribution ──
@@ -2118,8 +2340,7 @@ if active_page == "Overview":
 
     with col_right2:
         section_header("Anomaly Score Distribution", "sh_score_dist")
-        # Sample for histogram to avoid sending 2M+ points to Plotly
-        hist_df = filtered_df if len(filtered_df) <= MAX_PLOT_POINTS else filtered_df.sample(MAX_PLOT_POINTS, random_state=42)
+        hist_df = _ov_histogram_sample(*_ov_args())
         fig_hist = px.histogram(
             hist_df, x="if_anomaly_score", nbins=80,
             color="ae_risk_band", color_discrete_map=RISK_COLORS,
@@ -2141,27 +2362,44 @@ if active_page == "Overview":
             ("cloud_upload_flag",           "Cloud Upload",          "#00b4d8"),
             ("non_primary_pc_risk_flag",    "Non-Primary PC",        "#7f8c8d"),
         ]
-        _cards_html = ""
+        _flag_counts_cache = _ov_flag_counts(*_ov_args(), flags=tuple(CROSS_FLAGS))
+        _cards_inner = ""
         for flag, label, color in _flag_info:
-            if flag in CROSS_FLAGS and flag in filtered_df.columns:
-                count = int(filtered_df[flag].sum())
-                pct = (count / max(len(filtered_df), 1)) * 100
-                _cards_html += (
-                    f"<div style='flex:1;background:#0a0a0a;border:1px solid #1a1a1a;"
-                    f"border-left:3px solid {color};padding:14px 18px;min-width:160px;'>"
-                    f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;color:#555;"
-                    f"text-transform:uppercase;letter-spacing:1.5px;'>{label}</div>"
-                    f"<div style='display:flex;align-items:baseline;gap:8px;margin-top:8px;'>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:24px;"
-                    f"color:{color};font-weight:600;'>{count:,}</span>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
-                    f"color:#444;'>{pct:.1f}%</span>"
-                    f"</div></div>"
+            if flag in CROSS_FLAGS and flag in _flag_counts_cache:
+                count, pct = _flag_counts_cache[flag]
+                _cards_inner += (
+                    f"<div class='kpi-card' style='border-color:{color}'>"
+                    f"<h3>{label}</h3>"
+                    f"<h1 style='color:{color}'>{count:,}</h1>"
+                    f"<p>{pct:.1f}% of records</p>"
+                    f"</div>"
                 )
         st.markdown(
-            f"<div style='display:flex;gap:12px;margin:4px 0 16px 0;flex-wrap:wrap;'>{_cards_html}</div>",
+            "<div class='kpi-scroll-wrapper'>"
+            "<div class='kpi-scroll-arrow' id='cf-arrow-left'>&#8592;</div>"
+            f"<div class='kpi-scroll-row' id='cf-row'>{_cards_inner}</div>"
+            "<div class='kpi-scroll-arrow' id='cf-arrow-right'>&#8594;</div>"
+            "</div>",
             unsafe_allow_html=True,
         )
+        components.html(
+            "<script>"
+            "(function(){"
+            "  var p = window.parent.document;"
+            "  function wire(){"
+            "    var row = p.getElementById('cf-row');"
+            "    var lft = p.getElementById('cf-arrow-left');"
+            "    var rgt = p.getElementById('cf-arrow-right');"
+            "    if(!row||!lft||!rgt){setTimeout(wire,100);return;}"
+            "    lft.addEventListener('click',function(){row.scrollBy({left:-200,behavior:'smooth'});});"
+            "    rgt.addEventListener('click',function(){row.scrollBy({left:200,behavior:'smooth'});});"
+            "  }"
+            "  wire();"
+            "})();"
+            "</script>",
+            height=0,
+        )
+        st.markdown("<div style='margin-bottom:16px'></div>", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -2177,7 +2415,6 @@ if active_page == "Investigation":
         unsafe_allow_html=True,
     )
     _filter_bar("inv_flt")
-    filtered_df = _get_filtered_df()
 
     # Build user list ordered by risk (highest first)
     _risk_sorted = user_risk["user"].tolist()
@@ -2691,20 +2928,45 @@ if active_page == "Alerts":
                 st.session_state.live_paused = False
                 st.session_state.live_page = 0
                 st.rerun()
-    with ctrl_pause:
-        if st.session_state.live_mode:
+        with _ctrl_pause:
             if not st.session_state.live_paused:
-                if st.button("⏸ PAUSE", key="pause_live", use_container_width=True):
+                if st.button("⏸   PAUSE", key="pause_live", use_container_width=True):
                     with open(LIVE_PAUSE_FLAG, "w", encoding="utf-8") as _pf:
                         pass  # existence of the file signals pause
                     st.session_state.live_paused = True
                     st.rerun()
             else:
-                if st.button("▶ RESUME", key="resume_live", use_container_width=True):
+                if st.button("▶   RESUME", key="resume_live", use_container_width=True):
                     if os.path.exists(LIVE_PAUSE_FLAG):
                         os.remove(LIVE_PAUSE_FLAG)
                     st.session_state.live_paused = False
                     st.rerun()
+    components.html(
+        "<script>"
+        "(function(){"
+        "  function styleSimBtns(){"
+        "    var btns=window.parent.document.querySelectorAll('[data-testid=\"stButton\"] button');"
+        "    for(var i=0;i<btns.length;i++){"
+        "      var txt=(btns[i].innerText||btns[i].textContent||'').trim();"
+        "      if(txt.indexOf('LIVE SIMULATION')!==-1||txt==='⏸   PAUSE'||txt==='▶   RESUME'){"
+        "        btns[i].style.setProperty('padding','16px 24px','important');"
+        "        btns[i].style.setProperty('font-size','13px','important');"
+        "        btns[i].style.setProperty('letter-spacing','4px','important');"
+        "        btns[i].style.setProperty('color','#cccccc','important');"
+        "        btns[i].style.setProperty('border-color','#2a2a2a','important');"
+        "      }"
+        "    }"
+        "  }"
+        "  setTimeout(styleSimBtns,50);"
+        "  setTimeout(styleSimBtns,300);"
+        "})();"
+        "</script>",
+        height=0,
+    )
+    st.markdown(
+        "<hr style='border:none;border-top:1px solid #111;margin:16px 0 0 0;'>",
+        unsafe_allow_html=True,
+    )
 
     # ── LIVE mode ─────────────────────────────────────────────
     if st.session_state.live_mode:
@@ -3008,33 +3270,6 @@ if active_page == "Alerts":
         # Reset pagination and clear live state when returning to static mode
         if st.session_state.get("live_page") != 0:
             st.session_state.live_page = 0
-        _filter_bar("al_flt")
-        filtered_df = _get_filtered_df()
-
-        # Alert severity filter + sort controls
-        alert_cols = st.columns([2, 2, 2, 4])
-        with alert_cols[0]:
-            alert_risk = st.multiselect("Severity", ["HIGH", "MEDIUM", "LOW"], default=["HIGH", "MEDIUM"], key="alert_sev")
-        with alert_cols[1]:
-            min_pctl = st.slider("Min Percentile", 0.0, 100.0, 0.0, key="min_pctl")
-        with alert_cols[2]:
-            max_results = st.number_input("Max Rows", min_value=10, max_value=10000, value=500, step=50, key="max_rows")
-        with alert_cols[3]:
-            sort_choice = st.selectbox(
-                "Sort alerts by",
-                [
-                    "Highest score first",
-                    "Lowest score first",
-                    "Highest severity first",
-                    "Lowest severity first",
-                    "Most recent first",
-                    "Oldest first",
-                    "User A–Z",
-                    "User Z–A",
-                ],
-                index=0,
-                key="alert_sort_choice",
-            )
 
         # ── Top 10 Riskiest Users in Alerts ──
         section_header("Top 10 Riskiest Users", "sh_top_users")
@@ -3043,17 +3278,7 @@ if active_page == "Alerts":
             "Click a user to open their investigation profile.</p>",
             unsafe_allow_html=True,
         )
-        top_users = (
-            filtered_df.groupby("user", observed=True)
-            .agg(
-                max_percentile=("ae_percentile_rank", "max"),
-                critical_count=("ae_risk_band", lambda x: (x == "CRITICAL").sum()),
-                high_count=("ae_risk_band", lambda x: (x == "HIGH").sum()),
-            )
-            .reset_index()
-            .sort_values("max_percentile", ascending=False)
-            .head(10)
-        )
+        top_users = _al_top_users(*_ov_args())
 
         if top_users.empty:
             st.info("No users available in the current filter range.")
@@ -3103,67 +3328,36 @@ if active_page == "Alerts":
                         st.rerun()
                 st.markdown("<div style='border-bottom:1px solid #111;margin:0;'></div>", unsafe_allow_html=True)
 
-        # Alert severity filter within this tab
-        _severity_counts = {
-            tier: int((filtered_df["ae_risk_band"] == tier).sum()) for tier in RISK_TIERS
-        }
+        # ── Date/risk summary (no filter button here) ──
+        _active_risks = ", ".join(st.session_state.flt_risk) if len(st.session_state.flt_risk) < 4 else "All risk levels"
+        st.caption(
+            f"Date: {st.session_state.flt_date_start} to {st.session_state.flt_date_end}   |   Risk: {_active_risks}"
+        )
 
-        section_header("Filter by severity", "sh_top_users")
+        # Read alert controls from session state (set via filter modal)
+        alert_risk  = st.session_state.flt_alert_sev or ["CRITICAL", "HIGH"]
+        min_pctl    = st.session_state.flt_min_pctl
+        max_results = st.session_state.flt_max_rows
+        sort_choice = st.session_state.flt_sort_choice
 
-        _sev_cols = st.columns([1, 1, 1, 1, 4])
-        _tier_checked = {}
-        for _idx, _tier in enumerate(RISK_TIERS):
-            _color = RISK_COLORS[_tier]
-            _count = _severity_counts[_tier]
-            with _sev_cols[_idx]:
-                _tier_checked[_tier] = st.checkbox(
-                    _tier,
-                    value=(_tier in ["CRITICAL", "HIGH"]),
-                    key=f"alert_sev_{_tier}",
-                )
-                st.markdown(
-                    f"<span style='background:{_color}22;color:{_color};font-size:9px;"
-                    f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 6px;"
-                    f"border:1px solid {_color}55;display:inline-block;margin-top:-6px;'>"
-                    f"{_count:,} alert{'s' if _count != 1 else ''}</span>",
-                    unsafe_allow_html=True,
-                )
+        # Active alert filter summary pill
+        _sev_summary = " ".join(
+            f"<span style='background:{RISK_COLORS.get(t,'#888')}22;color:{RISK_COLORS.get(t,'#888')};"
+            f"font-size:9px;font-family:JetBrains Mono,monospace;letter-spacing:1px;"
+            f"padding:1px 7px;border:1px solid {RISK_COLORS.get(t,'#888')}55;"
+            f"display:inline-block;margin-right:4px;'>{t}</span>"
+            for t in RISK_TIERS if t in alert_risk
+        )
+        st.markdown(
+            f"<p style='font-family:JetBrains Mono,monospace;font-size:10px;color:#444;margin:4px 0 16px 0;'>"
+            f"{_sev_summary}&nbsp; &middot;&nbsp; Min P{min_pctl:.0f}"
+            f"&nbsp; &middot;&nbsp; {sort_choice}&nbsp; &middot;&nbsp; Max {max_results:,} rows</p>",
+            unsafe_allow_html=True,
+        )
 
-        alert_risk = [t for t, checked in _tier_checked.items() if checked]
-
-        # Centralised severity mapping — extend here when new bands are added
-        _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
-
-        # Filter first
-        alert_data = filtered_df[
-            (filtered_df["ae_risk_band"].isin(alert_risk)) &
-            (filtered_df["ae_percentile_rank"] >= min_pctl)
-        ].copy()
-
-        # Sort based on explicit outcome label
-        if sort_choice == "Highest score first":
-            alert_data = alert_data.sort_values("ae_percentile_rank", ascending=False)
-        elif sort_choice == "Lowest score first":
-            alert_data = alert_data.sort_values("ae_percentile_rank", ascending=True)
-        elif sort_choice in ("Highest severity first", "Lowest severity first"):
-            _asc = sort_choice == "Lowest severity first"
-            alert_data["_risk_sort_key"] = alert_data["ae_risk_band"].astype(str).map(_RISK_ORDER).fillna(-1)
-            alert_data = alert_data.sort_values(
-                ["_risk_sort_key", "ae_percentile_rank"],
-                ascending=[_asc, False],
-            ).drop(columns=["_risk_sort_key"])
-        elif sort_choice == "Most recent first":
-            alert_data["day"] = pd.to_datetime(alert_data["day"], errors="coerce")
-            alert_data = alert_data.sort_values("day", ascending=False)
-        elif sort_choice == "Oldest first":
-            alert_data["day"] = pd.to_datetime(alert_data["day"], errors="coerce")
-            alert_data = alert_data.sort_values("day", ascending=True)
-        elif sort_choice == "User A–Z":
-            alert_data = alert_data.sort_values("user", ascending=True)
-        else:  # User Z–A
-            alert_data = alert_data.sort_values("user", ascending=False)
-
-        alert_data = alert_data.head(int(max_results))
+        alert_data = _al_alert_data(
+            *_ov_args(), tuple(alert_risk), min_pctl, max_results, sort_choice
+        )
 
         # Cap card rendering to keep the UI responsive
         CARD_LIMIT = 10
@@ -3173,6 +3367,13 @@ if active_page == "Alerts":
         if total_alerts == 0:
             st.info("No alerts match the current filters.")
         else:
+            # ── Alert Feed header with Filter button inline ──
+            _af_left, _af_right = st.columns([9, 1], vertical_alignment="bottom")
+            with _af_left:
+                st.markdown("<div class='section-header'>Alert Feed</div>", unsafe_allow_html=True)
+            with _af_right:
+                if st.button("Filter", key="al_flt", use_container_width=True):
+                    show_filters()
             if total_alerts > CARD_LIMIT:
                 st.caption(
                     f"Displaying top {CARD_LIMIT} of {total_alerts:,} matching alerts. "
@@ -3289,7 +3490,6 @@ if active_page == "Channels":
         unsafe_allow_html=True,
     )
     _filter_bar("ch_flt")
-    filtered_df = _get_filtered_df()
 
     # ── Channel volume over time ──
     ch1, ch2 = st.columns(2)
@@ -3309,11 +3509,7 @@ if active_page == "Channels":
 
     with ch2:
         section_header("Channel Volume Share", "sh_chan_share")
-        ch_totals = {}
-        for channel, feats in CHANNELS.items():
-            valid = [f for f in feats if f in filtered_df.columns]
-            if valid:
-                ch_totals[channel] = filtered_df[valid].sum().sum()
+        ch_totals = _ch_totals(*_ov_args())
         if ch_totals:
             ch_df = pd.DataFrame(list(ch_totals.items()), columns=["Channel", "Total Events"])
             fig_ch_pie = px.pie(ch_df, values="Total Events", names="Channel",
@@ -3325,9 +3521,8 @@ if active_page == "Channels":
     # ── Feature-level box plots ──
     section_header("Feature Distributions by Risk Level", "sh_feat_dist")
     selected_feature = st.selectbox("Select Feature", RAW_FEATURES, key="feat_box")
-    if selected_feature in filtered_df.columns:
-        # Downsample for box plot — browser can't handle 2M+ points
-        box_df = filtered_df if len(filtered_df) <= MAX_PLOT_POINTS else filtered_df.sample(MAX_PLOT_POINTS, random_state=42)
+    box_df = _ch_box_sample(*_ov_args(), selected_feature)
+    if not box_df.empty:
         fig_box = px.box(
             box_df, x="ae_risk_band", y=selected_feature,
             color="ae_risk_band", color_discrete_map=RISK_COLORS,
