@@ -2981,6 +2981,15 @@ if active_page == "Alerts":
     )
 
     # ── Live-simulation control row ────────────────────────────
+    # Detect Streamlit Cloud: the repo is mounted at /mount/src/ on the cloud runner.
+    # On Streamlit Cloud use live_replay.py (no tensorflow/joblib needed).
+    # Locally use live_simulation.py (full ML scoring pipeline).
+    _ON_CLOUD = os.path.exists("/mount/src")
+    _LIVE_SCRIPT = (
+        os.path.join(BASE_DIR, "live_replay.py")
+        if _ON_CLOUD
+        else LIVE_SIM_SCRIPT
+    )
     ctrl_start, ctrl_pause = st.columns([3, 2])
     with ctrl_start:
         if not st.session_state.live_mode:
@@ -2995,9 +3004,10 @@ if active_page == "Alerts":
                 _cached_live_rows.clear()
                 _get_live_user_data.clear()
                 st.session_state.live_page = 0
-                # Launch the unified simulation script as a subprocess
+                # On cloud: live_replay.py (pre-scored data, no ML deps)
+                # Locally: live_simulation.py (full encoder + isolation forest)
                 proc = subprocess.Popen(
-                    [sys.executable, LIVE_SIM_SCRIPT, "--interval", "0.5"],
+                    [sys.executable, _LIVE_SCRIPT, "--interval", "0.5"],
                     cwd=BASE_DIR,
                 )
                 st.session_state.live_proc = proc
