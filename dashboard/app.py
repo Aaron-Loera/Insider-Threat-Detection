@@ -944,6 +944,8 @@ if st.session_state.pop("_set_cookie", False):
 # ──────────────────────────────────────────────────────────────
 # Data Loading
 # ──────────────────────────────────────────────────────────────
+import datetime as _dt
+print(f"[STARTUP] authenticated user reached data-load section at {_dt.datetime.utcnow().isoformat()}")
 
 # Resolve the project root so config.py (at the root) is importable.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1070,6 +1072,7 @@ def load_ueba_a():
 def load_data():
     """Load analyst table + UEBA dataset, merge, pre-compute user_risk."""
     import gc
+    print("[load_data] started")
 
     _HF_REPO = "DSKittens/ueba-dashboard-dat"
     _hf_token = st.secrets.get("huggingface", {}).get("token", None)
@@ -1097,14 +1100,10 @@ def load_data():
             existing = pd.read_csv(local_csv, nrows=0).columns.tolist()
             use = [c for c in columns if c in existing]
             return pd.read_csv(local_csv, usecols=use)
-        # Cloud: stream via HF Hub fsspec — no temp file, no disk permissions needed
+        # Cloud: stream via HF Hub fsspec — column selection prevents loading all 111 cols
         url = f"hf://datasets/{_HF_REPO}/{hf_filename}"
-        try:
-            return pd.read_parquet(url, columns=columns, storage_options=_HF_OPTS)
-        except Exception:
-            # Fall back to reading all columns if selection fails
-            df = pd.read_parquet(url, storage_options=_HF_OPTS)
-            return df[[c for c in columns if c in df.columns]]
+        # Never fall back to loading all columns — that would be ~1.1 GB RAM for UEBA
+        return pd.read_parquet(url, columns=columns, storage_options=_HF_OPTS)
 
     def _downcast(df):
         """Shrink numeric column dtypes to reduce RAM (pandas-3.0 compatible)."""
@@ -1115,6 +1114,7 @@ def load_data():
         return df
 
     # ── Load analyst table ──
+    print("[load_data] loading analyst table")
     analyst = _read(ANALYST_TABLE_PARQUET, ANALYST_TABLE_CSV, "alert_table_5.parquet", _ANALYST_COLS)
     _downcast(analyst)
     analyst["day"] = pd.to_datetime(analyst["day"], errors="coerce")
@@ -1122,20 +1122,25 @@ def load_data():
     for _col in ("user", "ae_risk_band", "if_risk_band"):
         if _col in analyst.columns:
             analyst[_col] = analyst[_col].astype("category")
+    print(f"[load_data] analyst loaded: {analyst.shape}, {analyst.memory_usage(deep=True).sum()/1e6:.1f} MB")
 
     # ── Load UEBA dataset ──
+    print("[load_data] loading UEBA dataset")
     ueba = _read(UEBA_PARQUET, UEBA_CSV, "ueba_dataset_5_train.parquet", UEBA_COLS)
     _downcast(ueba)
     ueba["day"] = pd.to_datetime(ueba["day"], errors="coerce")
     for _col in ("user", "pc"):
         if _col in ueba.columns:
             ueba[_col] = ueba[_col].astype("category")
+    print(f"[load_data] ueba loaded: {ueba.shape}, {ueba.memory_usage(deep=True).sum()/1e6:.1f} MB")
 
     # ── Merge ──
+    print("[load_data] merging")
     _merge_analyst_cols = [c for c in _ANALYST_COLS if c in analyst.columns]
     merged = ueba.merge(analyst[_merge_analyst_cols], on=["user", "day"], how="left")
     del ueba, analyst
     gc.collect()
+    print(f"[load_data] merged: {merged.shape}, {merged.memory_usage(deep=True).sum()/1e6:.1f} MB")
 
     # Cast risk bands to ordered categorical
     _risk_cat = pd.CategoricalDtype(categories=["LOW", "MEDIUM", "HIGH", "CRITICAL"], ordered=True)
@@ -1168,7 +1173,9 @@ def load_data():
 
 try:
     merged_df, user_risk, all_users, _DS_MIN, _DS_MAX = load_data()
+    print("[STARTUP] load_data() complete")
     ueba_a_df = load_ueba_a()
+    print("[STARTUP] load_ueba_a() complete — DATA_LOADED=True")
     DATA_LOADED = True
 except Exception as _load_err:
     import traceback as _tb
