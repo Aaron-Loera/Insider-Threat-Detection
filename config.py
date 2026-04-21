@@ -49,8 +49,12 @@ INSIDERS_PATH = _local_or("INSIDERS_PATH", _insiders_default)
 
 
 # Active Model Version
-MODEL_VERSION = _local_or("MODEL_VERSION", "5")
-LIVE_MODEL_VERSION = _local_or("LIVE_MODEL_VERSION", _local_or("MODEL_VERSION", "5"))
+MODEL_VERSION = _local_or("MODEL_VERSION", "6")
+LIVE_MODEL_VERSION = _local_or("LIVE_MODEL_VERSION", "5")
+
+# Peer-group column used by apply_peer_group_enhancements (see scripts/Preprocessing.py).
+# Swappable to "department" or "team" once role granularity is evaluated.
+PEER_GROUP_KEY = _local_or("PEER_GROUP_KEY", "role")
 
 
 # Version-Scoped Internal Paths
