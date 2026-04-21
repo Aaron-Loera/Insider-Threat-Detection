@@ -990,8 +990,10 @@ UEBA_COLS = [
 def fetch_alert_detail(user: str, day_str: str) -> dict:
     """Return top_contributors and explanation for one (user, day) record.
 
-    Uses PyArrow predicate pushdown so only the matching row is read from the
-    parquet file — never loading the full 618 MB string columns into RAM.
+    Uses pq.read_table() with DNF predicate pushdown so only the matching
+    row groups are read — never loading the full 618 MB string columns into RAM.
+    The parquet on HF is sorted by (user, day) with 1000-row row groups, so each
+    call reads ~1-3 row groups (~1.5 MB) instead of the full file.
     Returns an empty dict when the record is not found.
     """
     _HF_REPO = "DSKittens/ueba-dashboard-dat"
@@ -999,29 +1001,19 @@ def fetch_alert_detail(user: str, day_str: str) -> dict:
     _COLS = ["user", "day", "top_contributors", "explanation"]
     try:
         import pyarrow.parquet as pq
-        import pyarrow.compute as pc
 
         day_ts = pd.Timestamp(day_str)
+        # DNF filter list: inner list = AND, outer list = OR groups
+        filt_dnf = [[("user", "=", user), ("day", "=", day_ts)]]
 
-        filt = (
-            (pc.field("user") == user) &
-            (pc.field("day") == day_ts)
-        )
         if os.path.exists(ANALYST_TABLE_PARQUET):
-            pf = pq.ParquetFile(ANALYST_TABLE_PARQUET)
-            avail = set(pf.schema_arrow.names)
-            use = [c for c in _COLS if c in avail]
-            tbl = pf.read(columns=use, filters=filt)
+            tbl = pq.read_table(ANALYST_TABLE_PARQUET, columns=_COLS, filters=filt_dnf)
         else:
-            import pyarrow.dataset as ds
             import fsspec
             hf_fs = fsspec.filesystem("hf", token=_hf_token)
             src = f"datasets/{_HF_REPO}/alert_table_5.parquet"
             with hf_fs.open(src, "rb") as f:
-                pf = pq.ParquetFile(f)
-                avail = set(pf.schema_arrow.names)
-                use = [c for c in _COLS if c in avail]
-                tbl = pf.read(columns=use, filters=filt)
+                tbl = pq.read_table(f, columns=_COLS, filters=filt_dnf)
 
         if tbl.num_rows == 0:
             return {}
