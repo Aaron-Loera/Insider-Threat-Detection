@@ -987,52 +987,67 @@ UEBA_COLS = [
 
 
 @st.cache_data(show_spinner=False)
-def fetch_alert_detail(user: str, day_str: str) -> dict:
-    """Return top_contributors and explanation for one (user, day) record.
+def _load_user_detail_df(user: str) -> "pd.DataFrame":
+    """Download ALL detail rows for one user and cache the result.
 
-    Uses pq.read_table() with DNF predicate pushdown so only the matching
-    row groups are read — never loading the full 618 MB string columns into RAM.
-    The parquet on HF is sorted by (user, day) with 1000-row row groups, so each
-    call reads ~1-3 row groups (~1.5 MB) instead of the full file.
-    Returns an empty dict when the record is not found.
+    Local:  reads from the main analyst parquet with a user-level DNF filter
+            (1268 sorted row groups → only the user's ~1270 rows are read).
+    Cloud:  downloads a tiny per-user parquet from HF details/ folder (~46 KB).
+            The full 193 MB analyst parquet is NEVER loaded on cloud — each
+            user file is independently tiny, making the download cost negligible.
     """
     _HF_REPO = "DSKittens/ueba-dashboard-dat"
     _hf_token = st.secrets.get("huggingface", {}).get("token", None)
-    _COLS = ["user", "day", "top_contributors", "explanation"]
+    _DETAIL_COLS = ["user", "day", "top_contributors", "explanation"]
+    safe = str(user).replace("/", "_").replace("\\", "_")
+
     try:
-        import pyarrow.parquet as pq
-
-        day_ts = pd.Timestamp(day_str)
-        # DNF filter list: inner list = AND, outer list = OR groups
-        filt_dnf = [[("user", "=", user), ("day", "=", day_ts)]]
-
         if os.path.exists(ANALYST_TABLE_PARQUET):
-            # Local: pq.read_table with DNF predicate pushdown (fast, minimal RAM)
-            tbl = pq.read_table(ANALYST_TABLE_PARQUET, columns=_COLS, filters=filt_dnf)
-            if tbl.num_rows == 0:
-                return {}
-            row = tbl.to_pydict()
-        else:
-            # Cloud: pd.read_parquet via hf:// — same approach as load_data(), confirmed working.
-            # Filters use pyarrow predicate pushdown over the sorted 1268-row-group parquet,
-            # reading only ~1-3 row groups (~500 KB) instead of the full 193 MB file.
-            url = f"hf://datasets/{_HF_REPO}/alert_table_5.parquet"
-            df = pd.read_parquet(
-                url, columns=_COLS, filters=filt_dnf,
-                storage_options={"token": _hf_token},
+            import pyarrow.parquet as pq
+            tbl = pq.read_table(
+                ANALYST_TABLE_PARQUET,
+                columns=_DETAIL_COLS,
+                filters=[[("user", "=", user)]],
             )
-            if df.empty:
-                return {}
-            row = df.iloc[0].to_dict()
-            row = {k: [v] for k, v in row.items()}  # match to_pydict() shape
+            return tbl.to_pandas()
+        else:
+            # Per-user file: ~46 KB download regardless of total dataset size
+            url = f"hf://datasets/{_HF_REPO}/details/{safe}.parquet"
+            return pd.read_parquet(url, storage_options={"token": _hf_token})
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("_load_user_detail_df(%s) failed: %s", user, _e)
+        return pd.DataFrame(columns=_DETAIL_COLS)
 
+
+@st.cache_data(show_spinner=False)
+def fetch_alert_detail(user: str, day_str: str) -> dict:
+    """Return top_contributors and explanation for one (user, day) record.
+
+    Delegates the expensive I/O to _load_user_detail_df (cached per-user),
+    then filters to the requested day. On cloud this costs ~46 KB per unique
+    user, cached after the first lookup — compared to 193 MB per call before.
+    """
+    try:
+        df = _load_user_detail_df(user)
+        if df.empty:
+            return {}
+        day_ts = pd.Timestamp(day_str)
+        if "day" in df.columns:
+            df["day"] = pd.to_datetime(df["day"], errors="coerce")
+            match = df[df["day"] == day_ts]
+        else:
+            return {}
+        if match.empty:
+            return {}
+        r = match.iloc[0]
         return {
-            "top_contributors": row.get("top_contributors", [None])[0],
-            "explanation": row.get("explanation", [""])[0] or "",
+            "top_contributors": r.get("top_contributors", None),
+            "explanation": r.get("explanation", "") or "",
         }
     except Exception as _e:
         import logging as _logging
-        _logging.getLogger(__name__).warning("fetch_alert_detail failed: %s", _e)
+        _logging.getLogger(__name__).warning("fetch_alert_detail(%s, %s) failed: %s", user, day_str, _e)
         return {}
 
 
