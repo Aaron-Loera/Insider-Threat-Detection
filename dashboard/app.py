@@ -1025,14 +1025,23 @@ def load_data():
         )
         return path, "parquet"
 
-    # ── Load analyst table ──
+    # ── Load analyst table (only the columns actually used in the merge) ──
+    _analyst_needed = [
+        "user", "day", "if_anomaly_score", "ae_percentile_rank", "ae_risk_band",
+        "top_contributors", "if_percentile_rank", "if_risk_band", "explanation",
+    ]
     analyst_path, analyst_fmt = _resolve(
         ANALYST_TABLE_PARQUET, ANALYST_TABLE_CSV, "alert_table_5.parquet"
     )
     if analyst_fmt == "parquet":
-        analyst = pd.read_parquet(analyst_path)
+        import pyarrow.parquet as pq
+        _analyst_schema_cols = pq.read_schema(analyst_path).names
+        _analyst_use = [c for c in _analyst_needed if c in _analyst_schema_cols]
+        analyst = pd.read_parquet(analyst_path, columns=_analyst_use)
     else:
-        analyst = pd.read_csv(analyst_path)
+        _all_analyst_cols = pd.read_csv(analyst_path, nrows=0).columns.tolist()
+        _analyst_use_idx = [i for i, c in enumerate(_all_analyst_cols) if c in _analyst_needed]
+        analyst = pd.read_csv(analyst_path, usecols=_analyst_use_idx)
 
     # ── Load UEBA dataset ──
     ueba_path, ueba_fmt = _resolve(
@@ -1092,13 +1101,6 @@ def load_data():
         if _col in merged.columns:
             merged[_col] = merged[_col].astype(_risk_cat)
 
-    # Pre-group by user so the Investigation tab can do O(1) lookups instead
-    # of scanning the full 1.5M-row frame on every user switch
-    user_data_dict: dict[str, pd.DataFrame] = {
-        u: grp.reset_index(drop=True)
-        for u, grp in merged.groupby("user", observed=True)
-    }
-
     del ueba, analyst
     gc.collect()
 
@@ -1106,11 +1108,11 @@ def load_data():
     _ds_min = merged["day"].min().date()
     _ds_max = merged["day"].max().date()
 
-    return merged, user_risk, user_data_dict, _all_users, _ds_min, _ds_max
+    return merged, user_risk, _all_users, _ds_min, _ds_max
 
 
 try:
-    merged_df, user_risk, user_data_dict, all_users, _DS_MIN, _DS_MAX = load_data()
+    merged_df, user_risk, all_users, _DS_MIN, _DS_MAX = load_data()
     ueba_a_df = load_ueba_a()
     DATA_LOADED = True
 except Exception as _load_err:
@@ -2458,8 +2460,7 @@ if active_page == "Investigation":
         st.info("Select a user above to begin investigation. Users are sorted by risk (highest first).")
         st.stop()
 
-    # O(1) lookup from pre-grouped dict — avoids scanning 1.5 M rows per user switch
-    _u_rows = user_data_dict.get(selected_user, pd.DataFrame())
+    _u_rows = merged_df.loc[merged_df["user"] == selected_user].reset_index(drop=True)
     if not _u_rows.empty:
         _u_mask = (
             _u_rows["ae_risk_band"].isin(st.session_state.flt_risk)
