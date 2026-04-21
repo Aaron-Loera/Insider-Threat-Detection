@@ -1,4 +1,4 @@
-import streamlit as st
+﻿import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
@@ -1444,6 +1444,88 @@ def build_alert_summary(top_contributors_raw) -> str:
     return f"This alert is mainly driven by {body}{suffix}."
 
 
+@st.cache_data(ttl=5, show_spinner=False)
+def _get_live_user_data(user: str) -> pd.DataFrame:
+    """Load live-scored rows for *user* from LIVE_OUTPUT, normalized to match user_data columns.
+
+    Delegates to _cached_live_rows to avoid a redundant full-file scan; the shared
+    2-second cache means all live-data consumers pay at most one read per TTL window.
+    """
+    rows, _ = _cached_live_rows()
+    if not rows:
+        return pd.DataFrame()
+    user_rows = [r for r in rows if r.get("user") == user]
+    if not user_rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(user_rows)
+    if "cert_timestamp" not in df.columns:
+        return pd.DataFrame()
+    df["day"] = pd.to_datetime(df["cert_timestamp"], errors="coerce").dt.normalize()
+    df = df.dropna(subset=["day"])
+    if df.empty:
+        return pd.DataFrame()
+    for _col in ("if_anomaly_score", "if_percentile_rank"):
+        if _col in df.columns:
+            df[_col] = pd.to_numeric(df[_col], errors="coerce")
+    # Keep one row per day: worst-of-day (highest percentile rank)
+    df = (
+        df.sort_values("if_percentile_rank", ascending=False)
+        .drop_duplicates(subset=["day"])
+        .copy()
+    )
+    # Map to column names the Investigation page expects
+    df["ae_risk_band"] = (
+        df["if_risk_band"].astype(str).str.upper()
+        if "if_risk_band" in df.columns
+        else "LOW"
+    )
+    df["ae_percentile_rank"] = df.get("if_percentile_rank", np.nan)
+    df["_live_row"] = True
+    return df.reset_index(drop=True)
+
+
+@st.cache_data(ttl=2, show_spinner=False)
+def _cached_live_file_stats():
+    """Return (row_count, stream_done) for the live output file.
+
+    Delegates to _cached_live_rows so at most one file scan occurs per TTL window
+    regardless of how many callers need live-file metadata.
+    """
+    rows, stream_done = _cached_live_rows()
+    return len(rows), stream_done
+
+
+@st.cache_data(ttl=2, show_spinner=False)
+def _cached_live_rows():
+    """Read all scored rows from the live output file; return (rows_list, stream_done).
+
+    Cached for 2 seconds to avoid re-reading a potentially 500 MB+ file on every
+    Streamlit rerun.  Called by the Alerts page live mode on every auto-refresh.
+    Clear via _cached_live_rows.clear() when starting a new simulation.
+    """
+    if not os.path.exists(LIVE_OUTPUT):
+        return [], False
+    rows: list[dict] = []
+    stream_done = False
+    try:
+        with open(LIVE_OUTPUT, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("_eos"):
+                    stream_done = True
+                else:
+                    rows.append(obj)
+    except Exception:
+        pass
+    return rows, stream_done
+
+
 # ──────────────────────────────────────────────────────────────
 # Sidebar — Global Filters
 # ──────────────────────────────────────────────────────────────
@@ -1515,20 +1597,8 @@ with st.sidebar:
     _live_rows_received = 0
     _stream_done = False
     _live_session_active = bool(st.session_state.live_mode or st.session_state.live_paused)
-    if _live_session_active and os.path.exists(LIVE_OUTPUT):
-        with open(LIVE_OUTPUT, "r", encoding="utf-8") as _fh:
-            for _line in _fh:
-                _line = _line.strip()
-                if not _line:
-                    continue
-                try:
-                    _obj = json.loads(_line)
-                except json.JSONDecodeError:
-                    continue
-                if _obj.get("_eos"):
-                    _stream_done = True
-                else:
-                    _live_rows_received += 1
+    if _live_session_active:
+        _live_rows_received, _stream_done = _cached_live_file_stats()
 
     _proc = st.session_state.live_proc
     _proc_running = _proc is not None and _proc.poll() is None
@@ -1582,6 +1652,29 @@ MAX_PLOT_POINTS = 50_000
 # ──────────────────────────────────────────────────────────────
 _DS_MIN = merged_df["day"].min().date()
 _DS_MAX = merged_df["day"].max().date()
+# When live simulation has run, live records extend beyond _DS_MAX. Track the
+# effective maximum so the date slider and filter can reach those dates.
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_live_max_date():
+    """Scan the live output file at most once per minute to find the latest date in
+    live records.  Delegates to _cached_live_rows to avoid a separate full-file scan.
+    Clear via _cached_live_max_date.clear() when starting a new simulation.
+    """
+    try:
+        rows, _ = _cached_live_rows()
+        live_max = _DS_MAX
+        for _o in rows:
+            _ts = _o.get("cert_timestamp")
+            if not _ts:
+                continue
+            _d = pd.to_datetime(_ts, errors="coerce")
+            if pd.notna(_d) and _d.date() > live_max:
+                live_max = _d.date()
+        return live_max
+    except Exception:
+        return _DS_MAX
+
+_ds_live_max = _cached_live_max_date()
 if "flt_date_start" not in st.session_state:
     st.session_state.flt_date_start = _DS_MIN
 if "flt_date_end" not in st.session_state:
@@ -1597,7 +1690,7 @@ def show_filters():
         "Date Range",
         value=(st.session_state.flt_date_start, st.session_state.flt_date_end),
         min_value=_DS_MIN,
-        max_value=_DS_MAX,
+        max_value=_ds_live_max,
         label_visibility="collapsed",
         key="dlg_date",
     )
@@ -2115,9 +2208,60 @@ if active_page == "Investigation":
     else:
         user_data = pd.DataFrame()
 
+    # ── Merge live data when simulation is active ───────────────────────────
+    _inv_live_active = bool(st.session_state.live_mode or st.session_state.live_paused)
+    _inv_live_count = 0
+    if _inv_live_active and os.path.exists(LIVE_OUTPUT):
+        _live_u = _get_live_user_data(selected_user)
+        if not _live_u.empty:
+            # Apply risk-band filter only — live records are expected to fall
+            # outside the historical date range, so the date filter is skipped
+            # for live rows to prevent them from being silently dropped.
+            _lm = _live_u["ae_risk_band"].isin(st.session_state.flt_risk)
+            _live_u = _live_u[_lm].copy()
+            if not _live_u.empty:
+                # Prefer historical rows for days already in user_data; live rows extend the timeline
+                _existing_days = (
+                    set(user_data["day"].dt.date) if not user_data.empty else set()
+                )
+                _new_live = _live_u[~_live_u["day"].dt.date.isin(_existing_days)].copy()
+                if not _new_live.empty:
+                    user_data = (
+                        pd.concat([user_data, _new_live], ignore_index=True)
+                        .sort_values("day")
+                        .reset_index(drop=True)
+                    )
+                _inv_live_count = len(_live_u)
+
     if user_data.empty:
-        st.warning("No data for this user in the current filter range.")
+        if _inv_live_active:
+            st.info("No data for this user yet — waiting for live records to arrive.")
+        else:
+            st.warning("No data for this user in the current filter range.")
         st.stop()
+
+    # ── Live investigation status banner ────────────────────────────────────
+    if _inv_live_active:
+        _inv_live_status = (
+            "LIVE" if st.session_state.live_mode and not st.session_state.live_paused else "PAUSED"
+        )
+        _inv_live_color = "#e84545" if _inv_live_status == "LIVE" else "#d4a017"
+        _inv_live_dot = "●" if _inv_live_status == "LIVE" else "⏸"
+        _inv_live_msg = (
+            f"{_inv_live_dot} {_inv_live_status} &mdash; "
+            f"{_inv_live_count} live record{'s' if _inv_live_count != 1 else ''} merged into view"
+            if _inv_live_count > 0
+            else f"{_inv_live_dot} {_inv_live_status} &mdash; awaiting live records for this user"
+        )
+        st.markdown(
+            f"<div style='background:{_inv_live_color}11;border:1px solid {_inv_live_color}33;"
+            f"border-left:3px solid {_inv_live_color};padding:6px 14px;margin:0 0 14px 0;"
+            f"display:flex;align-items:center;gap:8px;'>"
+            f"<span style='font-family:JetBrains Mono,monospace;font-size:11px;"
+            f"color:{_inv_live_color};letter-spacing:1px;'>{_inv_live_msg}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
     # ── User KPI Row ──
     u1, u2, u3, u4, u5, u6 = st.columns(6)
@@ -2487,6 +2631,11 @@ if active_page == "Investigation":
         use_container_width=True, height=350,
     )
 
+    # ── Auto-refresh while live simulation is running ───────────────────────
+    if st.session_state.live_mode and not st.session_state.live_paused:
+        time.sleep(1)
+        st.rerun()
+
 
 # ══════════════════════════════════════════════════════════════
 # PAGE: Alerts
@@ -2511,6 +2660,10 @@ if active_page == "Alerts":
                     os.remove(LIVE_OUTPUT)
                 if os.path.exists(LIVE_PAUSE_FLAG):
                     os.remove(LIVE_PAUSE_FLAG)
+                _cached_live_max_date.clear()
+                _cached_live_file_stats.clear()
+                _cached_live_rows.clear()
+                _get_live_user_data.clear()
                 st.session_state.live_page = 0
                 # Launch the unified simulation script as a subprocess
                 proc = subprocess.Popen(
@@ -2561,22 +2714,8 @@ if active_page == "Alerts":
         proc_running = proc is not None and proc.poll() is None
         stream_done  = False
 
-        # Read all scored rows emitted so far
-        live_rows = []
-        if os.path.exists(LIVE_OUTPUT):
-            with open(LIVE_OUTPUT, "r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if obj.get("_eos"):
-                        stream_done = True
-                    else:
-                        live_rows.append(obj)
+        # Read all scored rows emitted so far (cached to avoid re-reading 500 MB+ per rerun)
+        live_rows, stream_done = _cached_live_rows()
 
         if live_rows:
             live_df = pd.DataFrame(live_rows)
@@ -2861,6 +3000,7 @@ if active_page == "Alerts":
             # Natural end-of-stream: auto-stop
             st.session_state.live_proc = None
             st.session_state.live_mode = False
+            st.session_state.live_paused = False
             st.success("Simulation complete — all test rows processed.")
 
     # ── STATIC mode ───────────────────────────────────────────
