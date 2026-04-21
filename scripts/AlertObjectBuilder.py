@@ -2,7 +2,23 @@ import os
 import json
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 from scripts.ThreatClassifier import classify_threat
+
+# Cross-channel behavioral flags defined in Preprocessing.apply_ueba_enhancements
+CROSS_CHANNEL_FLAGS = [
+    "off_hours_activity_flag",
+    "usb_file_activity_flag",
+    "external_comm_activity_flag",
+    "jobsite_usb_activity_flag",
+    "suspicious_upload_flag",
+    "cloud_upload_flag",
+    "non_primary_pc_risk_flag",
+]
+TOTAL_FLAGS = len(CROSS_CHANNEL_FLAGS)
+
+# Role sensitivity → normalized 0-1 contribution
+ROLE_SENSITIVITY_MAP = {"CRITICAL": 1.0, "HIGH": 0.75, "MEDIUM": 0.5, "LOW": 0.25}
 
 class AlertObjectBuilder:
     """
@@ -113,6 +129,58 @@ class AlertObjectBuilder:
         return "CRITICAL"
 
 
+    def compute_priority(self, row: pd.Series) -> float:
+        """
+        Computes a composite priority score (0-100) that combines four signals:
+
+        - max(ae_percentile_rank, if_percentile_rank) / 100  — weight 0.50
+        - cross_channel_flag_count / total_flags             — weight 0.20
+        - role_sensitivity (normalized 0-1)                  — weight 0.15
+        - sequence_membership_bonus (1 if alert_sequence_id  — weight 0.15
+          is set, 0 otherwise)
+
+        Args:
+            row: A pd.Series containing at minimum ae_percentile_rank and
+                 if_percentile_rank. Enriched rows may also carry cross-channel
+                 flag columns, role_sensitivity, and alert_sequence_id.
+
+        Returns:
+            float: Composite priority score in the range [0, 100].
+        """
+        # Component 1 — peak model signal (0-1)
+        # Use pd.isna() rather than `or 0`: bool(nan) is True in Python so `nan or 0` returns nan.
+        _ae = row.get("ae_percentile_rank", 0)
+        _if = row.get("if_percentile_rank", 0)
+        ae_pct = 0.0 if pd.isna(_ae) else float(_ae)
+        if_pct = 0.0 if pd.isna(_if) else float(_if)
+        signal_score = max(ae_pct, if_pct) / 100.0
+
+        # Component 2 — cross-channel flag density (0-1)
+        present = [f for f in CROSS_CHANNEL_FLAGS if f in row.index]
+        if present:
+            flag_score = sum(bool(row[f]) for f in present) / TOTAL_FLAGS
+        else:
+            flag_score = 0.0
+
+        # Component 3 — role sensitivity (0-1)
+        rs = row.get("role_sensitivity", None)
+        if isinstance(rs, str):
+            sensitivity_score = ROLE_SENSITIVITY_MAP.get(rs.upper(), 0.25)
+        elif not pd.isna(rs):
+            sensitivity_score = float(np.clip(float(rs), 0.0, 1.0))
+        else:
+            sensitivity_score = 0.25
+
+        # Component 4 — sequence membership bonus (binary 0 or 1)
+        # pd.isna covers None, float nan, and pd.NA — isinstance(pd.NA, float) is False so the
+        # old guard missed it, treating pd.NA as a valid sequence ID.
+        seq_id = row.get("alert_sequence_id", None)
+        in_sequence = 0.0 if pd.isna(seq_id) else 1.0
+
+        raw = 0.50 * signal_score + 0.20 * flag_score + 0.15 * sensitivity_score + 0.15 * in_sequence
+        return round(raw * 100.0, 4)
+
+
     def extract_top_contributors(self, row: pd.Series) -> list:
         """
         Extracts the top-K contributing factors from a row.
@@ -193,7 +261,7 @@ class AlertObjectBuilder:
         _ldap_fields = ("department", "role", "functional_unit", "supervisor", "role_sensitivity")
         ldap = {f: (row[f] if f in row.index and not pd.isna(row[f]) else None) for f in _ldap_fields}
 
-        # Creating alert dictionary
+        # Creating alert dictionary (alert_sequence_id populated later by aggregate_alerts)
         alert = {
             "alert_sequence_id": None,
             "user": row["user"],
@@ -212,11 +280,15 @@ class AlertObjectBuilder:
             "if_risk_band": if_risk_band,
             "composite_score": composite_score,
             "composite_risk_band": composite_risk_band,
-            "composite_priority": max(ae_percentile, if_percentile),
             "both_signals_high": both_signals_high,
             "status": "NEW",
-            "explanation": explanation
+            "explanation": explanation,
         }
+
+        # Compute composite_priority from the fully-assembled alert so all fields are available
+        alert["composite_priority"] = self.compute_priority(pd.Series(alert | {
+            f: row[f] for f in CROSS_CHANNEL_FLAGS if f in row.index
+        }))
 
         return alert
 
@@ -326,6 +398,40 @@ class AlertObjectBuilder:
                 f"Drivers: " + "; ".join(narrative_parts)
             )
 
+        # Vectorized composite_priority 
+        # Component 1: peak signal score (0-1)
+        signal_scores = np.maximum(ae_pct, if_pct) / 100.0
+
+        # Component 2: cross-channel flag density (0-1)
+        present_flags = [f for f in CROSS_CHANNEL_FLAGS if f in df.columns]
+        if present_flags:
+            flag_counts = df[present_flags].apply(pd.to_numeric, errors="coerce").fillna(0).values.sum(axis=1)
+            flag_scores = flag_counts / TOTAL_FLAGS
+        else:
+            flag_scores = np.zeros(n)
+
+        # Component 3: role sensitivity (0-1)
+        # np.where evaluates BOTH branches before masking, so np.vectorize would run on null
+        # elements too — np.clip(None, ...) is numpy-version-dependent. Iterate explicitly instead.
+        rs_raw = ldap_cols["role_sensitivity"]
+        def _rs_score(v) -> float:
+            if pd.isna(v):
+                return 0.25
+            if isinstance(v, str):
+                return ROLE_SENSITIVITY_MAP.get(v.upper(), 0.25)
+            return float(np.clip(float(v), 0.0, 1.0))
+        sensitivity_scores = np.array([_rs_score(v) for v in rs_raw], dtype=float)
+
+        # Component 4: sequence membership (binary; populated later, default 0)
+        in_sequence = np.zeros(n, dtype=float)
+
+        composite_priority = (
+            0.50 * signal_scores
+            + 0.20 * flag_scores
+            + 0.15 * sensitivity_scores
+            + 0.15 * in_sequence
+        ) * 100.0
+
         # Assembling result DataFrame ---
         return pd.DataFrame({
             "alert_sequence_id":  np.full(n, None, dtype=object),
@@ -345,11 +451,111 @@ class AlertObjectBuilder:
             "if_risk_band":       if_bands,
             "composite_score":    composite,
             "composite_risk_band": comp_bands,
-            "composite_priority": np.maximum(ae_pct, if_pct),
+            "composite_priority": composite_priority,
             "both_signals_high":  both_high,
             "status":             np.full(n, "NEW", dtype=object),
             "explanation":        explanations,
         })
+
+
+    def sort_alert_feed(self, alert_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Sorts the alert feed by risk band severity (CRITICAL first) and then by
+        composite_priority descending within each band, so the most suspicious
+        alerts surface at the top.
+
+        Args:
+            alert_df: Output of build_alert_df() or build_alert_from_row() calls.
+
+        Returns:
+            pd.DataFrame: Sorted alert DataFrame (new index, original data unchanged).
+        """
+        _severity = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+        sort_key = alert_df["composite_risk_band"].map(_severity).fillna(4)
+        return (
+            alert_df
+            .assign(_band_rank=sort_key)
+            .sort_values(["_band_rank", "composite_priority"], ascending=[True, False])
+            .drop(columns=["_band_rank"])
+            .reset_index(drop=True)
+        )
+
+
+    def validate_sequence_spans(self, alert_df: pd.DataFrame, max_span_days: int = 30) -> dict:
+        """
+        Checks that no alert sequence spans more than `max_span_days`.
+
+        Groups rows by alert_sequence_id (non-null) and computes the span in
+        calendar days between the earliest and latest alert in the group.
+
+        Args:
+            alert_df: DataFrame with alert_sequence_id and day columns.
+            max_span_days: Maximum allowable calendar-day span per sequence.
+
+        Returns:
+            dict: {
+                "passed": bool,
+                "violations": pd.DataFrame with columns [alert_sequence_id, span_days],
+                "max_span_days": int (configured limit),
+            }
+        """
+        seq_df = alert_df[alert_df["alert_sequence_id"].notna()].copy()
+        if seq_df.empty:
+            return {"passed": True, "violations": pd.DataFrame(), "max_span_days": max_span_days}
+
+        seq_df["day"] = pd.to_datetime(seq_df["day"])
+        spans = (
+            seq_df.groupby("alert_sequence_id")["day"]
+            .agg(span_days=lambda s: (s.max() - s.min()).days)
+            .reset_index()
+        )
+        violations = spans[spans["span_days"] > max_span_days]
+        return {
+            "passed": violations.empty,
+            "violations": violations.reset_index(drop=True),
+            "max_span_days": max_span_days,
+        }
+
+
+    def validate_priority_differentiation(self, alert_df: pd.DataFrame, target_r: float = 0.85) -> dict:
+        """
+        Verifies that composite_priority produces a meaningfully different sort order
+        than the raw peak percentile rank alone by computing their Spearman rank
+        correlation. A correlation below `target_r` confirms the additional signals
+        (flags, role sensitivity, sequence membership) add real differentiation.
+
+        Args:
+            alert_df: DataFrame with composite_priority, ae_percentile_rank, and
+                      if_percentile_rank columns.
+            target_r: Maximum acceptable Spearman r (default 0.85). Values at or
+                      above this threshold indicate the priority is too similar to
+                      the raw percentile rank to be useful.
+
+        Returns:
+            dict: {
+                "passed": bool  (True when r < target_r),
+                "spearman_r": float,
+                "p_value": float,
+                "target_r": float,
+            }
+        """
+        baseline = np.maximum(
+            alert_df["ae_percentile_rank"].values,
+            alert_df["if_percentile_rank"].values,
+        )
+        priority = alert_df["composite_priority"].values
+
+        if len(priority) < 3:
+            return {"passed": True, "spearman_r": None, "p_value": None, "target_r": target_r}
+
+        r, p = spearmanr(baseline, priority)
+        
+        return {
+            "passed": float(r) < target_r,
+            "spearman_r": round(float(r), 4),
+            "p_value": round(float(p), 6),
+            "target_r": target_r,
+        }
 
 
     def aggregate_alerts(self, alert_df: pd.DataFrame, window_days: int=7, min_risk: str="HIGH") -> pd.DataFrame:
