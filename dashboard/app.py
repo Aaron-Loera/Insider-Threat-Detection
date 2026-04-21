@@ -1,5 +1,5 @@
 ﻿import sys
-print("[APP] module-level execution started", flush=True)
+sys.stderr.write("[APP] module-level execution started\n"); sys.stderr.flush()
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -946,7 +946,10 @@ if st.session_state.pop("_set_cookie", False):
 # Data Loading
 # ──────────────────────────────────────────────────────────────
 import datetime as _dt
-print(f"[STARTUP] authenticated — reached data-load section at {_dt.datetime.utcnow().isoformat()}", flush=True)
+import logging as _auth_log
+_auth_log.getLogger("ueba.startup").warning(
+    f"[STARTUP] authenticated — reached data-load section at {_dt.datetime.utcnow().isoformat()}"
+)
 
 # Resolve the project root so config.py (at the root) is importable.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1054,7 +1057,7 @@ def fetch_alert_detail(user: str, day_str: str) -> dict:
         return {}
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_resource(show_spinner=False)
 def load_ueba_a():
     """Load UEBA Table A — (user, pc, day) granular rows used for PC-level drill-down."""
     if os.path.exists(UEBA_A_PARQUET):
@@ -1069,22 +1072,27 @@ def load_ueba_a():
     return df
 
 
-@st.cache_data(show_spinner="Loading dataset...")
+@st.cache_resource(show_spinner="Loading dataset...")
 def load_data():
     """Load pre-merged parquet and pre-compute user_risk.
 
-    On cloud we load a single 62 MB file (merged_dataset_5.parquet) that was
-    pre-built locally by scripts/build_merged_parquet.py and uploaded to HF.
-    This replaces the old two-file approach (alert_table_5 + ueba_dataset_5_train)
-    which peaked at 700-800 MB RAM during the runtime merge — too close to the
-    1 GB Streamlit Cloud limit.  The new peak is ~250-300 MB.
+    Uses @st.cache_resource (not cache_data) so the DataFrame is stored by
+    reference — no pickle serialisation overhead. cache_data would pickle the
+    250 MB DataFrame to disk on first call, temporarily doubling peak RAM and
+    pushing the container past the 1 GB Streamlit Cloud free-tier limit.
+
+    On cloud: downloads merged_dataset_5.parquet (62 MB) via hf_hub_download,
+    which streams to the HF local disk cache before reading — avoids holding
+    the compressed bytes AND the decompressed Arrow table in memory at the same
+    time (unlike the hf:// fsspec path which buffers in-process).
     """
     import gc
-    print("[load_data] started", flush=True)
+    import logging as _logging
+    _log = _logging.getLogger("ueba.load_data")
+    _log.warning("[load_data] started")
 
     _HF_REPO  = "DSKittens/ueba-dashboard-dat"
     _hf_token = st.secrets.get("huggingface", {}).get("token", None)
-    _HF_OPTS  = {"token": _hf_token}
 
     # Local path for the pre-merged parquet (built by scripts/build_merged_parquet.py)
     _MERGED_LOCAL = os.path.join(
@@ -1100,23 +1108,39 @@ def load_data():
         return df
 
     # ── Load single pre-merged file ──
-    print("[load_data] loading merged dataset", flush=True)
+    _log.warning("[load_data] loading merged dataset")
     if os.path.exists(_MERGED_LOCAL):
-        merged = pd.read_parquet(_MERGED_LOCAL)
-        print("[load_data] loaded from local merged parquet", flush=True)
+        import pyarrow.parquet as _pq
+        _tbl = _pq.read_table(_MERGED_LOCAL)
+        merged = _tbl.to_pandas()
+        del _tbl
+        _log.warning("[load_data] loaded from local merged parquet")
     else:
-        # Cloud path: single 62 MB file on HF — no runtime merge required
-        url = f"hf://datasets/{_HF_REPO}/merged_dataset_5.parquet"
-        merged = pd.read_parquet(url, storage_options=_HF_OPTS)
-        print("[load_data] loaded from HF merged parquet", flush=True)
+        # Cloud: hf_hub_download caches the file to disk before reading.
+        # This avoids buffering the compressed bytes in-process (unlike hf://).
+        from huggingface_hub import hf_hub_download as _hf_dl
+        import pyarrow.parquet as _pq
+        _cached = _hf_dl(
+            repo_id=_HF_REPO,
+            filename="merged_dataset_5.parquet",
+            repo_type="dataset",
+            token=_hf_token,
+        )
+        _log.warning(f"[load_data] file cached at {_cached}")
+        _tbl = _pq.read_table(_cached)
+        _log.warning(f"[load_data] arrow table: {_tbl.nbytes/1e6:.0f} MB")
+        merged = _tbl.to_pandas()
+        del _tbl
+        _log.warning("[load_data] converted to pandas")
 
+    gc.collect()
     _downcast(merged)
     merged["day"] = pd.to_datetime(merged["day"], errors="coerce")
     for _col in ("user", "ae_risk_band", "if_risk_band"):
         if _col in merged.columns:
             merged[_col] = merged[_col].astype("category")
     gc.collect()
-    print(f"[load_data] merged: {merged.shape}, {merged.memory_usage(deep=True).sum()/1e6:.1f} MB", flush=True)
+    _log.warning(f"[load_data] merged: {merged.shape}, {merged.memory_usage(deep=True).sum()/1e6:.1f} MB")
 
     # Cast risk bands to ordered categorical
     _risk_cat = pd.CategoricalDtype(categories=["LOW", "MEDIUM", "HIGH", "CRITICAL"], ordered=True)
@@ -1144,20 +1168,24 @@ def load_data():
     _ds_min = merged["day"].min().date()
     _ds_max = merged["day"].max().date()
 
+    _log.warning("[load_data] complete")
     return merged, user_risk, _all_users, _ds_min, _ds_max
 
 
+import logging as _startup_log
+_slog = _startup_log.getLogger("ueba.startup")
 try:
     merged_df, user_risk, all_users, _DS_MIN, _DS_MAX = load_data()
-    print("[STARTUP] load_data() complete", flush=True)
+    _slog.warning("[STARTUP] load_data() complete")
     ueba_a_df = load_ueba_a()
-    print("[STARTUP] load_ueba_a() complete — DATA_LOADED=True", flush=True)
+    _slog.warning("[STARTUP] load_ueba_a() complete — DATA_LOADED=True")
     DATA_LOADED = True
 except Exception as _load_err:
     import traceback as _tb
     ueba_a_df = None
     DATA_LOADED = False
     _LOAD_ERROR = _tb.format_exc()
+    _slog.warning(f"[STARTUP] load_data FAILED: {_LOAD_ERROR}")
 else:
     _LOAD_ERROR = None
 
