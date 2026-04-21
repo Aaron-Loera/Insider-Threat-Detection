@@ -987,6 +987,39 @@ UEBA_COLS = [
 
 
 @st.cache_data(show_spinner=False)
+def load_alert_details() -> dict:
+    """Load only 'explanation' and 'top_contributors' keyed by (user, day) string.
+
+    These two columns total ~618 MB when loaded into a full DataFrame, so they
+    are kept out of the main merged_df and fetched on demand instead.
+    Returns an empty dict if the columns don't exist.
+    """
+    _HF_REPO = "DSKittens/ueba-dashboard-dat"
+    _hf_token = st.secrets.get("huggingface", {}).get("token", None)
+    _COLS = ["user", "day", "top_contributors", "explanation"]
+    try:
+        if os.path.exists(ANALYST_TABLE_PARQUET):
+            import pyarrow.parquet as pq
+            _avail = set(pq.read_schema(ANALYST_TABLE_PARQUET).names)
+            _use = [c for c in _COLS if c in _avail]
+            df = pd.read_parquet(ANALYST_TABLE_PARQUET, columns=_use)
+        else:
+            url = f"hf://datasets/{_HF_REPO}/alert_table_5.parquet"
+            df = pd.read_parquet(url, columns=_COLS,
+                                 storage_options={"token": _hf_token})
+        df["day"] = pd.to_datetime(df["day"], errors="coerce")
+        return {
+            (str(r.user), str(r.day.date())): {
+                "top_contributors": getattr(r, "top_contributors", None),
+                "explanation": getattr(r, "explanation", ""),
+            }
+            for r in df.itertuples(index=False)
+        }
+    except Exception:
+        return {}
+
+
+@st.cache_data(show_spinner=False)
 def load_ueba_a():
     """Load UEBA Table A — (user, pc, day) granular rows used for PC-level drill-down."""
     if os.path.exists(UEBA_A_PARQUET):
@@ -1010,9 +1043,12 @@ def load_data():
     _hf_token = st.secrets.get("huggingface", {}).get("token", None)
     _HF_OPTS = {"token": _hf_token}
 
+    # NOTE: "explanation" (352 MB) and "top_contributors" (266 MB) are intentionally
+    # excluded here — they are loaded on demand via load_alert_details() to stay
+    # within Streamlit Cloud's 1 GB RAM limit.
     _ANALYST_COLS = [
         "user", "day", "if_anomaly_score", "ae_percentile_rank", "ae_risk_band",
-        "top_contributors", "if_percentile_rank", "if_risk_band", "explanation",
+        "if_percentile_rank", "if_risk_band",
     ]
 
     def _read(local_parquet, local_csv, hf_filename, columns):
@@ -1101,14 +1137,21 @@ def load_data():
 try:
     merged_df, user_risk, all_users, _DS_MIN, _DS_MAX = load_data()
     ueba_a_df = load_ueba_a()
+    alert_details = load_alert_details()
     DATA_LOADED = True
 except Exception as _load_err:
     import traceback as _tb
     ueba_a_df = None
+    alert_details = {}
     DATA_LOADED = False
     _LOAD_ERROR = _tb.format_exc()
 else:
     _LOAD_ERROR = None
+
+def _get_alert_detail(user, day, key):
+    """Fetch explanation or top_contributors for a single (user, day) record."""
+    day_str = str(day.date()) if hasattr(day, "date") else str(day)
+    return (alert_details or {}).get((str(user), day_str), {}).get(key, None)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -2637,11 +2680,7 @@ if active_page == "Investigation":
         )
 
         # ── Top Reconstruction Error Contributors ──
-        _tc_raw = (
-            _raw_row.iloc[0]["top_contributors"]
-            if not _raw_row.empty and "top_contributors" in _raw_row.columns
-            else None
-        )
+        _tc_raw = _get_alert_detail(selected_user, _ctx_day_ts, "top_contributors")
         _tc_pairs = parse_top_contributors_with_values(_tc_raw)
 
         if _tc_pairs:
@@ -3149,10 +3188,10 @@ if active_page == "Alerts":
                     _cs = getattr(_r, "ui_composite_score", np.nan)
                     _sc_d = f"{float(_cs):.1f}" if pd.notna(_cs) else "--"
 
-                    _top_raw = getattr(_r, "top_contributors", None)
+                    _top_raw = _get_alert_detail(str(_user), _ts_p, "top_contributors")
                     _summary = build_alert_summary(_top_raw)
                     if _summary == "No contributor detail available for this alert.":
-                        _expl = getattr(_r, "explanation", "")
+                        _expl = _get_alert_detail(str(_user), _ts_p, "explanation") or ""
                         if isinstance(_expl, str) and _expl.strip():
                             _summary = _expl.strip()
                     # Escape HTML in user-derived strings
@@ -3415,7 +3454,7 @@ if active_page == "Alerts":
                 day_val = getattr(row, "day",            None)
                 day_str = day_val.strftime("%Y-%m-%d") if hasattr(day_val, "strftime") else str(day_val)
                 pctl    = getattr(row, "ae_percentile_rank", 0.0)
-                top_raw = getattr(row, "top_contributors", None)
+                top_raw = _get_alert_detail(getattr(row, "user", ""), getattr(row, "day", None), "top_contributors")
                 summary = build_alert_summary(top_raw)
 
                 risk_color = RISK_COLORS.get(risk, "#666666")
