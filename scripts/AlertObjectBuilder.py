@@ -520,16 +520,19 @@ class AlertObjectBuilder:
     def validate_priority_differentiation(self, alert_df: pd.DataFrame, target_r: float = 0.85) -> dict:
         """
         Verifies that composite_priority produces a meaningfully different sort order
-        than the raw peak percentile rank alone by computing their Spearman rank
-        correlation. A correlation below `target_r` confirms the additional signals
-        (flags, role sensitivity, sequence membership) add real differentiation.
+        than raw peak percentile rank alone, restricted to elevated-risk rows
+        (MEDIUM, HIGH, CRITICAL) where analyst triage actually happens.
+
+        Running the check over all rows (including the LOW majority) inflates r
+        because both signals trivially agree that LOW rows rank below elevated rows —
+        that separation is noise for this test. Restricting to MEDIUM+ isolates the
+        within-band reordering that the additional signals (flags, role sensitivity,
+        sequence membership) are intended to produce.
 
         Args:
-            alert_df: DataFrame with composite_priority, ae_percentile_rank, and
-                      if_percentile_rank columns.
-            target_r: Maximum acceptable Spearman r (default 0.85). Values at or
-                      above this threshold indicate the priority is too similar to
-                      the raw percentile rank to be useful.
+            alert_df: DataFrame with composite_priority, ae_percentile_rank,
+                      if_percentile_rank, and composite_risk_band columns.
+            target_r: Maximum acceptable Spearman r (default 0.85).
 
         Returns:
             dict: {
@@ -537,24 +540,36 @@ class AlertObjectBuilder:
                 "spearman_r": float,
                 "p_value": float,
                 "target_r": float,
+                "n_rows": int   (number of elevated-risk rows evaluated),
             }
         """
-        baseline = np.maximum(
-            alert_df["ae_percentile_rank"].values,
-            alert_df["if_percentile_rank"].values,
-        )
-        priority = alert_df["composite_priority"].values
+        elevated = alert_df[
+            alert_df["composite_risk_band"].isin({"MEDIUM", "HIGH", "CRITICAL"})
+        ]
 
-        if len(priority) < 3:
-            return {"passed": True, "spearman_r": None, "p_value": None, "target_r": target_r}
+        if len(elevated) < 3:
+            return {
+                "passed": True,
+                "spearman_r": None,
+                "p_value": None,
+                "target_r": target_r,
+                "n_rows": len(elevated),
+            }
+
+        baseline = np.maximum(
+            elevated["ae_percentile_rank"].values,
+            elevated["if_percentile_rank"].values,
+        )
+        priority = elevated["composite_priority"].values
 
         r, p = spearmanr(baseline, priority)
-        
+
         return {
             "passed": float(r) < target_r,
             "spearman_r": round(float(r), 4),
             "p_value": round(float(p), 6),
             "target_r": target_r,
+            "n_rows": len(elevated),
         }
 
 
