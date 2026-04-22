@@ -235,7 +235,7 @@ def save_table(df: pd.DataFrame, save_path: str) -> None:
     Returns:
         None:
     """
-    output_dir = r"explainability\reconstruction_error"
+    output_dir = os.path.join("explainability", "reconstruction_error")
     os.makedirs(output_dir, exist_ok=True)
 
     full_path = os.path.join(output_dir, save_path)
