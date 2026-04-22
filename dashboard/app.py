@@ -1597,32 +1597,52 @@ def _cached_live_file_stats():
     return len(rows), stream_done
 
 
+# Maximum rows to load from the live output file.  Reading the full file when
+# it contains tens-of-thousands of rows causes a multi-second parse on every
+# 2-second cache expiry, making the dashboard unusable.  Only the most recent
+# MAX_LIVE_ROWS rows are kept; older simulation history is discarded.
+_MAX_LIVE_ROWS = 5_000
+
 @st.cache_data(ttl=2, show_spinner=False)
 def _cached_live_rows():
-    """Read all scored rows from the live output file; return (rows_list, stream_done).
+    """Read the most recent _MAX_LIVE_ROWS scored rows from the live output file.
 
-    Cached for 2 seconds to avoid re-reading a potentially 500 MB+ file on every
-    Streamlit rerun.  Called by the Alerts page live mode on every auto-refresh.
+    Reads only the tail of the file to avoid re-parsing hundreds of thousands of
+    rows on every 2-second cache expiry.  Returns (rows_list, stream_done).
     Clear via _cached_live_rows.clear() when starting a new simulation.
     """
     if not os.path.exists(LIVE_OUTPUT):
+        return [], False
+    # Quick size check — skip expensive read if file is empty
+    if os.path.getsize(LIVE_OUTPUT) == 0:
         return [], False
     rows: list[dict] = []
     stream_done = False
     try:
         with open(LIVE_OUTPUT, "r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
+            lines = fh.readlines()
+        # Process only the tail to cap memory and parse time
+        for line in lines[-_MAX_LIVE_ROWS:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("_eos"):
+                stream_done = True
+            else:
+                rows.append(obj)
+        # Check for _eos marker anywhere in the full tail scan
+        if not stream_done:
+            for line in lines[-100:]:
                 try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if obj.get("_eos"):
-                    stream_done = True
-                else:
-                    rows.append(obj)
+                    if json.loads(line.strip()).get("_eos"):
+                        stream_done = True
+                        break
+                except Exception:
+                    pass
     except Exception:
         pass
     return rows, stream_done
@@ -1758,10 +1778,13 @@ _DS_MAX = merged_df["day"].max().date()
 @st.cache_data(ttl=60, show_spinner=False)
 def _cached_live_max_date():
     """Scan the live output file at most once per minute to find the latest date in
-    live records.  Delegates to _cached_live_rows to avoid a separate full-file scan.
+    live records.  Returns _DS_MAX immediately when the file is absent or empty to
+    avoid an unnecessary file read on every page render when live mode is off.
     Clear via _cached_live_max_date.clear() when starting a new simulation.
     """
     try:
+        if not os.path.exists(LIVE_OUTPUT) or os.path.getsize(LIVE_OUTPUT) == 0:
+            return _DS_MAX
         rows, _ = _cached_live_rows()
         live_max = _DS_MAX
         for _o in rows:
