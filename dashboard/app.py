@@ -1940,6 +1940,29 @@ if active_page == "Overview":
 
     st.markdown("")
 
+    # ── Disposition Breakdown Row ──
+    section_header("Alert Dispositions", "sh_alert_disp")
+    _all_disps = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
+    _day_strs = filtered_df["day"].apply(
+        lambda d: d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d).split("T")[0].split(" ")[0]
+    )
+    _statuses = [_all_disps.get((u, d), "NEW") for u, d in zip(filtered_df["user"], _day_strs)]
+    _status_counts = pd.Series(_statuses).value_counts()
+    _disp_total     = len(filtered_df)
+    _disp_new       = int(_status_counts.get("NEW", 0))
+    _disp_invest    = int(_status_counts.get("INVESTIGATING", 0))
+    _disp_resolved  = int(_status_counts.get("RESOLVED", 0))
+    _disp_dismissed = int(_status_counts.get("DISMISSED", 0))
+
+    _dc1, _dc2, _dc3, _dc4, _dc5 = st.columns(5)
+    _dc1.markdown(f"<div class='kpi-card' style='border-color:#666666'><h3>Total Alerts</h3><h1 style='color:#cccccc'>{_disp_total:,}</h1><p>User-day records</p></div>", unsafe_allow_html=True)
+    _dc2.markdown(f"<div class='kpi-card' style='border-color:#ff1744'><h3>New</h3><h1 style='color:#ff1744'>{_disp_new:,}</h1><p>Awaiting triage</p></div>", unsafe_allow_html=True)
+    _dc3.markdown(f"<div class='kpi-card' style='border-color:#d4a017'><h3>Investigating</h3><h1 style='color:#d4a017'>{_disp_invest:,}</h1><p>In progress</p></div>", unsafe_allow_html=True)
+    _dc4.markdown(f"<div class='kpi-card' style='border-color:#22c55e'><h3>Resolved</h3><h1 style='color:#22c55e'>{_disp_resolved:,}</h1><p>Closed — confirmed</p></div>", unsafe_allow_html=True)
+    _dc5.markdown(f"<div class='kpi-card' style='border-color:#555555'><h3>Dismissed</h3><h1 style='color:#888888'>{_disp_dismissed:,}</h1><p>Closed — false positive</p></div>", unsafe_allow_html=True)
+
+    st.markdown("")
+
     # ── Row 2: Risk Distribution + Alerts Over Time ──
     col_left, col_right = st.columns([1, 2])
 

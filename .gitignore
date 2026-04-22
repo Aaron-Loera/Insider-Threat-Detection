@@ -29,3 +29,6 @@ scripts/build_alert_table_v1.py
 # Streamlit secrets (contains Firebase credentials — never commit)
 .streamlit/secrets.toml
 dashboard/.streamlit
+
+# DB
+dashboard/alert_state.db
