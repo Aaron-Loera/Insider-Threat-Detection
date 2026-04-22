@@ -1594,7 +1594,7 @@ def build_alert_summary(top_contributors_raw) -> str:
     return f"This alert is mainly driven by {body}{suffix}."
 
 
-@st.cache_data(ttl=5, show_spinner=False)
+@st.cache_data(ttl=2, show_spinner=False)
 def _get_live_user_data(user: str) -> pd.DataFrame:
     """Load live-scored rows for *user* from LIVE_OUTPUT, normalized to match user_data columns.
 
@@ -2572,41 +2572,27 @@ if active_page == "Overview":
 
 
 # ══════════════════════════════════════════════════════════════
-# PAGE: Investigation
+# Investigation — live-updating fragment
 # ══════════════════════════════════════════════════════════════
+# All dynamic per-user content lives inside this fragment so that Streamlit
+# can rerun it every 2 seconds independently of the main script.  This avoids:
+#   • time.sleep() blocking the UI thread
+#   • st.stop() cutting off the refresh loop when user_data is temporarily empty
+#   • full-page reruns on every tick (only the fragment DOM subtree updates)
 
-if active_page == "Investigation":
-    st.markdown(
-        "<div class='page-header-block'>"
-        "<h1 class='page-title'>Investigation</h1>"
-        "<p class='page-subtitle'>Deep-dive into a single user&#39;s behavioral timeline, radar profile, and raw activity records.</p>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-    _filter_bar("inv_flt")
+@st.fragment(run_every="2s")
+def _render_investigation_content() -> None:
+    _user: str | None = st.session_state.get("inv_user_select")
+    if _user is None:
+        return
 
-    # Build user list ordered by risk (highest first)
-    _risk_sorted = user_risk["user"].tolist()
-    _remaining = [u for u in all_users if u not in set(_risk_sorted)]
-    _all_users_sorted = _risk_sorted + _remaining
+    _inv_merged, _, _, _, _ = load_data()
+    _inv_ueba_a = load_ueba_a()
 
-    selected_user = st.selectbox(
-        "Search User ID",
-        _all_users_sorted,
-        index=None,
-        placeholder="Type to search, e.g. acm2278",
-        key="inv_user_select",
-    )
-
-    if selected_user is None:
-        st.info("Select a user above to begin investigation. Users are sorted by risk (highest first).")
-        st.stop()
-
-    _u_rows = merged_df.loc[merged_df["user"] == selected_user].reset_index(drop=True)
+    # Historical rows — date filter intentionally omitted so that live records
+    # (which fall outside the historical date range) are never silently dropped.
+    _u_rows = _inv_merged.loc[_inv_merged["user"] == _user].reset_index(drop=True)
     if not _u_rows.empty:
-        # Date filter intentionally omitted on Investigation page — applying it
-        # causes live-mode updates to be silently dropped when the global date
-        # range doesn't cover the live record timestamps.
         _u_mask = _u_rows["ae_risk_band"].isin(st.session_state.flt_risk)
         user_data = _u_rows[_u_mask].sort_values("day")
     else:
@@ -2616,7 +2602,7 @@ if active_page == "Investigation":
     _inv_live_active = bool(st.session_state.live_mode or st.session_state.live_paused)
     _inv_live_count = 0
     if _inv_live_active and os.path.exists(LIVE_OUTPUT):
-        _live_u = _get_live_user_data(selected_user)
+        _live_u = _get_live_user_data(_user)
         if not _live_u.empty:
             # Apply risk-band filter only — live records are expected to fall
             # outside the historical date range, so the date filter is skipped
@@ -2642,7 +2628,9 @@ if active_page == "Investigation":
             st.info("No data for this user yet — waiting for live records to arrive.")
         else:
             st.warning("No data for this user in the current filter range.")
-        st.stop()
+        # Return (not st.stop()) so the fragment keeps auto-running and picks
+        # up the first live record as soon as it arrives.
+        return
 
     # ── Live investigation status banner ────────────────────────────────────
     if _inv_live_active:
@@ -2693,9 +2681,9 @@ if active_page == "Investigation":
     u5.metric("Medium-Risk Days", u_med_days)
     u6.metric("Days Observed", u_total_days)
 
-        # ── Alert Context Summary (shown when navigating from Alerts tab) ──
+    # ── Alert Context Summary (shown when navigating from Alerts tab) ──
     _alert_ctx = st.session_state.get("inv_alert_context")
-    if _alert_ctx and _alert_ctx.get("user") == selected_user:
+    if _alert_ctx and _alert_ctx.get("user") == _user:
         _ctx_risk = _alert_ctx.get("risk", "")
         _ctx_risk_color = RISK_COLORS.get(_ctx_risk, "#666666")
         _ctx_day = _alert_ctx.get("day", "")
@@ -2718,9 +2706,9 @@ if active_page == "Investigation":
 
         # ── Raw Alert Record ──
         _ctx_day_ts = pd.to_datetime(_ctx_day, errors="coerce")
-        _raw_row = merged_df[
-            (merged_df["user"] == selected_user) &
-            (merged_df["day"] == _ctx_day_ts)
+        _raw_row = _inv_merged[
+            (_inv_merged["user"] == _user) &
+            (_inv_merged["day"] == _ctx_day_ts)
         ]
 
         _ALERT_RECORD_FIELDS = [
@@ -2743,7 +2731,7 @@ if active_page == "Investigation":
                 return str(int(fv)) if fv == int(fv) else f"{fv:.2f}"
             except (TypeError, ValueError, OverflowError):
                 return str(val)
-            
+
         _BADGE_COLS = {"risk_levels", "if_risk_band"}
         _kv_parts = []
         if not _raw_row.empty:
@@ -2791,7 +2779,7 @@ if active_page == "Investigation":
         )
 
         # ── Top Reconstruction Error Contributors ──
-        _tc_raw = _get_alert_detail(selected_user, _ctx_day_ts, "top_contributors")
+        _tc_raw = _get_alert_detail(_user, _ctx_day_ts, "top_contributors")
         _tc_pairs = parse_top_contributors_with_values(_tc_raw)
 
         if _tc_pairs:
@@ -2839,12 +2827,11 @@ if active_page == "Investigation":
                     unsafe_allow_html=True,
                 )
 
-
         # ── PC-Level Drill-Down (UEBA Table A) ──
-        if ueba_a_df is not None:
-            _drill = ueba_a_df[
-                (ueba_a_df["user"] == selected_user) &
-                (ueba_a_df["day"] == _ctx_day_ts)
+        if _inv_ueba_a is not None:
+            _drill = _inv_ueba_a[
+                (_inv_ueba_a["user"] == _user) &
+                (_inv_ueba_a["day"] == _ctx_day_ts)
             ].copy()
             _drop_cols = [c for c in ("user", "day") if c in _drill.columns]
             if _drop_cols:
@@ -2853,7 +2840,7 @@ if active_page == "Investigation":
                 _drill = _drill.sort_values("pc").reset_index(drop=True)
             else:
                 _drill = _drill.reset_index(drop=True)
-            
+
             if _drill.empty:
                 st.markdown(
                     f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
@@ -2865,7 +2852,6 @@ if active_page == "Investigation":
                     unsafe_allow_html=True,
                 )
             else:
-               
                 _drill_display = _drill.drop(columns=["pc"], errors="ignore")
                 _drill_cols = list(_drill_display.columns)
                 _drill_last = _drill_cols[-1] if _drill_cols else None
@@ -2905,7 +2891,6 @@ if active_page == "Investigation":
                     unsafe_allow_html=True,
                 )
 
-
     # ── Anomaly Timeline ──
     section_header("Anomaly Score Timeline", "sh_score_timeline")
     fig_timeline = go.Figure()
@@ -2923,7 +2908,6 @@ if active_page == "Investigation":
                 x=subset["day"], y=subset["if_anomaly_score"],
                 mode="markers", name=risk,
                 marker=dict(size=8, color=color, symbol="square", line=dict(width=1, color="#000")),
-
             ))
     fig_timeline.update_layout(**PLOTLY_LAYOUT, height=320, xaxis_title="Date", yaxis_title="Anomaly Score")
     st.plotly_chart(fig_timeline, use_container_width=True)
@@ -2948,7 +2932,7 @@ if active_page == "Investigation":
             fig_radar = go.Figure()
             fig_radar.add_trace(go.Scatterpolar(
                 r=user_vals, theta=radar_categories, fill="toself",
-                name=selected_user, line=dict(color="#e84545", width=2),
+                name=_user, line=dict(color="#e84545", width=2),
                 fillcolor="rgba(232,69,69,0.15)",
             ))
             fig_radar.add_trace(go.Scatterpolar(
@@ -3030,11 +3014,40 @@ if active_page == "Investigation":
         user_data[display_cols].sort_values("day", ascending=False),
         use_container_width=True, height=350,
     )
+    # Auto-refresh is handled by the fragment's run_every="2s" — no time.sleep needed.
 
-    # ── Auto-refresh while live simulation is running ───────────────────────
-    if st.session_state.live_mode and not st.session_state.live_paused:
-        time.sleep(1)
-        st.rerun()
+
+# ══════════════════════════════════════════════════════════════
+# PAGE: Investigation
+# ══════════════════════════════════════════════════════════════
+
+if active_page == "Investigation":
+    st.markdown(
+        "<div class='page-header-block'>"
+        "<h1 class='page-title'>Investigation</h1>"
+        "<p class='page-subtitle'>Deep-dive into a single user&#39;s behavioral timeline, radar profile, and raw activity records.</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    _filter_bar("inv_flt")
+
+    # Build user list ordered by risk (highest first)
+    _risk_sorted = user_risk["user"].tolist()
+    _remaining = [u for u in all_users if u not in set(_risk_sorted)]
+    _all_users_sorted = _risk_sorted + _remaining
+
+    selected_user = st.selectbox(
+        "Search User ID",
+        _all_users_sorted,
+        index=None,
+        placeholder="Type to search, e.g. acm2278",
+        key="inv_user_select",
+    )
+
+    if selected_user is None:
+        st.info("Select a user above to begin investigation. Users are sorted by risk (highest first).")
+    else:
+        _render_investigation_content()
 
 
 # ══════════════════════════════════════════════════════════════
