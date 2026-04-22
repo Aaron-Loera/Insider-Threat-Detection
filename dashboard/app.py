@@ -965,11 +965,12 @@ from config import (
     UEBA_PARQUET, UEBA_CSV,
     UEBA_A_PARQUET, UEBA_A_CSV,
     LIVE_OUTPUT, LIVE_PAUSE_FLAG, LIVE_SIM_SCRIPT,
+    PEER_BASELINES_PATH,
 )
 
 # Only load columns the dashboard actually uses
 UEBA_COLS = [
-    "user", "pc", "day",
+    "user", "pc", "day", "department",
     # Auth
     "logon_count", "logoff_count", "off_hours_logon",
     # File
@@ -1008,6 +1009,14 @@ def load_ueba_a():
     df["day"] = pd.to_datetime(df["day"], errors="coerce")
     return df
 
+@st.cache_data(show_spinner=False)
+def load_peer_baselines():
+    """Load peer baseline parquet. Returns None if file not yet generated."""
+    if not os.path.exists(PEER_BASELINES_PATH):
+        return None
+    df = pd.read_parquet(PEER_BASELINES_PATH)
+    df["day"] = pd.to_datetime(df["day"], errors="coerce")
+    return df
 
 @st.cache_data(show_spinner="Loading dataset...")
 def load_data():
@@ -1045,9 +1054,10 @@ def load_data():
 
     # Merge — include alert-context columns from the alert table
     analyst_cols = [
-        "user", "day", "if_anomaly_score", "ae_percentile_rank", "ae_risk_band",
-        "top_contributors", "if_percentile_rank", "if_risk_band", "explanation",
-    ]
+    "user", "day", "if_anomaly_score", "ae_percentile_rank", "ae_risk_band",
+    "top_contributors", "if_percentile_rank", "if_risk_band", "explanation",
+    "composite_risk_band", "status", "suppression_rule",
+]
     analyst_cols = [c for c in analyst_cols if c in analyst.columns]
     merged = ueba.merge(analyst[analyst_cols], on=["user", "day"], how="left")
 
@@ -1091,9 +1101,11 @@ def load_data():
 try:
     merged_df, user_risk, user_data_dict = load_data()
     ueba_a_df = load_ueba_a()
+    peer_baselines_df = load_peer_baselines()
     DATA_LOADED = True
 except Exception:
     ueba_a_df = None
+    peer_baselines_df = None
     DATA_LOADED = False
 
 
@@ -1307,7 +1319,7 @@ _BASE_LABELS: dict[str, str] = {
     "unique_files_accessed":    "unique file access",
     "off_hours_files_accessed": "after-hours file access",
     "off_hours_logon":          "after-hours logons",
-    "off_hours_logon_count":    "after-hours logons",
+   
     "logon_count":              "logon frequency",
     "logoff_count":             "logoff activity",
     "external_emails":          "external email activity",
@@ -1316,7 +1328,7 @@ _BASE_LABELS: dict[str, str] = {
     "http_long_url":            "long-URL HTTP activity",
     "off_hours_http":           "after-hours HTTP activity",
     "attachments_sent":         "attachment-sending activity",
-    "attachements_sent":        "attachment-sending activity",
+    "attachements_sent":        "attachment-sending",
     "emails_sent":              "email volume",
     "unique_recipients":        "unique email recipients",
     "off_hours_emails":         "after-hours email activity",
@@ -1653,6 +1665,7 @@ def _get_filtered_df() -> pd.DataFrame:
         tuple(sorted(st.session_state.flt_risk)),
     )
 
+filtered_df = _get_filtered_df()
 
 @st.cache_data(show_spinner=False)
 def _pop_channel_avgs() -> dict[str, float]:
@@ -1662,6 +1675,38 @@ def _pop_channel_avgs() -> dict[str, float]:
         valid = [f for f in feats if f in merged_df.columns]
         if valid:
             result[channel] = float(merged_df[valid].mean().sum())
+    return result
+
+def _peer_channel_avgs(department: str, day_min=None, day_max=None) -> dict[str, float]:
+    """Return per-channel peer averages for selected department and time window."""
+    if peer_baselines_df is None or department is None:
+        return {}
+
+    df = peer_baselines_df.copy()
+
+    # safer department match
+    dept_mask = (
+        df["department"].astype(str).str.upper()
+        == str(department).upper()
+    )
+    df = df[dept_mask]
+
+    # align to selected user's time window
+    if day_min is not None:
+        df = df[df["day"] >= pd.to_datetime(day_min)]
+
+    if day_max is not None:
+        df = df[df["day"] <= pd.to_datetime(day_max)]
+
+    if df.empty:
+        return {}
+
+    result = {}
+    for channel, feats in CHANNELS.items():
+        valid = [f for f in feats if f in df.columns]
+        if valid:
+            result[channel] = float(df[valid].mean().sum())
+
     return result
 
 
@@ -2420,15 +2465,34 @@ if active_page == "Investigation":
 
     with col_radar:
         section_header("Behavioral Profile (Avg Activity)", "sh_beh_profile")
-        # Compute average of each channel for this user vs population
+
+        # Compute per-channel averages: user vs dept peer group vs global population
         radar_categories = []
         user_vals = []
+        peer_vals = []
         pop_vals = []
+
+        user_dept = (
+            user_data["department"].iloc[0]
+            if "department" in user_data.columns and len(user_data) > 0
+            else None
+        )
+
+        day_min = user_data["day"].min() if "day" in user_data.columns else None
+        day_max = user_data["day"].max() if "day" in user_data.columns else None
+
+        peer_avgs = _peer_channel_avgs(
+            user_dept,
+            day_min=day_min,
+            day_max=day_max,
+        ) if user_dept else {}
+
         for channel, feats in CHANNELS.items():
             valid_feats = [f for f in feats if f in user_data.columns]
             if valid_feats:
                 radar_categories.append(channel)
                 user_vals.append(user_data[valid_feats].mean().sum())
+                peer_vals.append(peer_avgs.get(channel, 0.0))
                 pop_vals.append(_pop_channel_avgs().get(channel, 0.0))
 
         if radar_categories:
@@ -2437,18 +2501,39 @@ if active_page == "Investigation":
                 r=user_vals, theta=radar_categories, fill="toself",
                 name=selected_user, line=dict(color="#e84545", width=2),
                 fillcolor="rgba(232,69,69,0.15)",
-            ))
+        ))
+
+        if any(v > 0 for v in peer_vals):
             fig_radar.add_trace(go.Scatterpolar(
-                r=pop_vals, theta=radar_categories, fill="toself",
-                name="Population Avg", line=dict(color="#3a86a8", width=1), opacity=0.6,
-                fillcolor="rgba(58,134,168,0.1)",
+                r=peer_vals,
+                theta=radar_categories,
+                fill="toself",
+                name=f"Dept Avg ({user_dept})",
+                line=dict(color="#d4a017", width=2),
+                fillcolor="rgba(212,160,23,0.12)",
             ))
-            fig_radar.update_layout(**PLOTLY_LAYOUT, height=380,
-                                    polar=dict(bgcolor="#0a0a0a",
-                                               radialaxis=dict(visible=True, color="#333333"),
-                                               angularaxis=dict(color="#444444")),
-                                    showlegend=True)
-            st.plotly_chart(fig_radar, use_container_width=True)
+
+        fig_radar.add_trace(go.Scatterpolar(
+            r=pop_vals,
+            theta=radar_categories,
+            fill="toself",
+            name="Population Avg",
+            line=dict(color="#3a86a8", width=1),
+            opacity=0.6,
+            fillcolor="rgba(58,134,168,0.1)",
+        ))
+
+        fig_radar.update_layout(
+            **PLOTLY_LAYOUT,
+            height=380,
+            polar=dict(
+                bgcolor="#0a0a0a",
+                radialaxis=dict(visible=True, color="#333333"),
+                angularaxis=dict(color="#444444"),
+            ),
+            showlegend=True,
+        )
+        st.plotly_chart(fig_radar, use_container_width=True)
 
     with col_heat:
         section_header("Daily Feature Activity", "sh_daily_feat")
@@ -3035,59 +3120,87 @@ if active_page == "Alerts":
 
         alert_risk = [t for t, checked in _tier_checked.items() if checked]
 
-        # Centralised severity mapping — extend here when new bands are added
+                # Suppressed Alerts viewing mode toggle
+        _supp_check_col = st.columns([5, 1])
+        with _supp_check_col[0]:
+            show_suppressed_alerts = st.checkbox(
+                "View Suppressed Alerts",
+                value=False,
+                key="alert_view_suppressed",
+            )
+            if show_suppressed_alerts:
+                st.markdown(
+                    f"<span style='background:#d4a01722;color:#d4a017;font-size:9px;"
+                    f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 6px;"
+                    f"border:1px solid #d4a01755;display:inline-block;margin-top:-6px;'>"
+                    f"Top 10 suppressed</span>",
+                    unsafe_allow_html=True,
+                )
+
+       # Centralized severity mapping — extend here when new bands are added
         _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 
-        # Filter first
-        alert_data = filtered_df[
-            (filtered_df["ae_risk_band"].isin(alert_risk)) &
-            (filtered_df["ae_percentile_rank"] >= min_pctl)
-        ].copy()
-
-        # Triage status filter logic
-        _disp_lookup = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
-        def _day_key(r) -> str:
-            dv = r["day"]
-            if hasattr(dv, "strftime"):
-                return dv.strftime("%Y-%m-%d")
-            return str(dv).split("T")[0].split(" ")[0]
-        _FILTER_TO_STATUS = {
-            "Show New Only": "NEW",
-            "Show Investigating": "INVESTIGATING",
-            "Show Resolved": "RESOLVED",
-            "Show Dismissed": "DISMISSED",
-        }
-        if _disp_filter in _FILTER_TO_STATUS:
-            _target_status = _FILTER_TO_STATUS[_disp_filter]
-            alert_data = alert_data[
-                alert_data.apply(
-                    lambda r: _disp_lookup.get((r["user"], _day_key(r)), "NEW") == _target_status,
-                    axis=1,
+        # Suppressed Alerts mode: show only suppressed alerts (top 10)
+        if show_suppressed_alerts:
+            alert_data = (
+                filtered_df[
+                    filtered_df["status"].astype(str).str.upper() == "SUPPRESSED"
+                ].copy()
+                if "status" in filtered_df.columns
+                else pd.DataFrame()
+            )
+            if "ae_percentile_rank" in alert_data.columns:
+                alert_data = alert_data[alert_data["ae_percentile_rank"] >= min_pctl]
+                alert_data = alert_data.sort_values("ae_percentile_rank", ascending=False)
+            elif "if_percentile_rank" in alert_data.columns:
+                alert_data = alert_data[alert_data["if_percentile_rank"] >= min_pctl]
+                alert_data = alert_data.sort_values("if_percentile_rank", ascending=False)
+        else:
+            # Normal mode: filter by selected severities, exclude suppressed alerts
+            alert_data = filtered_df[
+                (filtered_df["ae_risk_band"].isin(alert_risk)) &
+                (filtered_df["ae_percentile_rank"] >= min_pctl) &
+                (
+                    ~(filtered_df["status"].astype(str).str.upper() == "SUPPRESSED")
+                    if "status" in filtered_df.columns
+                    else True
                 )
             ].copy()
 
-        # Sort based on explicit outcome label
-        if sort_choice == "Highest score first":
-            alert_data = alert_data.sort_values("ae_percentile_rank", ascending=False)
-        elif sort_choice == "Lowest score first":
-            alert_data = alert_data.sort_values("ae_percentile_rank", ascending=True)
-        elif sort_choice in ("Highest severity first", "Lowest severity first"):
-            _asc = sort_choice == "Lowest severity first"
-            alert_data["_risk_sort_key"] = alert_data["ae_risk_band"].astype(str).map(_RISK_ORDER).fillna(-1)
-            alert_data = alert_data.sort_values(
-                ["_risk_sort_key", "ae_percentile_rank"],
-                ascending=[_asc, False],
-            ).drop(columns=["_risk_sort_key"])
-        elif sort_choice == "Most recent first":
-            alert_data["day"] = pd.to_datetime(alert_data["day"], errors="coerce")
-            alert_data = alert_data.sort_values("day", ascending=False)
-        elif sort_choice == "Oldest first":
-            alert_data["day"] = pd.to_datetime(alert_data["day"], errors="coerce")
-            alert_data = alert_data.sort_values("day", ascending=True)
-        elif sort_choice == "User A–Z":
-            alert_data = alert_data.sort_values("user", ascending=True)
-        else:  # User Z–A
-            alert_data = alert_data.sort_values("user", ascending=False)
+        # Sort based on explicit outcome label (skip in suppressed mode, already sorted)
+        if not show_suppressed_alerts:
+            if sort_choice == "Highest score first":
+                if "ae_percentile_rank" in alert_data.columns:
+                    alert_data = alert_data.sort_values("ae_percentile_rank", ascending=False)
+            elif sort_choice == "Lowest score first":
+                if "ae_percentile_rank" in alert_data.columns:
+                    alert_data = alert_data.sort_values("ae_percentile_rank", ascending=True)
+            elif sort_choice in ("Highest severity first", "Lowest severity first"):
+                _asc = sort_choice == "Lowest severity first"
+                alert_data["_risk_sort_key"] = alert_data["ae_risk_band"].astype(str).map(_RISK_ORDER).fillna(-1)
+                if "ae_percentile_rank" in alert_data.columns:
+                    alert_data = alert_data.sort_values(
+                        ["_risk_sort_key", "ae_percentile_rank"],
+                        ascending=[_asc, False],
+                    ).drop(columns=["_risk_sort_key"])
+                else:
+                    alert_data = alert_data.sort_values(
+                        ["_risk_sort_key"],
+                        ascending=[_asc],
+                    ).drop(columns=["_risk_sort_key"])
+            elif sort_choice == "Most recent first":
+                alert_data["day"] = pd.to_datetime(alert_data["day"], errors="coerce")
+                alert_data = alert_data.sort_values("day", ascending=False)
+            elif sort_choice == "Oldest first":
+                alert_data["day"] = pd.to_datetime(alert_data["day"], errors="coerce")
+                alert_data = alert_data.sort_values("day", ascending=True)
+            elif sort_choice == "User A–Z":
+                alert_data = alert_data.sort_values("user", ascending=True)
+            else:  # User Z–A
+                alert_data = alert_data.sort_values("user", ascending=False)
+
+                if not show_suppressed_alerts:
+                    alert_data = alert_data.head(int(max_results))
 
         # Cap card rendering to keep the UI responsive
         CARD_LIMIT = 10
@@ -3095,7 +3208,10 @@ if active_page == "Alerts":
         card_data = alert_data.head(CARD_LIMIT)
 
         if total_alerts == 0:
-            st.info("No alerts match the current filters.")
+            if show_suppressed_alerts:
+                st.info("No suppressed alerts found in the current filter range.")
+            else:
+                st.info("No alerts match the current filters.")
         else:
             if total_alerts > CARD_LIMIT:
                 st.caption(
@@ -3108,12 +3224,19 @@ if active_page == "Alerts":
                 "font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
                 "text-transform:uppercase;letter-spacing:1.5px;"
             )
-            _h_risk, _h_info, _h_day, _h_pctl, _h_status, _h_btn = st.columns([1, 5, 2, 1, 2, 2])
-            _h_risk.markdown(f"<span style='{_HDR}'>Risk</span>", unsafe_allow_html=True)
-            _h_info.markdown(f"<span style='{_HDR}'>User / Investigation hint</span>", unsafe_allow_html=True)
-            _h_day.markdown(f"<span style='{_HDR}'>Day</span>", unsafe_allow_html=True)
-            _h_pctl.markdown(f"<span style='{_HDR}'>Percentile</span>", unsafe_allow_html=True)
-            _h_status.markdown(f"<span style='{_HDR}'>Status</span>", unsafe_allow_html=True)
+            if show_suppressed_alerts:
+                _h_risk, _h_info, _h_rule, _h_day, _h_pctl, _h_btn = st.columns([1, 4, 3, 2, 1, 2])
+                _h_risk.markdown(f"<span style='{_HDR}'>Risk</span>", unsafe_allow_html=True)
+                _h_info.markdown(f"<span style='{_HDR}'>User / Reason</span>", unsafe_allow_html=True)
+                _h_rule.markdown(f"<span style='{_HDR}'>Suppression Rule</span>", unsafe_allow_html=True)
+                _h_day.markdown(f"<span style='{_HDR}'>Day</span>", unsafe_allow_html=True)
+                _h_pctl.markdown(f"<span style='{_HDR}'>Pctl</span>", unsafe_allow_html=True)
+            else:
+                _h_risk, _h_info, _h_day, _h_pctl, _h_btn = st.columns([1, 5, 2, 1, 2])
+                _h_risk.markdown(f"<span style='{_HDR}'>Risk</span>", unsafe_allow_html=True)
+                _h_info.markdown(f"<span style='{_HDR}'>User / Investigation hint</span>", unsafe_allow_html=True)
+                _h_day.markdown(f"<span style='{_HDR}'>Day</span>", unsafe_allow_html=True)
+                _h_pctl.markdown(f"<span style='{_HDR}'>Percentile</span>", unsafe_allow_html=True)
             st.markdown(
                 "<div style='border-bottom:1px solid #1a1a1a;margin:0 0 2px 0;'></div>",
                 unsafe_allow_html=True,
@@ -3121,7 +3244,7 @@ if active_page == "Alerts":
 
             # ── Per-alert card rows ──
             for i, row in enumerate(card_data.itertuples()):
-                risk    = getattr(row, "ae_risk_band",    "LOW")
+                risk = getattr(row, "composite_risk_band", "MEDIUM") if show_suppressed_alerts else getattr(row, "ae_risk_band", "LOW")
                 user    = getattr(row, "user",           "—")
                 day_val = getattr(row, "day",            None)
                 day_str = (day_val.strftime("%Y-%m-%d") if hasattr(day_val, "strftime")
@@ -3129,6 +3252,8 @@ if active_page == "Alerts":
                 pctl    = getattr(row, "ae_percentile_rank", 0.0)
                 top_raw = getattr(row, "top_contributors", None)
                 summary = build_alert_summary(top_raw)
+                status  = str(getattr(row, "status", "")).upper()
+                supp_rule = getattr(row, "suppression_rule", None) or "—"
 
                 risk_color = RISK_COLORS.get(risk, "#666666")
                 _disp_key = f"disp_{user}_{day_str}"
@@ -3136,7 +3261,10 @@ if active_page == "Alerts":
                 if _disp_key not in st.session_state:
                     st.session_state[_disp_key] = _cur_status
 
-                c_risk, c_info, c_day, c_pctl, c_status, c_btn = st.columns([1, 5, 2, 1, 2, 2])
+                if show_suppressed_alerts:
+                    c_risk, c_info, c_rule, c_day, c_pctl, c_btn = st.columns([1, 4, 3, 2, 1, 2])
+                else:
+                    c_risk, c_info, c_day, c_pctl, c_btn = st.columns([1, 5, 2, 1, 2])
 
                 with c_risk:
                     st.markdown(
@@ -3147,6 +3275,16 @@ if active_page == "Alerts":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
+                    # Add SUPPRESSED badge if applicable (when in suppressed view mode)
+                    if status == "SUPPRESSED" and show_suppressed_alerts:
+                        st.markdown(
+                            f"<div style='padding-top:2px;'>"
+                            f"<span style='background:#9a8b7722;color:#9a8b77;font-size:9px;"
+                            f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:2px 6px;"
+                            f"border:1px solid #9a8b7755;display:inline-block;'>SUPPRESSED</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
 
                 with c_info:
                     st.markdown(
@@ -3158,6 +3296,15 @@ if active_page == "Alerts":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
+
+                if show_suppressed_alerts:
+                    with c_rule:
+                        st.markdown(
+                            f"<div style='font-family:JetBrains Mono,monospace;font-size:10px;"
+                            f"color:#d4a017;padding-top:5px;word-break:break-all;'>"
+                            f"{_html_mod.escape(str(supp_rule))}</div>",
+                            unsafe_allow_html=True,
+                        )
 
                 with c_day:
                     st.markdown(
@@ -3184,7 +3331,7 @@ if active_page == "Alerts":
                     )
 
                 with c_btn:
-                    if st.button("Investigate →", key=f"al_inv_{i}", use_container_width=True):
+                    if st.button("Investigate →", key=f"al_inv_{i}_{show_suppressed_alerts}", use_container_width=True):
                         st.session_state["inv_user_select"] = user
                         st.session_state["inv_alert_context"] = {
                             "user": user,
@@ -3203,6 +3350,7 @@ if active_page == "Alerts":
 
         # ── Export (columns + top_contributors if present) ──
         alert_display_cols = ["user", "day", "ae_risk_band", "if_anomaly_score", "ae_percentile_rank"]
+        alert_display_cols = [c for c in alert_display_cols if c in alert_data.columns]
         alert_display_cols += [c for c in CROSS_FLAGS if c in alert_data.columns]
         if "top_contributors" in alert_data.columns:
             alert_display_cols.append("top_contributors")
@@ -3303,7 +3451,6 @@ if active_page != "Alerts" and st.session_state.live_mode:
     if _proc_running and not st.session_state.live_paused:
         time.sleep(1)
         st.rerun()
-
 
 # ──────────────────────────────────────────────────────────────
 # Footer — Data & Feature Gaps Note
