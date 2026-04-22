@@ -6,6 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import json
+import math
 import os
 import subprocess
 import sys
@@ -1095,6 +1096,8 @@ if "live_proc" not in st.session_state:
     st.session_state.live_proc = None  # subprocess.Popen or None
 if "live_paused" not in st.session_state:
     st.session_state.live_paused = False
+if "al_page" not in st.session_state:
+    st.session_state.al_page = 0
 
 # Consume any programmatic navigation request NOW — before any widget is
 # instantiated — so we can write session_state.nav_page freely.
@@ -2487,15 +2490,21 @@ if active_page == "Alerts":
         # Cap card rendering to keep the UI responsive
         CARD_LIMIT = 10
         total_alerts = len(alert_data)
-        card_data = alert_data.head(CARD_LIMIT)
+        total_pages = max(1, math.ceil(total_alerts / CARD_LIMIT))
+
+        if st.session_state.al_page >= total_pages:
+            st.session_state.al_page = 0
+
+        page_start = st.session_state.al_page * CARD_LIMIT
+        card_data = alert_data.iloc[page_start : page_start + CARD_LIMIT]
 
         if total_alerts == 0:
             st.info("No alerts match the current filters.")
         else:
-            if total_alerts > CARD_LIMIT:
+            if total_pages > 1:
                 st.caption(
-                    f"Displaying top {CARD_LIMIT} of {total_alerts:,} matching alerts. "
-                    "Use the export button below for the complete set."
+                    f"Showing {page_start + 1}–{min(page_start + CARD_LIMIT, total_alerts):,} "
+                    f"of {total_alerts:,} matching alerts."
                 )
 
             # ── Column header row ──
@@ -2579,6 +2588,25 @@ if active_page == "Alerts":
                     "<div style='border-bottom:1px solid #0d0d0d;margin:2px 0;'></div>",
                     unsafe_allow_html=True,
                 )
+
+        # ── Pagination controls ──
+        if total_pages > 1:
+            pg_cols = st.columns([1, 2, 1])
+            with pg_cols[0]:
+                if st.button("← Prev", key="al_prev", disabled=(st.session_state.al_page == 0), use_container_width=True):
+                    st.session_state.al_page -= 1
+                    st.rerun()
+            with pg_cols[1]:
+                st.markdown(
+                    f"<div style='text-align:center;color:#aaa;font-size:0.85rem;padding-top:6px;'>"
+                    f"Page {st.session_state.al_page + 1} of {total_pages}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            with pg_cols[2]:
+                if st.button("Next →", key="al_next", disabled=(st.session_state.al_page >= total_pages - 1), use_container_width=True):
+                    st.session_state.al_page += 1
+                    st.rerun()
 
         # ── Export (columns + top_contributors if present) ──
         alert_display_cols = ["user", "day", "ae_risk_band", "if_anomaly_score", "ae_percentile_rank"]
