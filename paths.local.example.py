@@ -23,10 +23,6 @@
 # There is no project-relative default — every contributor must set this.
 # CERT_PATH = r"C:\Users\yourname\Documents\Datasets\CERT_r6.2"
 
-# ── LDAP snapshots directory (optional override) ──────────────────────────────
-# Defaults to CERT_PATH/LDAP — only set if your LDAP folder lives elsewhere.
-# LDAP_PATH = r"C:\Users\yourname\Documents\Datasets\CERT_r6.2\LDAP"
-
 # ── Active model version ──────────────────────────────────────────────────────
 # Controls which numbered model artifacts (encoder, isolation forest, alert table,
 # ueba dataset) are used by default across all notebooks and scripts.

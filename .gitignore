@@ -30,8 +30,5 @@ scripts/build_alert_table_v1.py
 .streamlit/secrets.toml
 dashboard/.streamlit
 
-# DB
-dashboard/alert_state.db
-
 # live results file 
 processed_datasets/live_results.jsonl
