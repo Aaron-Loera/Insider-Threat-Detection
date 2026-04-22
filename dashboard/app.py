@@ -14,6 +14,12 @@ import ast as _ast
 import hmac
 import hashlib
 import html as _html_mod
+from db import init_db, upsert_disposition, get_disposition, get_all_dispositions
+
+ALERT_STATUS_OPTIONS = ["NEW", "INVESTIGATING", "RESOLVED", "DISMISSED"]
+
+def _on_status_change(user, day, key):
+    upsert_disposition(user, day, st.session_state[key])
 
 try:
     import pyrebase
@@ -940,6 +946,8 @@ if not st.session_state.get("authenticated", False):
 if st.session_state.pop("_set_cookie", False):
     _set_auth_cookie(st.session_state.get("auth_user_email", ""))
 
+
+init_db()
 
 # ──────────────────────────────────────────────────────────────
 # Data Loading
@@ -1977,6 +1985,29 @@ if active_page == "Overview":
 
     st.markdown("")
 
+    # ── Disposition Breakdown Row ──
+    section_header("Alert Dispositions", "sh_alert_disp")
+    _all_disps = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
+    _day_strs = filtered_df["day"].apply(
+        lambda d: d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d).split("T")[0].split(" ")[0]
+    )
+    _statuses = [_all_disps.get((u, d), "NEW") for u, d in zip(filtered_df["user"], _day_strs)]
+    _status_counts = pd.Series(_statuses).value_counts()
+    _disp_total     = len(filtered_df)
+    _disp_new       = int(_status_counts.get("NEW", 0))
+    _disp_invest    = int(_status_counts.get("INVESTIGATING", 0))
+    _disp_resolved  = int(_status_counts.get("RESOLVED", 0))
+    _disp_dismissed = int(_status_counts.get("DISMISSED", 0))
+
+    _dc1, _dc2, _dc3, _dc4, _dc5 = st.columns(5)
+    _dc1.markdown(f"<div class='kpi-card' style='border-color:#666666'><h3>Total Alerts</h3><h1 style='color:#cccccc'>{_disp_total:,}</h1><p>User-day records</p></div>", unsafe_allow_html=True)
+    _dc2.markdown(f"<div class='kpi-card' style='border-color:#ff1744'><h3>New</h3><h1 style='color:#ff1744'>{_disp_new:,}</h1><p>Awaiting triage</p></div>", unsafe_allow_html=True)
+    _dc3.markdown(f"<div class='kpi-card' style='border-color:#d4a017'><h3>Investigating</h3><h1 style='color:#d4a017'>{_disp_invest:,}</h1><p>In progress</p></div>", unsafe_allow_html=True)
+    _dc4.markdown(f"<div class='kpi-card' style='border-color:#22c55e'><h3>Resolved</h3><h1 style='color:#22c55e'>{_disp_resolved:,}</h1><p>Closed — confirmed</p></div>", unsafe_allow_html=True)
+    _dc5.markdown(f"<div class='kpi-card' style='border-color:#555555'><h3>Dismissed</h3><h1 style='color:#888888'>{_disp_dismissed:,}</h1><p>Closed — false positive</p></div>", unsafe_allow_html=True)
+
+    st.markdown("")
+
     # ── Row 2: Risk Distribution + Alerts Over Time ──
     col_left, col_right = st.columns([1, 2])
 
@@ -2627,8 +2658,7 @@ if active_page == "Alerts":
         if st.session_state.live_mode:
             if not st.session_state.live_paused:
                 if st.button("⏸ PAUSE", key="pause_live", use_container_width=True):
-                    with open(LIVE_PAUSE_FLAG, "w", encoding="utf-8") as _pf:
-                        pass  # existence of the file signals pause
+                    open(LIVE_PAUSE_FLAG, "w", encoding="utf-8").close()  # existence of the file signals pause
                     st.session_state.live_paused = True
                     st.rerun()
             else:
@@ -3053,26 +3083,40 @@ if active_page == "Alerts":
             tier: int((filtered_df["ae_risk_band"] == tier).sum()) for tier in RISK_TIERS
         }
 
-        section_header("Filter by severity", "sh_top_users")
 
-        _sev_cols = st.columns([1, 1, 1, 1, 4])
-        _tier_checked = {}
-        for _idx, _tier in enumerate(RISK_TIERS):
-            _color = RISK_COLORS[_tier]
-            _count = _severity_counts[_tier]
-            with _sev_cols[_idx]:
-                _tier_checked[_tier] = st.checkbox(
-                    _tier,
-                    value=(_tier in ["CRITICAL", "HIGH"]),
-                    key=f"alert_sev_{_tier}",
-                )
-                st.markdown(
-                    f"<span style='background:{_color}22;color:{_color};font-size:9px;"
-                    f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 6px;"
-                    f"border:1px solid {_color}55;display:inline-block;margin-top:-6px;'>"
-                    f"{_count:,} alert{'s' if _count != 1 else ''}</span>",
-                    unsafe_allow_html=True,
-                )
+
+        # ── Combined Triage Status & Severity Filter ──
+        section_header("FILTER BY TRIAGE STATUS & SEVERITY", "sh_disp_sev_filter")
+        # Stack filters vertically
+        with st.container():
+            # Triage status filter
+            _disp_filter = st.radio(
+                "Disposition filter",
+                options=["Show New Only", "Show All", "Show Investigating", "Show Resolved", "Show Dismissed"],
+                index=0,
+                horizontal=True,
+                key="alert_disp_filter",
+                label_visibility="collapsed",
+            )
+            # Severity filter
+            _sev_cols = st.columns([1, 1, 1, 1, 4])
+            _tier_checked = {}
+            for _idx, _tier in enumerate(RISK_TIERS):
+                _color = RISK_COLORS[_tier]
+                _count = _severity_counts[_tier]
+                with _sev_cols[_idx]:
+                    _tier_checked[_tier] = st.checkbox(
+                        _tier,
+                        value=(_tier in ["CRITICAL", "HIGH"]),
+                        key=f"alert_sev_{_tier}",
+                    )
+                    st.markdown(
+                        f"<span style='background:{_color}22;color:{_color};font-size:9px;"
+                        f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 6px;"
+                        f"border:1px solid {_color}55;display:inline-block;margin-top:-6px;'>"
+                        f"{_count:,} alert{'s' if _count != 1 else ''}</span>",
+                        unsafe_allow_html=True,
+                    )
 
         alert_risk = [t for t, checked in _tier_checked.items() if checked]
 
@@ -3203,7 +3247,8 @@ if active_page == "Alerts":
                 risk = getattr(row, "composite_risk_band", "MEDIUM") if show_suppressed_alerts else getattr(row, "ae_risk_band", "LOW")
                 user    = getattr(row, "user",           "—")
                 day_val = getattr(row, "day",            None)
-                day_str = day_val.strftime("%Y-%m-%d") if hasattr(day_val, "strftime") else str(day_val)
+                day_str = (day_val.strftime("%Y-%m-%d") if hasattr(day_val, "strftime")
+                           else str(day_val).split("T")[0].split(" ")[0])
                 pctl    = getattr(row, "ae_percentile_rank", 0.0)
                 top_raw = getattr(row, "top_contributors", None)
                 summary = build_alert_summary(top_raw)
@@ -3211,6 +3256,10 @@ if active_page == "Alerts":
                 supp_rule = getattr(row, "suppression_rule", None) or "—"
 
                 risk_color = RISK_COLORS.get(risk, "#666666")
+                _disp_key = f"disp_{user}_{day_str}"
+                _cur_status = _disp_lookup.get((user, day_str), "NEW")
+                if _disp_key not in st.session_state:
+                    st.session_state[_disp_key] = _cur_status
 
                 if show_suppressed_alerts:
                     c_risk, c_info, c_rule, c_day, c_pctl, c_btn = st.columns([1, 4, 3, 2, 1, 2])
@@ -3269,6 +3318,16 @@ if active_page == "Alerts":
                         f"<div style='font-family:JetBrains Mono,monospace;font-size:12px;"
                         f"color:{risk_color};padding-top:5px;'>P{pctl:.1f}</div>",
                         unsafe_allow_html=True,
+                    )
+
+                with c_status:
+                    st.selectbox(
+                        "Status",
+                        options=ALERT_STATUS_OPTIONS,
+                        key=_disp_key,
+                        on_change=_on_status_change,
+                        args=(user, day_str, _disp_key),
+                        label_visibility="collapsed",
                     )
 
                 with c_btn:
