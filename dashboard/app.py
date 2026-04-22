@@ -14,6 +14,7 @@ import ast as _ast
 import hmac
 import hashlib
 import html as _html_mod
+from db import init_db, upsert_disposition, get_disposition, get_all_dispositions
 
 try:
     import pyrebase
@@ -940,6 +941,8 @@ if not st.session_state.get("authenticated", False):
 if st.session_state.pop("_set_cookie", False):
     _set_auth_cookie(st.session_state.get("auth_user_email", ""))
 
+
+init_db()
 
 # ──────────────────────────────────────────────────────────────
 # Data Loading
