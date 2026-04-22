@@ -1112,10 +1112,12 @@ try:
     merged_df, user_risk, user_data_dict = load_data()
     ueba_a_df = load_ueba_a()
     peer_baselines_df = load_peer_baselines()
+    user_profiles_df = load_user_profiles()
     DATA_LOADED = True
 except Exception:
     ueba_a_df = None
     peer_baselines_df = None
+    user_profiles_df = pd.DataFrame(columns=["user", "department", "role", "supervisor", "role_sensitivity", "employee_name"])
     DATA_LOADED = False
 
 
@@ -3300,24 +3302,27 @@ if active_page == "Alerts":
                 "text-transform:uppercase;letter-spacing:1.5px;"
             )
             if show_suppressed_alerts:
-                _h_risk, _h_info, _h_rule, _h_day, _h_pctl, _h_btn = st.columns([1, 4, 3, 2, 1, 2])
+                _h_risk, _h_info, _h_rule, _h_day, _h_pctl, _h_status, _h_btn = st.columns([1, 4, 3, 2, 1, 2, 2])
                 _h_risk.markdown(f"<span style='{_HDR}'>Risk</span>", unsafe_allow_html=True)
                 _h_info.markdown(f"<span style='{_HDR}'>User / Reason</span>", unsafe_allow_html=True)
                 _h_rule.markdown(f"<span style='{_HDR}'>Suppression Rule</span>", unsafe_allow_html=True)
                 _h_day.markdown(f"<span style='{_HDR}'>Day</span>", unsafe_allow_html=True)
                 _h_pctl.markdown(f"<span style='{_HDR}'>Pctl</span>", unsafe_allow_html=True)
+                _h_status.markdown(f"<span style='{_HDR}'>Status</span>", unsafe_allow_html=True)
             else:
-                _h_risk, _h_info, _h_day, _h_pctl, _h_btn = st.columns([1, 5, 2, 1, 2])
+                _h_risk, _h_info, _h_day, _h_pctl, _h_status, _h_btn = st.columns([1, 5, 2, 1, 2, 2])
                 _h_risk.markdown(f"<span style='{_HDR}'>Risk</span>", unsafe_allow_html=True)
                 _h_info.markdown(f"<span style='{_HDR}'>User / Investigation hint</span>", unsafe_allow_html=True)
                 _h_day.markdown(f"<span style='{_HDR}'>Day</span>", unsafe_allow_html=True)
                 _h_pctl.markdown(f"<span style='{_HDR}'>Percentile</span>", unsafe_allow_html=True)
+                _h_status.markdown(f"<span style='{_HDR}'>Status</span>", unsafe_allow_html=True)
             st.markdown(
                 "<div style='border-bottom:1px solid #1a1a1a;margin:0 0 2px 0;'></div>",
                 unsafe_allow_html=True,
             )
 
             # ── Per-alert card rows ──
+            _disp_lookup = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
             for i, row in enumerate(card_data.itertuples()):
                 risk = getattr(row, "composite_risk_band", "MEDIUM") if show_suppressed_alerts else getattr(row, "ae_risk_band", "LOW")
                 user    = getattr(row, "user",           "—")
@@ -3337,9 +3342,9 @@ if active_page == "Alerts":
                     st.session_state[_disp_key] = _cur_status
 
                 if show_suppressed_alerts:
-                    c_risk, c_info, c_rule, c_day, c_pctl, c_btn = st.columns([1, 4, 3, 2, 1, 2])
+                    c_risk, c_info, c_rule, c_day, c_pctl, c_status, c_btn = st.columns([1, 4, 3, 2, 1, 2, 2])
                 else:
-                    c_risk, c_info, c_day, c_pctl, c_btn = st.columns([1, 5, 2, 1, 2])
+                    c_risk, c_info, c_day, c_pctl, c_status, c_btn = st.columns([1, 5, 2, 1, 2, 2])
 
                 with c_risk:
                     st.markdown(
