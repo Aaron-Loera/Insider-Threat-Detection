@@ -15,6 +15,7 @@ per-row disk-read overhead present in the old two-file design.
 import argparse
 import asyncio
 import json
+import math
 import os
 import sys
 import signal
@@ -40,6 +41,30 @@ PAUSE_FLAG     = config.LIVE_PAUSE_FLAG
 CRITICAL_THRESH = 95.0
 HIGH_THRESH     = 90.0
 MEDIUM_THRESH   = 80.0
+
+# Behavioral feature columns to pass through to the JSONL output so that the
+# Investigation page can render the radar chart, heatmap, cross-channel flags,
+# and raw activity table with full data (not just scoring metadata).
+_PASSTHROUGH_COLS: list[str] = [
+    # Raw counts
+    "logon_count", "logoff_count", "off_hours_logon",
+    "file_open_count", "file_write_count", "file_copy_count",
+    "file_delete_count", "unique_files_accessed", "off_hours_files_accessed",
+    "usb_insert_count", "usb_remove_count", "off_hours_usb_usage",
+    "emails_sent", "unique_recipients", "external_emails_sent",
+    "attachments_sent", "off_hours_emails",
+    "http_total_requests", "http_visit_count", "http_download_count",
+    "http_upload_count", "http_jobsite_visits", "http_cloud_storage_visits",
+    "http_suspicious_site_visits", "off_hours_http_requests",
+    "http_long_url_count", "unique_domains_visited",
+    "pcs_used_count", "non_primary_pc_used_flag",
+    "non_primary_pc_http_requests_flag", "non_primary_pc_usb_flag",
+    "non_primary_pc_file_copy_flag",
+    # Cross-channel flags
+    "usb_file_activity_flag", "off_hours_activity_flag",
+    "external_comm_activity_flag", "jobsite_usb_activity_flag",
+    "suspicious_upload_flag", "cloud_upload_flag", "non_primary_pc_risk_flag",
+]
 
 # ── Column aliases: v5 dataset renamed some features; map back to v1 names ───
 _V5_TO_V1_RENAME: dict[str, str] = {
@@ -166,6 +191,22 @@ class LiveScorer:
             "if_risk_band":      if_risk_band,
             "_score_ms":         round(elapsed_ms, 1),   # diagnostic; dashboard ignores this
         }
+
+        # Pass through behavioral features so the Investigation page can render
+        # all charts (radar, heatmap, flags) with full data for live records.
+        for _col in _PASSTHROUGH_COLS:
+            if _col in row_df.columns:
+                _v = row_df[_col].iloc[0]
+                # Convert numpy scalars → Python native; NaN → None (valid JSON)
+                if hasattr(_v, "item"):
+                    _v = _v.item()
+                try:
+                    if math.isnan(_v):
+                        _v = None
+                except TypeError:
+                    pass
+                payload[_col] = _v
+
         return payload
 
 

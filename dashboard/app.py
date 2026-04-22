@@ -2598,10 +2598,13 @@ def _render_investigation_content() -> None:
     else:
         user_data = pd.DataFrame()
 
-    # ── Merge live data when simulation is active ───────────────────────────
-    _inv_live_active = bool(st.session_state.live_mode or st.session_state.live_paused)
+    # ── Merge live data ─────────────────────────────────────────────────────
+    # _inv_live_mode tracks whether the dashboard launched the simulation (for
+    # the status banner).  Live data is ALWAYS merged when LIVE_OUTPUT has
+    # content — this covers both dashboard-launched and CLI-launched simulations.
+    _inv_live_mode = bool(st.session_state.live_mode or st.session_state.live_paused)
     _inv_live_count = 0
-    if _inv_live_active and os.path.exists(LIVE_OUTPUT):
+    if os.path.exists(LIVE_OUTPUT) and os.path.getsize(LIVE_OUTPUT) > 0:
         _live_u = _get_live_user_data(_user)
         if not _live_u.empty:
             # Apply risk-band filter only — live records are expected to fall
@@ -2624,7 +2627,7 @@ def _render_investigation_content() -> None:
                 _inv_live_count = len(_live_u)
 
     if user_data.empty:
-        if _inv_live_active:
+        if _inv_live_mode or (os.path.exists(LIVE_OUTPUT) and os.path.getsize(LIVE_OUTPUT) > 0):
             st.info("No data for this user yet — waiting for live records to arrive.")
         else:
             st.warning("No data for this user in the current filter range.")
@@ -2633,12 +2636,20 @@ def _render_investigation_content() -> None:
         return
 
     # ── Live investigation status banner ────────────────────────────────────
-    if _inv_live_active:
-        _inv_live_status = (
-            "LIVE" if st.session_state.live_mode and not st.session_state.live_paused else "PAUSED"
-        )
-        _inv_live_color = "#e84545" if _inv_live_status == "LIVE" else "#d4a017"
-        _inv_live_dot = "●" if _inv_live_status == "LIVE" else "⏸"
+    if _inv_live_mode or _inv_live_count > 0:
+        if not _inv_live_mode:
+            # Live data present but simulation wasn't started from this dashboard session
+            _inv_live_status = "ACTIVE"
+            _inv_live_color = "#3a86a8"
+            _inv_live_dot = "●"
+        elif st.session_state.live_mode and not st.session_state.live_paused:
+            _inv_live_status = "LIVE"
+            _inv_live_color = "#e84545"
+            _inv_live_dot = "●"
+        else:
+            _inv_live_status = "PAUSED"
+            _inv_live_color = "#d4a017"
+            _inv_live_dot = "⏸"
         _inv_live_msg = (
             f"{_inv_live_dot} {_inv_live_status} &mdash; "
             f"{_inv_live_count} live record{'s' if _inv_live_count != 1 else ''} merged into view"
