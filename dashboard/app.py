@@ -2556,11 +2556,10 @@ if active_page == "Investigation":
 
     _u_rows = merged_df.loc[merged_df["user"] == selected_user].reset_index(drop=True)
     if not _u_rows.empty:
-        _u_mask = (
-            _u_rows["ae_risk_band"].isin(st.session_state.flt_risk)
-            & (_u_rows["day"].dt.date >= st.session_state.flt_date_start)
-            & (_u_rows["day"].dt.date <= st.session_state.flt_date_end)
-        )
+        # Date filter intentionally omitted on Investigation page — applying it
+        # causes live-mode updates to be silently dropped when the global date
+        # range doesn't cover the live record timestamps.
+        _u_mask = _u_rows["ae_risk_band"].isin(st.session_state.flt_risk)
         user_data = _u_rows[_u_mask].sort_values("day")
     else:
         user_data = pd.DataFrame()
