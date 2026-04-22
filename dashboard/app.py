@@ -1594,12 +1594,13 @@ def build_alert_summary(top_contributors_raw) -> str:
     return f"This alert is mainly driven by {body}{suffix}."
 
 
-@st.cache_data(ttl=2, show_spinner=False)
+@st.cache_data(ttl=1, show_spinner=False)
 def _get_live_user_data(user: str) -> pd.DataFrame:
     """Load live-scored rows for *user* from LIVE_OUTPUT, normalized to match user_data columns.
 
     Delegates to _cached_live_rows to avoid a redundant full-file scan; the shared
-    2-second cache means all live-data consumers pay at most one read per TTL window.
+    1-second TTL (below the fragment's 2s run_every) ensures every fragment rerun
+    reads genuinely fresh data from the live output file.
     """
     rows, _ = _cached_live_rows()
     if not rows:
@@ -1634,7 +1635,7 @@ def _get_live_user_data(user: str) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-@st.cache_data(ttl=2, show_spinner=False)
+@st.cache_data(ttl=1, show_spinner=False)
 def _cached_live_file_stats():
     """Return (row_count, stream_done) for the live output file.
 
@@ -1651,7 +1652,7 @@ def _cached_live_file_stats():
 # MAX_LIVE_ROWS rows are kept; older simulation history is discarded.
 _MAX_LIVE_ROWS = 5_000
 
-@st.cache_data(ttl=2, show_spinner=False)
+@st.cache_data(ttl=1, show_spinner=False)
 def _cached_live_rows():
     """Read the most recent _MAX_LIVE_ROWS scored rows from the live output file.
 
@@ -3749,7 +3750,10 @@ if active_page == "Channels":
 
 
 # Keep live row counter and status fresh while browsing non-Alerts pages.
-if active_page != "Alerts" and st.session_state.live_mode:
+# Investigation is excluded: its @st.fragment(run_every="2s") handles its own
+# refresh cycle independently.  A full st.rerun() here would reset the fragment
+# timer every second, preventing it from ever firing on its own schedule.
+if active_page not in ("Alerts", "Investigation") and st.session_state.live_mode:
     _proc = st.session_state.live_proc
     _proc_running = _proc is not None and _proc.poll() is None
     if _proc_running and not st.session_state.live_paused:
