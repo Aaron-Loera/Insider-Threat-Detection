@@ -739,8 +739,8 @@ def _render_login():
         display: none !important;
     }
 
-    /* ── Sign-in button ── */
-    div[data-testid="stColumn"]:nth-child(2) [data-testid="stButton"] button {
+    /* ── Sign-in button (first column = red) ── */
+    div[data-testid="stColumn"]:nth-child(1) [data-testid="stButton"] button {
         background-color: #e84545 !important;
         border: none !important;
         border-radius: 0 !important;
@@ -753,8 +753,26 @@ def _render_login():
         width: 100% !important;
         transition: background-color 0.15s ease !important;
     }
-    .block-container [data-testid="stButton"] button:hover {
+    div[data-testid="stColumn"]:nth-child(1) [data-testid="stButton"] button:hover {
         background-color: #c73333 !important;
+    }
+    /* ── Demo Access button (second column = ghost/outline) ── */
+    div[data-testid="stColumn"]:nth-child(2) [data-testid="stButton"] button {
+        background-color: transparent !important;
+        border: 1px solid #333 !important;
+        border-radius: 0 !important;
+        color: #666 !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 10px !important;
+        font-weight: 600 !important;
+        letter-spacing: 2px !important;
+        padding: 12px 0 !important;
+        width: 100% !important;
+        transition: border-color 0.15s ease, color 0.15s ease !important;
+    }
+    div[data-testid="stColumn"]:nth-child(2) [data-testid="stButton"] button:hover {
+        border-color: #666 !important;
+        color: #aaa !important;
     }
 
     /* ── Error alert ── */
@@ -880,7 +898,17 @@ def _render_login():
     if st.session_state.get("_login_error"):
         st.error(st.session_state["_login_error"])
 
-    if st.button("SIGN IN", use_container_width=True, type="primary"):
+    _col_sign_in, _col_demo = st.columns([3, 2])
+    with _col_sign_in:
+        _clicked_signin = st.button("SIGN IN", use_container_width=True, type="primary")
+    with _col_demo:
+        _clicked_demo = st.button("DEMO ACCESS", use_container_width=True)
+
+    if _clicked_demo:
+        st.query_params["guest"] = "true"
+        st.rerun()
+
+    if _clicked_signin:
         if not email or not password:
             st.session_state["_login_error"] = "Email and password are required."
             st.rerun()
@@ -931,6 +959,26 @@ if not _is_logout and not st.session_state.get("authenticated", False):
     if _c_email and _c_token and hmac.compare_digest(_c_token, _make_auth_token(_c_email)):
         st.session_state["authenticated"] = True
         st.session_state["auth_user_email"] = _c_email
+
+# ── Guest auto-login via ?guest=true URL parameter ──
+# LinkedIn / demo link: https://dsk-insider-threat-detection.streamlit.app/?guest=true
+# Requires [guest] section in .streamlit/secrets.toml with email + password.
+if not _is_logout and not st.session_state.get("authenticated", False):
+    if st.query_params.get("guest", "").lower() == "true":
+        _guest_cfg = st.secrets.get("guest", {})
+        _g_email    = _guest_cfg.get("email", "")
+        _g_password = _guest_cfg.get("password", "")
+        if _g_email and _g_password:
+            try:
+                _g_auth = _get_firebase_auth()
+                _g_user = _g_auth.sign_in_with_email_and_password(_g_email, _g_password)
+                st.session_state["authenticated"] = True
+                st.session_state["auth_user_email"] = "Guest"
+                st.session_state["auth_id_token"]   = _g_user.get("idToken", "")
+                st.session_state["is_guest"]         = True
+                # Don't persist guest session in cookie — ?guest=true re-auths on refresh
+            except Exception:
+                pass  # fall through to login page
 
 # ── Auth gate — show login and stop until the user has signed in ──
 if not st.session_state.get("authenticated", False):
