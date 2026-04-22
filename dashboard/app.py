@@ -3033,6 +3033,12 @@ if active_page == "Alerts":
         total_alerts = len(alert_data)
         card_data = alert_data.head(CARD_LIMIT)
 
+        _STATUS_OPTIONS = ["NEW", "INVESTIGATING", "RESOLVED", "DISMISSED"]
+        _disp_lookup = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
+
+        def _on_status_change(user, day, key):
+            upsert_disposition(user, day, st.session_state[key])
+
         if total_alerts == 0:
             st.info("No alerts match the current filters.")
         else:
@@ -3047,11 +3053,12 @@ if active_page == "Alerts":
                 "font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
                 "text-transform:uppercase;letter-spacing:1.5px;"
             )
-            _h_risk, _h_info, _h_day, _h_pctl, _h_btn = st.columns([1, 5, 2, 1, 2])
+            _h_risk, _h_info, _h_day, _h_pctl, _h_status, _h_btn = st.columns([1, 5, 2, 1, 2, 2])
             _h_risk.markdown(f"<span style='{_HDR}'>Risk</span>", unsafe_allow_html=True)
             _h_info.markdown(f"<span style='{_HDR}'>User / Investigation hint</span>", unsafe_allow_html=True)
             _h_day.markdown(f"<span style='{_HDR}'>Day</span>", unsafe_allow_html=True)
             _h_pctl.markdown(f"<span style='{_HDR}'>Percentile</span>", unsafe_allow_html=True)
+            _h_status.markdown(f"<span style='{_HDR}'>Status</span>", unsafe_allow_html=True)
             st.markdown(
                 "<div style='border-bottom:1px solid #1a1a1a;margin:0 0 2px 0;'></div>",
                 unsafe_allow_html=True,
@@ -3068,8 +3075,12 @@ if active_page == "Alerts":
                 summary = build_alert_summary(top_raw)
 
                 risk_color = RISK_COLORS.get(risk, "#666666")
+                _disp_key = f"disp_{user}_{day_str}"
+                _cur_status = _disp_lookup.get((user, day_str), "NEW")
+                if _disp_key not in st.session_state:
+                    st.session_state[_disp_key] = _cur_status
 
-                c_risk, c_info, c_day, c_pctl, c_btn = st.columns([1, 5, 2, 1, 2])
+                c_risk, c_info, c_day, c_pctl, c_status, c_btn = st.columns([1, 5, 2, 1, 2, 2])
 
                 with c_risk:
                     st.markdown(
@@ -3104,6 +3115,16 @@ if active_page == "Alerts":
                         f"<div style='font-family:JetBrains Mono,monospace;font-size:12px;"
                         f"color:{risk_color};padding-top:5px;'>P{pctl:.1f}</div>",
                         unsafe_allow_html=True,
+                    )
+
+                with c_status:
+                    st.selectbox(
+                        "Status",
+                        options=_STATUS_OPTIONS,
+                        key=_disp_key,
+                        on_change=_on_status_change,
+                        args=(user, day_str, _disp_key),
+                        label_visibility="collapsed",
                     )
 
                 with c_btn:
