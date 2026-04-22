@@ -1098,6 +1098,16 @@ def load_data():
     return merged, user_risk, user_data_dict
 
 
+_USER_PROFILES_PATH = os.path.join(os.path.dirname(__file__), "user_profiles.parquet")
+
+@st.cache_data(show_spinner=False)
+def load_user_profiles() -> pd.DataFrame:
+    """Load pre-built user profile table (department, role, supervisor, role_sensitivity)."""
+    if os.path.exists(_USER_PROFILES_PATH):
+        return pd.read_parquet(_USER_PROFILES_PATH)
+    return pd.DataFrame(columns=["user", "department", "role", "supervisor", "role_sensitivity"])
+
+
 try:
     merged_df, user_risk, user_data_dict = load_data()
     ueba_a_df = load_ueba_a()
@@ -2194,6 +2204,71 @@ if active_page == "Investigation":
     if user_data.empty:
         st.warning("No data for this user in the current filter range.")
         st.stop()
+
+    # ── User Profile Section ──
+    _prof_row = user_profiles_df[user_profiles_df["user"] == selected_user]
+    _prof = _prof_row.iloc[0] if not _prof_row.empty else None
+
+    _name      = _prof["employee_name"]     if _prof is not None else selected_user
+    _dept      = _prof["department"]        if _prof is not None else "—"
+    _role      = _prof["role"]              if _prof is not None else "—"
+    _sup_id    = _prof["supervisor"]        if _prof is not None else None
+    _rs        = float(_prof["role_sensitivity"]) if _prof is not None else None
+
+    # Resolve supervisor display name (Name · user_id)
+    if _sup_id:
+        _sup_prof = user_profiles_df[user_profiles_df["user"] == _sup_id]
+        _sup_name = _sup_prof.iloc[0]["employee_name"] if not _sup_prof.empty else _sup_id
+        _sup_display = f"{_sup_name} &middot; <span style='color:#555;font-size:11px;'>{_sup_id}</span>"
+    else:
+        _sup_display = "—"
+
+    _all_u_rows = user_data_dict.get(selected_user, pd.DataFrame())
+    _total_alerts = len(_all_u_rows)
+    _first_alert  = _all_u_rows["day"].min().strftime("%Y-%m-%d") if not _all_u_rows.empty else "—"
+    _last_alert   = _all_u_rows["day"].max().strftime("%Y-%m-%d") if not _all_u_rows.empty else "—"
+
+    if _rs is not None:
+        if _rs >= 0.85:
+            _rs_color, _rs_label = "#ff1744", f"{_rs:.2f} · Critical"
+        elif _rs >= 0.70:
+            _rs_color, _rs_label = "#e84545", f"{_rs:.2f} · High"
+        elif _rs >= 0.50:
+            _rs_color, _rs_label = "#d4a017", f"{_rs:.2f} · Medium"
+        else:
+            _rs_color, _rs_label = "#3a86a8", f"{_rs:.2f} · Low"
+    else:
+        _rs_color, _rs_label = "#555", "—"
+
+    def _prof_field(label: str, value: str, value_color: str = "#e0e0e0") -> str:
+        return (
+            f"<div style='display:flex;flex-direction:column;gap:2px;'>"
+            f"<span style='font-family:JetBrains Mono,monospace;font-size:9px;"
+            f"text-transform:uppercase;letter-spacing:1.2px;color:#555;'>{label}</span>"
+            f"<span style='font-family:Inter,sans-serif;font-size:13px;font-weight:500;"
+            f"color:{value_color};'>{value}</span>"
+            f"</div>"
+        )
+
+    st.markdown(
+        "<div style='background:#0a0a0a;border:1px solid #1c1c1c;padding:16px 20px;margin:0 0 18px 0;'>"
+        # Name header row
+        f"<div style='margin-bottom:14px;border-bottom:1px solid #1c1c1c;padding-bottom:10px;"
+        f"display:flex;align-items:baseline;gap:12px;'>"
+        f"<span style='font-family:Inter,sans-serif;font-size:16px;font-weight:600;color:#e0e0e0;'>{_name}</span>"
+        f"<span style='font-family:JetBrains Mono,monospace;font-size:11px;color:#555;'>{selected_user}</span>"
+        f"</div>"
+        # Fields grid
+        "<div style='display:grid;grid-template-columns:repeat(6,1fr);gap:16px;'>"
+        + _prof_field("Department", _dept)
+        + _prof_field("Role", _role)
+        + _prof_field("Supervisor", _sup_display)
+        + _prof_field("Role Sensitivity", _rs_label, _rs_color)
+        + _prof_field("Total Alerts", f"{_total_alerts:,}")
+        + _prof_field("First / Last Alert", f"{_first_alert}&nbsp;&nbsp;→&nbsp;&nbsp;{_last_alert}")
+        + "</div></div>",
+        unsafe_allow_html=True,
+    )
 
     # ── User KPI Row ──
     u1, u2, u3, u4, u5, u6 = st.columns(6)
