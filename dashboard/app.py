@@ -1,3 +1,5 @@
+﻿import sys
+sys.stderr.write("[APP] module-level execution started\n"); sys.stderr.flush()
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -8,7 +10,6 @@ from plotly.subplots import make_subplots
 import json
 import os
 import subprocess
-import sys
 import time
 import ast as _ast
 import hmac
@@ -744,8 +745,8 @@ def _render_login():
         display: none !important;
     }
 
-    /* ── Sign-in button ── */
-    div[data-testid="stColumn"]:nth-child(2) [data-testid="stButton"] button {
+    /* ── Sign-in button (first column = red) ── */
+    div[data-testid="stColumn"]:nth-child(1) [data-testid="stButton"] button {
         background-color: #e84545 !important;
         border: none !important;
         border-radius: 0 !important;
@@ -758,8 +759,26 @@ def _render_login():
         width: 100% !important;
         transition: background-color 0.15s ease !important;
     }
-    .block-container [data-testid="stButton"] button:hover {
+    div[data-testid="stColumn"]:nth-child(1) [data-testid="stButton"] button:hover {
         background-color: #c73333 !important;
+    }
+    /* ── Demo Access button (second column = ghost/outline) ── */
+    div[data-testid="stColumn"]:nth-child(2) [data-testid="stButton"] button {
+        background-color: transparent !important;
+        border: 1px solid #333 !important;
+        border-radius: 0 !important;
+        color: #666 !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 10px !important;
+        font-weight: 600 !important;
+        letter-spacing: 2px !important;
+        padding: 12px 0 !important;
+        width: 100% !important;
+        transition: border-color 0.15s ease, color 0.15s ease !important;
+    }
+    div[data-testid="stColumn"]:nth-child(2) [data-testid="stButton"] button:hover {
+        border-color: #666 !important;
+        color: #aaa !important;
     }
 
     /* ── Error alert ── */
@@ -885,7 +904,17 @@ def _render_login():
     if st.session_state.get("_login_error"):
         st.error(st.session_state["_login_error"])
 
-    if st.button("SIGN IN", use_container_width=True, type="primary"):
+    _col_sign_in, _col_demo = st.columns([3, 2])
+    with _col_sign_in:
+        _clicked_signin = st.button("SIGN IN", use_container_width=True, type="primary")
+    with _col_demo:
+        _clicked_demo = st.button("DEMO ACCESS", use_container_width=True)
+
+    if _clicked_demo:
+        st.query_params["guest"] = "true"
+        st.rerun()
+
+    if _clicked_signin:
         if not email or not password:
             st.session_state["_login_error"] = "Email and password are required."
             st.rerun()
@@ -937,6 +966,26 @@ if not _is_logout and not st.session_state.get("authenticated", False):
         st.session_state["authenticated"] = True
         st.session_state["auth_user_email"] = _c_email
 
+# ── Guest auto-login via ?guest=true URL parameter ──
+# LinkedIn / demo link: https://dsk-insider-threat-detection.streamlit.app/?guest=true
+# Requires [guest] section in .streamlit/secrets.toml with email + password.
+if not _is_logout and not st.session_state.get("authenticated", False):
+    if st.query_params.get("guest", "").lower() == "true":
+        _guest_cfg = st.secrets.get("guest", {})
+        _g_email    = _guest_cfg.get("email", "")
+        _g_password = _guest_cfg.get("password", "")
+        if _g_email and _g_password:
+            try:
+                _g_auth = _get_firebase_auth()
+                _g_user = _g_auth.sign_in_with_email_and_password(_g_email, _g_password)
+                st.session_state["authenticated"] = True
+                st.session_state["auth_user_email"] = "Guest"
+                st.session_state["auth_id_token"]   = _g_user.get("idToken", "")
+                st.session_state["is_guest"]         = True
+                # Don't persist guest session in cookie — ?guest=true re-auths on refresh
+            except Exception:
+                pass  # fall through to login page
+
 # ── Auth gate — show login and stop until the user has signed in ──
 if not st.session_state.get("authenticated", False):
     _render_login()
@@ -952,6 +1001,11 @@ init_db()
 # ──────────────────────────────────────────────────────────────
 # Data Loading
 # ──────────────────────────────────────────────────────────────
+import datetime as _dt
+import logging as _auth_log
+_auth_log.getLogger("ueba.startup").warning(
+    f"[STARTUP] authenticated — reached data-load section at {_dt.datetime.utcnow().isoformat()}"
+)
 
 # Resolve the project root so config.py (at the root) is importable.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -996,6 +1050,71 @@ UEBA_COLS = [
 
 
 @st.cache_data(show_spinner=False)
+def _load_user_detail_df(user: str) -> "pd.DataFrame":
+    """Download ALL detail rows for one user and cache the result.
+
+    Local:  reads from the main analyst parquet with a user-level DNF filter
+            (1268 sorted row groups → only the user's ~1270 rows are read).
+    Cloud:  downloads a tiny per-user parquet from HF details/ folder (~46 KB).
+            The full 193 MB analyst parquet is NEVER loaded on cloud — each
+            user file is independently tiny, making the download cost negligible.
+    """
+    _HF_REPO = "DSKittens/ueba-dashboard-dat"
+    _hf_token = st.secrets.get("huggingface", {}).get("token", None)
+    _DETAIL_COLS = ["user", "day", "top_contributors", "explanation"]
+    safe = str(user).replace("/", "_").replace("\\", "_")
+
+    try:
+        if os.path.exists(ANALYST_TABLE_PARQUET):
+            import pyarrow.parquet as pq
+            tbl = pq.read_table(
+                ANALYST_TABLE_PARQUET,
+                columns=_DETAIL_COLS,
+                filters=[[("user", "=", user)]],
+            )
+            return tbl.to_pandas()
+        else:
+            # Per-user file: ~46 KB download regardless of total dataset size
+            url = f"hf://datasets/{_HF_REPO}/details/{safe}.parquet"
+            return pd.read_parquet(url, storage_options={"token": _hf_token})
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("_load_user_detail_df(%s) failed: %s", user, _e)
+        return pd.DataFrame(columns=_DETAIL_COLS)
+
+
+@st.cache_data(show_spinner=False)
+def fetch_alert_detail(user: str, day_str: str) -> dict:
+    """Return top_contributors and explanation for one (user, day) record.
+
+    Delegates the expensive I/O to _load_user_detail_df (cached per-user),
+    then filters to the requested day. On cloud this costs ~46 KB per unique
+    user, cached after the first lookup — compared to 193 MB per call before.
+    """
+    try:
+        df = _load_user_detail_df(user)
+        if df.empty:
+            return {}
+        day_ts = pd.Timestamp(day_str)
+        if "day" in df.columns:
+            df["day"] = pd.to_datetime(df["day"], errors="coerce")
+            match = df[df["day"] == day_ts]
+        else:
+            return {}
+        if match.empty:
+            return {}
+        r = match.iloc[0]
+        return {
+            "top_contributors": r.get("top_contributors", None),
+            "explanation": r.get("explanation", "") or "",
+        }
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("fetch_alert_detail(%s, %s) failed: %s", user, day_str, _e)
+        return {}
+
+
+@st.cache_resource(show_spinner=False)
 def load_ueba_a():
     """Load UEBA Table A — (user, pc, day) granular rows used for PC-level drill-down."""
     if os.path.exists(UEBA_A_PARQUET):
@@ -1018,39 +1137,75 @@ def load_peer_baselines():
     df["day"] = pd.to_datetime(df["day"], errors="coerce")
     return df
 
-@st.cache_data(show_spinner="Loading dataset...")
+@st.cache_resource(show_spinner="Loading dataset...")
 def load_data():
-    """Load analyst table + UEBA dataset, merge, pre-compute user_risk."""
+    """Load pre-merged parquet and pre-compute user_risk.
+
+    Uses @st.cache_resource (not cache_data) so the DataFrame is stored by
+    reference — no pickle serialisation overhead. cache_data would pickle the
+    250 MB DataFrame to disk on first call, temporarily doubling peak RAM and
+    pushing the container past the 1 GB Streamlit Cloud free-tier limit.
+
+    On cloud: downloads merged_dataset_5.parquet (62 MB) via hf_hub_download,
+    which streams to the HF local disk cache before reading — avoids holding
+    the compressed bytes AND the decompressed Arrow table in memory at the same
+    time (unlike the hf:// fsspec path which buffers in-process).
+    """
     import gc
+    import logging as _logging
+    _log = _logging.getLogger("ueba.load_data")
+    _log.warning("[load_data] started")
 
-    # ── Load analyst table ──
-    if os.path.exists(ANALYST_TABLE_PARQUET):
-        analyst = pd.read_parquet(ANALYST_TABLE_PARQUET)
-    else:
-        analyst = pd.read_csv(ANALYST_TABLE_CSV)
+    _HF_REPO  = "DSKittens/ueba-dashboard-dat"
+    _hf_token = st.secrets.get("huggingface", {}).get("token", None)
 
-    # ── Load UEBA dataset ──
-    if os.path.exists(UEBA_PARQUET):
-        import pyarrow.parquet as pq
-        schema_cols = pq.read_schema(UEBA_PARQUET).names
-        use = [c for c in UEBA_COLS if c in schema_cols]
-        ueba = pd.read_parquet(UEBA_PARQUET, columns=use)
-    else:
-        all_cols = pd.read_csv(UEBA_CSV, nrows=0).columns.tolist()
-        use_idx = [i for i, c in enumerate(all_cols) if c in UEBA_COLS]
-        ueba = pd.read_csv(UEBA_CSV, usecols=use_idx)
+    # Local path for the pre-merged parquet (built by scripts/build_merged_parquet.py)
+    _MERGED_LOCAL = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "explainability", "alert_table", "merged_dataset_5.parquet",
+    )
 
-    # Downcast numeric columns to reduce memory
-    for df in [analyst, ueba]:
+    def _downcast(df):
         for col in df.select_dtypes(include=["float64"]).columns:
-            df[col] = pd.to_numeric(df[col], downcast="float")
+            df[col] = df[col].astype("float32")
         for col in df.select_dtypes(include=["int64"]).columns:
-            df[col] = pd.to_numeric(df[col], downcast="integer")
+            df[col] = df[col].astype("int32")
+        return df
 
-    # Normalize day column
-    for df in [analyst, ueba]:
-        if "day" in df.columns:
-            df["day"] = pd.to_datetime(df["day"], errors="coerce")
+    # ── Load single pre-merged file ──
+    _log.warning("[load_data] loading merged dataset")
+    if os.path.exists(_MERGED_LOCAL):
+        import pyarrow.parquet as _pq
+        _tbl = _pq.read_table(_MERGED_LOCAL)
+        merged = _tbl.to_pandas()
+        del _tbl
+        _log.warning("[load_data] loaded from local merged parquet")
+    else:
+        # Cloud: hf_hub_download caches the file to disk before reading.
+        # This avoids buffering the compressed bytes in-process (unlike hf://).
+        from huggingface_hub import hf_hub_download as _hf_dl
+        import pyarrow.parquet as _pq
+        _cached = _hf_dl(
+            repo_id=_HF_REPO,
+            filename="merged_dataset_5.parquet",
+            repo_type="dataset",
+            token=_hf_token,
+        )
+        _log.warning(f"[load_data] file cached at {_cached}")
+        _tbl = _pq.read_table(_cached)
+        _log.warning(f"[load_data] arrow table: {_tbl.nbytes/1e6:.0f} MB")
+        merged = _tbl.to_pandas()
+        del _tbl
+        _log.warning("[load_data] converted to pandas")
+
+    gc.collect()
+    _downcast(merged)
+    merged["day"] = pd.to_datetime(merged["day"], errors="coerce")
+    for _col in ("user", "ae_risk_band", "if_risk_band"):
+        if _col in merged.columns:
+            merged[_col] = merged[_col].astype("category")
+    gc.collect()
+    _log.warning(f"[load_data] merged: {merged.shape}, {merged.memory_usage(deep=True).sum()/1e6:.1f} MB")
 
     # Merge — include alert-context columns from the alert table
     analyst_cols = [
@@ -1060,10 +1215,15 @@ def load_data():
 ]
     analyst_cols = [c for c in analyst_cols if c in analyst.columns]
     merged = ueba.merge(analyst[analyst_cols], on=["user", "day"], how="left")
+    # Cast risk bands to ordered categorical
+    _risk_cat = pd.CategoricalDtype(categories=["LOW", "MEDIUM", "HIGH", "CRITICAL"], ordered=True)
+    for _col in ("ae_risk_band", "if_risk_band"):
+        if _col in merged.columns:
+            merged[_col] = merged[_col].astype(_risk_cat)
 
-    # Pre-compute per-user risk summary (expensive groupby, do once)
+    # ── Pre-compute per-user risk summary ──
     user_risk = (
-        merged.groupby("user")
+        merged.groupby("user", observed=True)
         .agg(
             max_score=("if_anomaly_score", "max"),
             mean_score=("if_anomaly_score", "mean"),
@@ -1077,25 +1237,12 @@ def load_data():
         .sort_values("max_percentile", ascending=False)
     )
 
-    # Cast risk band to ordered categorical — makes .isin() and groupby ~3x faster
-    _risk_cat = pd.CategoricalDtype(
-        categories=["LOW", "MEDIUM", "HIGH", "CRITICAL"], ordered=True
-    )
-    for _col in ("ae_risk_band", "if_risk_band"):
-        if _col in merged.columns:
-            merged[_col] = merged[_col].astype(_risk_cat)
+    _all_users = sorted(merged["user"].unique().tolist())
+    _ds_min = merged["day"].min().date()
+    _ds_max = merged["day"].max().date()
 
-    # Pre-group by user so the Investigation tab can do O(1) lookups instead
-    # of scanning the full 1.5M-row frame on every user switch
-    user_data_dict: dict[str, pd.DataFrame] = {
-        u: grp.reset_index(drop=True)
-        for u, grp in merged.groupby("user", observed=True)
-    }
-
-    del ueba, analyst
-    gc.collect()
-
-    return merged, user_risk, user_data_dict
+    _log.warning("[load_data] complete")
+    return merged, user_risk, _all_users, _ds_min, _ds_max
 
 
 _USER_PROFILES_PATH = os.path.join(os.path.dirname(__file__), "user_profiles.parquet")
@@ -1108,17 +1255,31 @@ def load_user_profiles() -> pd.DataFrame:
     return pd.DataFrame(columns=["user", "department", "role", "supervisor", "role_sensitivity"])
 
 
+import logging as _startup_log
+_slog = _startup_log.getLogger("ueba.startup")
 try:
-    merged_df, user_risk, user_data_dict = load_data()
+    merged_df, user_risk, all_users, _DS_MIN, _DS_MAX = load_data()
+    _slog.warning("[STARTUP] load_data() complete")
     ueba_a_df = load_ueba_a()
     peer_baselines_df = load_peer_baselines()
     user_profiles_df = load_user_profiles()
+    _slog.warning("[STARTUP] load_ueba_a() complete — DATA_LOADED=True")
     DATA_LOADED = True
-except Exception:
+except Exception as _load_err:
+    import traceback as _tb
     ueba_a_df = None
     peer_baselines_df = None
     user_profiles_df = pd.DataFrame(columns=["user", "department", "role", "supervisor", "role_sensitivity", "employee_name"])
     DATA_LOADED = False
+    _LOAD_ERROR = _tb.format_exc()
+    _slog.warning(f"[STARTUP] load_data FAILED: {_LOAD_ERROR}")
+else:
+    _LOAD_ERROR = None
+
+def _get_alert_detail(user, day, key):
+    """Fetch explanation or top_contributors for a single (user, day) record."""
+    day_str = str(day.date()) if hasattr(day, "date") else str(day)
+    return fetch_alert_detail(str(user), day_str).get(key, None)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1127,13 +1288,9 @@ except Exception:
 
 if not DATA_LOADED:
     st.title("INSIDER THREAT DETECTION")
-    st.error(
-        "**Data files not found.** Please run the preprocessing and model notebooks first:\n\n"
-        "1. `CERT_Preprocessing.ipynb` → generates `processed_datasets/ueba_dataset_4/ueba_dataset_4_train.csv`\n"
-        "2. `Autoencoder.ipynb` → trains the encoder model\n"
-        "3. `Isolation_Forest.ipynb` → generates anomaly scores\n"
-        "4. `Alert_Object_Builder.ipynb` → generates `explainability/alert_table/alert_table_4.csv`"
-    )
+    st.error("**Failed to load data.** See details below.")
+    if _LOAD_ERROR:
+        st.code(_LOAD_ERROR, language="text")
     st.stop()
 
 
@@ -1193,12 +1350,12 @@ CHANNELS = {k: v for k, v in CHANNELS.items() if v}
 
 # Explicit channel→color mapping so each channel keeps its color regardless of which are present in filtered data
 CHANNEL_COLOR_MAP = {
-    "Authentication":  "#ffffff",
+    "Authentication":  "#00b4d8",
     "File Access":     "#e84545",
     "Removable Media": "#d4a017",
     "Email":           "#3a86a8",
-    "HTTP Activity":   "#7a7a7a",
-    "PC Activity":     "#6b4a2d",
+    "HTTP Activity":   "#9b59b6",
+    "PC Activity":     "#e67e22",
 }
 
 # user_risk is now pre-computed inside load_data() and cached
@@ -1476,6 +1633,109 @@ def build_alert_summary(top_contributors_raw) -> str:
     return f"This alert is mainly driven by {body}{suffix}."
 
 
+@st.cache_data(ttl=1, show_spinner=False)
+def _get_live_user_data(user: str) -> pd.DataFrame:
+    """Load live-scored rows for *user* from LIVE_OUTPUT, normalized to match user_data columns.
+
+    Delegates to _cached_live_rows to avoid a redundant full-file scan; the shared
+    1-second TTL (below the fragment's 2s run_every) ensures every fragment rerun
+    reads genuinely fresh data from the live output file.
+    """
+    rows, _ = _cached_live_rows()
+    if not rows:
+        return pd.DataFrame()
+    user_rows = [r for r in rows if r.get("user") == user]
+    if not user_rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(user_rows)
+    if "cert_timestamp" not in df.columns:
+        return pd.DataFrame()
+    df["day"] = pd.to_datetime(df["cert_timestamp"], errors="coerce").dt.normalize()
+    df = df.dropna(subset=["day"])
+    if df.empty:
+        return pd.DataFrame()
+    for _col in ("if_anomaly_score", "if_percentile_rank"):
+        if _col in df.columns:
+            df[_col] = pd.to_numeric(df[_col], errors="coerce")
+    # Keep one row per day: worst-of-day (highest percentile rank)
+    df = (
+        df.sort_values("if_percentile_rank", ascending=False)
+        .drop_duplicates(subset=["day"])
+        .copy()
+    )
+    # Map to column names the Investigation page expects
+    df["ae_risk_band"] = (
+        df["if_risk_band"].astype(str).str.upper()
+        if "if_risk_band" in df.columns
+        else "LOW"
+    )
+    df["ae_percentile_rank"] = df.get("if_percentile_rank", np.nan)
+    df["_live_row"] = True
+    return df.reset_index(drop=True)
+
+
+@st.cache_data(ttl=1, show_spinner=False)
+def _cached_live_file_stats():
+    """Return (row_count, stream_done) for the live output file.
+
+    Delegates to _cached_live_rows so at most one file scan occurs per TTL window
+    regardless of how many callers need live-file metadata.
+    """
+    rows, stream_done = _cached_live_rows()
+    return len(rows), stream_done
+
+
+# Maximum rows to load from the live output file.  Reading the full file when
+# it contains tens-of-thousands of rows causes a multi-second parse on every
+# 2-second cache expiry, making the dashboard unusable.  Only the most recent
+# MAX_LIVE_ROWS rows are kept; older simulation history is discarded.
+_MAX_LIVE_ROWS = 5_000
+
+@st.cache_data(ttl=1, show_spinner=False)
+def _cached_live_rows():
+    """Read the most recent _MAX_LIVE_ROWS scored rows from the live output file.
+
+    Reads only the tail of the file to avoid re-parsing hundreds of thousands of
+    rows on every 2-second cache expiry.  Returns (rows_list, stream_done).
+    Clear via _cached_live_rows.clear() when starting a new simulation.
+    """
+    if not os.path.exists(LIVE_OUTPUT):
+        return [], False
+    # Quick size check — skip expensive read if file is empty
+    if os.path.getsize(LIVE_OUTPUT) == 0:
+        return [], False
+    rows: list[dict] = []
+    stream_done = False
+    try:
+        with open(LIVE_OUTPUT, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+        # Process only the tail to cap memory and parse time
+        for line in lines[-_MAX_LIVE_ROWS:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("_eos"):
+                stream_done = True
+            else:
+                rows.append(obj)
+        # Check for _eos marker anywhere in the full tail scan
+        if not stream_done:
+            for line in lines[-100:]:
+                try:
+                    if json.loads(line.strip()).get("_eos"):
+                        stream_done = True
+                        break
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return rows, stream_done
+
+
 # ──────────────────────────────────────────────────────────────
 # Sidebar — Global Filters
 # ──────────────────────────────────────────────────────────────
@@ -1547,20 +1807,8 @@ with st.sidebar:
     _live_rows_received = 0
     _stream_done = False
     _live_session_active = bool(st.session_state.live_mode or st.session_state.live_paused)
-    if _live_session_active and os.path.exists(LIVE_OUTPUT):
-        with open(LIVE_OUTPUT, "r", encoding="utf-8") as _fh:
-            for _line in _fh:
-                _line = _line.strip()
-                if not _line:
-                    continue
-                try:
-                    _obj = json.loads(_line)
-                except json.JSONDecodeError:
-                    continue
-                if _obj.get("_eos"):
-                    _stream_done = True
-                else:
-                    _live_rows_received += 1
+    if _live_session_active:
+        _live_rows_received, _stream_done = _cached_live_file_stats()
 
     _proc = st.session_state.live_proc
     _proc_running = _proc is not None and _proc.poll() is None
@@ -1603,8 +1851,7 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-# Users list (used across pages for search)
-all_users = sorted(merged_df["user"].unique())
+# all_users, _DS_MIN, _DS_MAX are returned from load_data() — no per-rerun scan needed
 
 # Cap data points sent to Plotly — browser rendering is the main bottleneck
 MAX_PLOT_POINTS = 50_000
@@ -1614,12 +1861,46 @@ MAX_PLOT_POINTS = 50_000
 # ──────────────────────────────────────────────────────────────
 _DS_MIN = merged_df["day"].min().date()
 _DS_MAX = merged_df["day"].max().date()
+# When live simulation has run, live records extend beyond _DS_MAX. Track the
+# effective maximum so the date slider and filter can reach those dates.
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_live_max_date():
+    """Scan the live output file at most once per minute to find the latest date in
+    live records.  Returns _DS_MAX immediately when the file is absent or empty to
+    avoid an unnecessary file read on every page render when live mode is off.
+    Clear via _cached_live_max_date.clear() when starting a new simulation.
+    """
+    try:
+        if not os.path.exists(LIVE_OUTPUT) or os.path.getsize(LIVE_OUTPUT) == 0:
+            return _DS_MAX
+        rows, _ = _cached_live_rows()
+        live_max = _DS_MAX
+        for _o in rows:
+            _ts = _o.get("cert_timestamp")
+            if not _ts:
+                continue
+            _d = pd.to_datetime(_ts, errors="coerce")
+            if pd.notna(_d) and _d.date() > live_max:
+                live_max = _d.date()
+        return live_max
+    except Exception:
+        return _DS_MAX
+
+_ds_live_max = _cached_live_max_date()
 if "flt_date_start" not in st.session_state:
     st.session_state.flt_date_start = _DS_MIN
 if "flt_date_end" not in st.session_state:
     st.session_state.flt_date_end = _DS_MAX
 if "flt_risk" not in st.session_state:
     st.session_state.flt_risk = list(RISK_TIERS)
+if "flt_alert_sev" not in st.session_state:
+    st.session_state.flt_alert_sev = ["CRITICAL", "HIGH"]
+if "flt_min_pctl" not in st.session_state:
+    st.session_state.flt_min_pctl = 0.0
+if "flt_max_rows" not in st.session_state:
+    st.session_state.flt_max_rows = 500
+if "flt_sort_choice" not in st.session_state:
+    st.session_state.flt_sort_choice = "Highest score first"
 
 
 @st.dialog("Filters")
@@ -1629,7 +1910,7 @@ def show_filters():
         "Date Range",
         value=(st.session_state.flt_date_start, st.session_state.flt_date_end),
         min_value=_DS_MIN,
-        max_value=_DS_MAX,
+        max_value=_ds_live_max,
         label_visibility="collapsed",
         key="dlg_date",
     )
@@ -1641,6 +1922,60 @@ def show_filters():
         label_visibility="collapsed",
         key="dlg_risk",
     )
+
+    # ── Alerts-specific controls (only shown on the Alerts page) ──
+    _on_alerts = (active_page == "Alerts" and not st.session_state.get("live_mode", False))
+    if _on_alerts:
+        st.markdown("---")
+        st.markdown("**Alert Severity**")
+        _sev_options = list(RISK_TIERS)
+        dlg_alert_sev = st.multiselect(
+            "Alert Severity",
+            _sev_options,
+            default=st.session_state.flt_alert_sev,
+            label_visibility="collapsed",
+            key="dlg_alert_sev",
+        )
+        st.markdown("**Sort Alerts By**")
+        _sort_opts = [
+            "Highest score first",
+            "Lowest score first",
+            "Highest severity first",
+            "Lowest severity first",
+            "Most recent first",
+            "Oldest first",
+            "User A\u2013Z",
+            "User Z\u2013A",
+        ]
+        dlg_sort = st.selectbox(
+            "Sort Alerts By",
+            _sort_opts,
+            index=_sort_opts.index(st.session_state.flt_sort_choice)
+            if st.session_state.flt_sort_choice in _sort_opts else 0,
+            label_visibility="collapsed",
+            key="dlg_sort",
+        )
+        _pctl_col, _rows_col = st.columns(2)
+        with _pctl_col:
+            st.markdown("**Min Percentile**")
+            dlg_min_pctl = st.slider(
+                "Min Percentile",
+                0.0, 100.0,
+                st.session_state.flt_min_pctl,
+                label_visibility="collapsed",
+                key="dlg_min_pctl",
+            )
+        with _rows_col:
+            st.markdown("**Max Rows**")
+            dlg_max_rows = st.number_input(
+                "Max Rows",
+                min_value=10, max_value=10000,
+                value=st.session_state.flt_max_rows,
+                step=50,
+                label_visibility="collapsed",
+                key="dlg_max_rows",
+            )
+
     st.markdown("")
     apply_col, reset_col = st.columns(2)
     with apply_col:
@@ -1649,12 +1984,22 @@ def show_filters():
                 st.session_state.flt_date_start = dr[0]
                 st.session_state.flt_date_end = dr[1]
             st.session_state.flt_risk = rl if rl else list(RISK_TIERS)
+            if _on_alerts:
+                st.session_state.flt_alert_sev = dlg_alert_sev if dlg_alert_sev else ["CRITICAL", "HIGH"]
+                st.session_state.flt_sort_choice = dlg_sort
+                st.session_state.flt_min_pctl = float(dlg_min_pctl)
+                st.session_state.flt_max_rows = int(dlg_max_rows)
             st.rerun()
     with reset_col:
         if st.button("Reset", use_container_width=True):
             st.session_state.flt_date_start = _DS_MIN
             st.session_state.flt_date_end = _DS_MAX
             st.session_state.flt_risk = list(RISK_TIERS)
+            if _on_alerts:
+                st.session_state.flt_alert_sev = ["CRITICAL", "HIGH"]
+                st.session_state.flt_sort_choice = "Highest score first"
+                st.session_state.flt_min_pctl = 0.0
+                st.session_state.flt_max_rows = 500
             st.rerun()
 
 
@@ -1743,6 +2088,154 @@ def _corr_matrix(date_start, date_end, risk_levels: tuple, corr_feats: tuple) ->
     fdf = _cached_filtered_df(date_start, date_end, risk_levels)
     sample = fdf if len(fdf) <= MAX_PLOT_POINTS else fdf.sample(MAX_PLOT_POINTS, random_state=42)
     return sample[list(corr_feats)].corr()
+
+
+# ── Cached Overview aggregations ──────────────────────────────────────────────
+# These run on 1.2M rows so must be memoised; they recompute only when filters
+# change, not on every Streamlit rerun.
+
+@st.cache_data(show_spinner=False)
+def _ov_kpis(date_start, date_end, risk_levels: tuple) -> dict:
+    """All 7 Overview KPI values in one pass over the filtered frame."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    risk_str = fdf["ae_risk_band"].astype(str)
+    n = max(len(fdf), 1)
+    return {
+        "total_users":    int(fdf["user"].nunique()),
+        "total_records":  len(fdf),
+        "critical_users": int(fdf.loc[risk_str == "CRITICAL", "user"].nunique()),
+        "high_users":     int(fdf.loc[risk_str == "HIGH",     "user"].nunique()),
+        "medium_users":   int(fdf.loc[risk_str == "MEDIUM",   "user"].nunique()),
+        "avg_anomaly":    float(fdf["if_anomaly_score"].mean()),
+        "detection_rate": float(risk_str.isin(["CRITICAL", "HIGH", "MEDIUM"]).sum() / n * 100),
+    }
+
+
+@st.cache_data(show_spinner=False)
+def _ov_risk_counts(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
+    """Risk-band value counts for the donut chart."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    rc = fdf["ae_risk_band"].astype(str).value_counts().reset_index()
+    rc.columns = ["Risk Level", "Count"]
+    return rc
+
+
+@st.cache_data(show_spinner=False)
+def _ov_daily_alerts(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
+    """Daily alert counts by risk band for the trend bar chart."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    daily = (
+        fdf.groupby([fdf["day"].dt.date, fdf["ae_risk_band"].astype(str)])
+        .size()
+        .reset_index(name="Count")
+    )
+    daily.columns = ["Date", "Risk Level", "Count"]
+    return daily
+
+
+@st.cache_data(show_spinner=False)
+def _ov_histogram_sample(date_start, date_end, risk_levels: tuple, n: int = 50_000) -> pd.DataFrame:
+    """Sampled (score, risk_band) pairs for the anomaly score histogram."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    sub = fdf[["if_anomaly_score", "ae_risk_band"]].copy()
+    sub["ae_risk_band"] = sub["ae_risk_band"].astype(str)
+    return sub if len(sub) <= n else sub.sample(n, random_state=42)
+
+
+@st.cache_data(show_spinner=False)
+def _ov_flag_counts(date_start, date_end, risk_levels: tuple, flags: tuple) -> dict[str, tuple[int, float]]:
+    """Cross-channel flag sums: {flag: (count, pct)}."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    n = max(len(fdf), 1)
+    return {
+        f: (int(fdf[f].sum()), float(fdf[f].sum() / n * 100))
+        for f in flags if f in fdf.columns
+    }
+
+
+def _ov_args() -> tuple:
+    """Shorthand for the three filter keys used by all cached functions."""
+    return (
+        st.session_state.flt_date_start,
+        st.session_state.flt_date_end,
+        tuple(sorted(st.session_state.flt_risk)),
+    )
+
+
+# ── Cached Alerts aggregations ────────────────────────────────────────────────
+
+@st.cache_data(show_spinner=False)
+def _al_top_users(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
+    """Top 10 users by max percentile for the Alerts tab."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    return (
+        fdf.groupby("user", observed=True)
+        .agg(
+            max_percentile=("ae_percentile_rank", "max"),
+            critical_count=("ae_risk_band", lambda x: (x == "CRITICAL").sum()),
+            high_count=("ae_risk_band", lambda x: (x == "HIGH").sum()),
+        )
+        .reset_index()
+        .sort_values("max_percentile", ascending=False)
+        .head(10)
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _al_alert_data(
+    date_start, date_end, risk_levels: tuple,
+    alert_risk: tuple, min_pctl: float, max_results: int, sort_choice: str,
+) -> pd.DataFrame:
+    """Filtered + sorted alert feed for the Alerts tab."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+    data = fdf[
+        (fdf["ae_risk_band"].isin(alert_risk)) &
+        (fdf["ae_percentile_rank"] >= min_pctl)
+    ].copy()
+    if sort_choice == "Highest score first":
+        data = data.sort_values("ae_percentile_rank", ascending=False)
+    elif sort_choice == "Lowest score first":
+        data = data.sort_values("ae_percentile_rank", ascending=True)
+    elif sort_choice in ("Highest severity first", "Lowest severity first"):
+        _asc = sort_choice == "Lowest severity first"
+        data["_risk_sort_key"] = data["ae_risk_band"].astype(str).map(_RISK_ORDER).fillna(-1)
+        data = data.sort_values(
+            ["_risk_sort_key", "ae_percentile_rank"], ascending=[_asc, False]
+        ).drop(columns=["_risk_sort_key"])
+    elif sort_choice == "Most recent first":
+        data = data.sort_values("day", ascending=False)
+    elif sort_choice == "Oldest first":
+        data = data.sort_values("day", ascending=True)
+    elif sort_choice == "User A–Z":
+        data = data.sort_values("user", ascending=True)
+    else:
+        data = data.sort_values("user", ascending=False)
+    return data.head(int(max_results))
+
+
+# ── Cached Channels aggregations ──────────────────────────────────────────────
+
+@st.cache_data(show_spinner=False)
+def _ch_totals(date_start, date_end, risk_levels: tuple) -> dict[str, float]:
+    """Channel volume totals for the Channels tab donut chart."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    result: dict[str, float] = {}
+    for channel, feats in CHANNELS.items():
+        valid = [f for f in feats if f in fdf.columns]
+        if valid:
+            result[channel] = float(fdf[valid].sum().sum())
+    return result
+
+
+@st.cache_data(show_spinner=False)
+def _ch_box_sample(date_start, date_end, risk_levels: tuple, feature: str) -> pd.DataFrame:
+    """Down-sampled (ae_risk_band, feature) frame for the Channels box plot."""
+    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
+    if feature not in fdf.columns:
+        return pd.DataFrame()
+    subset = fdf[["ae_risk_band", feature]]
+    return subset if len(subset) <= MAX_PLOT_POINTS else subset.sample(MAX_PLOT_POINTS, random_state=42)
 
 
 _SECTION_INFO = {
@@ -1951,15 +2444,15 @@ if active_page == "Overview":
         unsafe_allow_html=True,
     )
     _filter_bar("ov_flt")
-    filtered_df = _get_filtered_df()
 
-    total_users = filtered_df["user"].nunique()
-    total_records = len(filtered_df)
-    critical_risk_users = filtered_df[filtered_df["ae_risk_band"] == "CRITICAL"]["user"].nunique()
-    high_risk_users = filtered_df[filtered_df["ae_risk_band"] == "HIGH"]["user"].nunique()
-    medium_risk_users = filtered_df[filtered_df["ae_risk_band"] == "MEDIUM"]["user"].nunique()
-    avg_anomaly = filtered_df["if_anomaly_score"].mean()
-    detection_rate = (filtered_df["ae_risk_band"].isin(["CRITICAL", "HIGH", "MEDIUM"]).sum() / max(len(filtered_df), 1)) * 100
+    _kpis = _ov_kpis(*_ov_args())
+    total_users        = _kpis["total_users"]
+    total_records      = _kpis["total_records"]
+    critical_risk_users = _kpis["critical_users"]
+    high_risk_users    = _kpis["high_users"]
+    medium_risk_users  = _kpis["medium_users"]
+    avg_anomaly        = _kpis["avg_anomaly"]
+    detection_rate     = _kpis["detection_rate"]
 
     st.markdown(
         "<div class='kpi-scroll-wrapper'>"
@@ -2025,8 +2518,7 @@ if active_page == "Overview":
 
     with col_left:
         section_header("Risk Distribution", "sh_risk_dist")
-        risk_counts = filtered_df["ae_risk_band"].value_counts().reset_index()
-        risk_counts.columns = ["Risk Level", "Count"]
+        risk_counts = _ov_risk_counts(*_ov_args())
         fig_donut = px.pie(
             risk_counts, values="Count", names="Risk Level",
             color="Risk Level",
@@ -2041,17 +2533,17 @@ if active_page == "Overview":
 
     with col_right:
         section_header("Alert Trend Over Time", "sh_alert_trend")
-        daily_alerts = (
-            filtered_df.groupby([filtered_df["day"].dt.date, "ae_risk_band"])
-            .size()
-            .reset_index(name="count")
-        )
-        daily_alerts.columns = ["Date", "Risk Level", "Count"]
-        fig_trend = px.area(
+        daily_alerts = _ov_daily_alerts(*_ov_args())
+        # Stack order: LOW at bottom, CRITICAL at top — reflects true data proportions
+        _trend_stack_order = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+        fig_trend = px.bar(
             daily_alerts, x="Date", y="Count", color="Risk Level",
             color_discrete_map=RISK_COLORS,
+            category_orders={"Risk Level": _trend_stack_order},
+            barmode="stack",
         )
-        fig_trend.update_layout(**PLOTLY_LAYOUT, height=340, xaxis_title="", yaxis_title="Alert Count")
+        fig_trend.update_layout(**PLOTLY_LAYOUT, height=340, xaxis_title="", yaxis_title="Alert Count",
+                                bargap=0, bargroupgap=0)
         st.plotly_chart(fig_trend, use_container_width=True)
 
     # ── Row 3: Top Risky Users + Score Distribution ──
@@ -2113,8 +2605,7 @@ if active_page == "Overview":
 
     with col_right2:
         section_header("Anomaly Score Distribution", "sh_score_dist")
-        # Sample for histogram to avoid sending 2M+ points to Plotly
-        hist_df = filtered_df if len(filtered_df) <= MAX_PLOT_POINTS else filtered_df.sample(MAX_PLOT_POINTS, random_state=42)
+        hist_df = _ov_histogram_sample(*_ov_args())
         fig_hist = px.histogram(
             hist_df, x="if_anomaly_score", nbins=80,
             color="ae_risk_band", color_discrete_map=RISK_COLORS,
@@ -2136,76 +2627,140 @@ if active_page == "Overview":
             ("cloud_upload_flag",           "Cloud Upload",          "#00b4d8"),
             ("non_primary_pc_risk_flag",    "Non-Primary PC",        "#7f8c8d"),
         ]
-        _cards_html = ""
+        _flag_counts_cache = _ov_flag_counts(*_ov_args(), flags=tuple(CROSS_FLAGS))
+        _cards_inner = ""
         for flag, label, color in _flag_info:
-            if flag in CROSS_FLAGS and flag in filtered_df.columns:
-                count = int(filtered_df[flag].sum())
-                pct = (count / max(len(filtered_df), 1)) * 100
-                _cards_html += (
-                    f"<div style='flex:1;background:#0a0a0a;border:1px solid #1a1a1a;"
-                    f"border-left:3px solid {color};padding:14px 18px;min-width:160px;'>"
-                    f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;color:#555;"
-                    f"text-transform:uppercase;letter-spacing:1.5px;'>{label}</div>"
-                    f"<div style='display:flex;align-items:baseline;gap:8px;margin-top:8px;'>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:24px;"
-                    f"color:{color};font-weight:600;'>{count:,}</span>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:12px;"
-                    f"color:#444;'>{pct:.1f}%</span>"
-                    f"</div></div>"
+            if flag in CROSS_FLAGS and flag in _flag_counts_cache:
+                count, pct = _flag_counts_cache[flag]
+                _cards_inner += (
+                    f"<div class='kpi-card' style='border-color:{color}'>"
+                    f"<h3>{label}</h3>"
+                    f"<h1 style='color:{color}'>{count:,}</h1>"
+                    f"<p>{pct:.1f}% of records</p>"
+                    f"</div>"
                 )
         st.markdown(
-            f"<div style='display:flex;gap:12px;margin:4px 0 16px 0;flex-wrap:wrap;'>{_cards_html}</div>",
+            "<div class='kpi-scroll-wrapper'>"
+            "<div class='kpi-scroll-arrow' id='cf-arrow-left'>&#8592;</div>"
+            f"<div class='kpi-scroll-row' id='cf-row'>{_cards_inner}</div>"
+            "<div class='kpi-scroll-arrow' id='cf-arrow-right'>&#8594;</div>"
+            "</div>",
             unsafe_allow_html=True,
         )
-
-
-# ══════════════════════════════════════════════════════════════
-# PAGE: Investigation
-# ══════════════════════════════════════════════════════════════
-
-if active_page == "Investigation":
-    st.markdown(
-        "<div class='page-header-block'>"
-        "<h1 class='page-title'>Investigation</h1>"
-        "<p class='page-subtitle'>Deep-dive into a single user&#39;s behavioral timeline, radar profile, and raw activity records.</p>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-    _filter_bar("inv_flt")
-    filtered_df = _get_filtered_df()
-
-    # Build user list ordered by risk (highest first)
-    _risk_sorted = user_risk["user"].tolist()
-    _remaining = [u for u in all_users if u not in set(_risk_sorted)]
-    _all_users_sorted = _risk_sorted + _remaining
-
-    selected_user = st.selectbox(
-        "Search User ID",
-        _all_users_sorted,
-        index=None,
-        placeholder="Type to search, e.g. acm2278",
-        key="inv_user_select",
-    )
-
-    if selected_user is None:
-        st.info("Select a user above to begin investigation. Users are sorted by risk (highest first).")
-        st.stop()
-
-    # O(1) lookup from pre-grouped dict — avoids scanning 1.5 M rows per user switch
-    _u_rows = user_data_dict.get(selected_user, pd.DataFrame())
-    if not _u_rows.empty:
-        _u_mask = (
-            _u_rows["ae_risk_band"].isin(st.session_state.flt_risk)
-            & (_u_rows["day"].dt.date >= st.session_state.flt_date_start)
-            & (_u_rows["day"].dt.date <= st.session_state.flt_date_end)
+        components.html(
+            "<script>"
+            "(function(){"
+            "  var p = window.parent.document;"
+            "  function wire(){"
+            "    var row = p.getElementById('cf-row');"
+            "    var lft = p.getElementById('cf-arrow-left');"
+            "    var rgt = p.getElementById('cf-arrow-right');"
+            "    if(!row||!lft||!rgt){setTimeout(wire,100);return;}"
+            "    lft.addEventListener('click',function(){row.scrollBy({left:-200,behavior:'smooth'});});"
+            "    rgt.addEventListener('click',function(){row.scrollBy({left:200,behavior:'smooth'});});"
+            "  }"
+            "  wire();"
+            "})();"
+            "</script>",
+            height=0,
         )
+        st.markdown("<div style='margin-bottom:16px'></div>", unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════
+# Investigation — live-updating fragment
+# ══════════════════════════════════════════════════════════════
+# All dynamic per-user content lives inside this fragment so that Streamlit
+# can rerun it every 2 seconds independently of the main script.  This avoids:
+#   • time.sleep() blocking the UI thread
+#   • st.stop() cutting off the refresh loop when user_data is temporarily empty
+#   • full-page reruns on every tick (only the fragment DOM subtree updates)
+
+@st.fragment(run_every="2s")
+def _render_investigation_content() -> None:
+    _user: str | None = st.session_state.get("inv_user_select")
+    if _user is None:
+        return
+
+    _inv_merged, _, _, _, _ = load_data()
+    _inv_ueba_a = load_ueba_a()
+
+    # Historical rows — date filter intentionally omitted so that live records
+    # (which fall outside the historical date range) are never silently dropped.
+    _u_rows = _inv_merged.loc[_inv_merged["user"] == _user].reset_index(drop=True)
+    if not _u_rows.empty:
+        _u_mask = _u_rows["ae_risk_band"].isin(st.session_state.flt_risk)
         user_data = _u_rows[_u_mask].sort_values("day")
     else:
         user_data = pd.DataFrame()
 
+    # ── Merge live data ─────────────────────────────────────────────────────
+    # _inv_live_mode tracks whether the dashboard launched the simulation (for
+    # the status banner).  Live data is ALWAYS merged when LIVE_OUTPUT has
+    # content — this covers both dashboard-launched and CLI-launched simulations.
+    _inv_live_mode = bool(st.session_state.live_mode or st.session_state.live_paused)
+    _inv_live_count = 0
+    if os.path.exists(LIVE_OUTPUT) and os.path.getsize(LIVE_OUTPUT) > 0:
+        _live_u = _get_live_user_data(_user)
+        if not _live_u.empty:
+            # Apply risk-band filter only — live records are expected to fall
+            # outside the historical date range, so the date filter is skipped
+            # for live rows to prevent them from being silently dropped.
+            _lm = _live_u["ae_risk_band"].isin(st.session_state.flt_risk)
+            _live_u = _live_u[_lm].copy()
+            if not _live_u.empty:
+                # Prefer historical rows for days already in user_data; live rows extend the timeline
+                _existing_days = (
+                    set(user_data["day"].dt.date) if not user_data.empty else set()
+                )
+                _new_live = _live_u[~_live_u["day"].dt.date.isin(_existing_days)].copy()
+                if not _new_live.empty:
+                    user_data = (
+                        pd.concat([user_data, _new_live], ignore_index=True)
+                        .sort_values("day")
+                        .reset_index(drop=True)
+                    )
+                _inv_live_count = len(_live_u)
+
     if user_data.empty:
-        st.warning("No data for this user in the current filter range.")
-        st.stop()
+        if _inv_live_mode or (os.path.exists(LIVE_OUTPUT) and os.path.getsize(LIVE_OUTPUT) > 0):
+            st.info("No data for this user yet — waiting for live records to arrive.")
+        else:
+            st.warning("No data for this user in the current filter range.")
+        # Return (not st.stop()) so the fragment keeps auto-running and picks
+        # up the first live record as soon as it arrives.
+        return
+
+    # ── Live investigation status banner ────────────────────────────────────
+    if _inv_live_mode or _inv_live_count > 0:
+        if not _inv_live_mode:
+            # Live data present but simulation wasn't started from this dashboard session
+            _inv_live_status = "ACTIVE"
+            _inv_live_color = "#3a86a8"
+            _inv_live_dot = "●"
+        elif st.session_state.live_mode and not st.session_state.live_paused:
+            _inv_live_status = "LIVE"
+            _inv_live_color = "#e84545"
+            _inv_live_dot = "●"
+        else:
+            _inv_live_status = "PAUSED"
+            _inv_live_color = "#d4a017"
+            _inv_live_dot = "⏸"
+        _inv_live_msg = (
+            f"{_inv_live_dot} {_inv_live_status} &mdash; "
+            f"{_inv_live_count} live record{'s' if _inv_live_count != 1 else ''} merged into view"
+            if _inv_live_count > 0
+            else f"{_inv_live_dot} {_inv_live_status} &mdash; awaiting live records for this user"
+        )
+        st.markdown(
+            f"<div style='background:{_inv_live_color}11;border:1px solid {_inv_live_color}33;"
+            f"border-left:3px solid {_inv_live_color};padding:6px 14px;margin:0 0 14px 0;"
+            f"display:flex;align-items:center;gap:8px;'>"
+            f"<span style='font-family:JetBrains Mono,monospace;font-size:11px;"
+            f"color:{_inv_live_color};letter-spacing:1px;'>{_inv_live_msg}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
     # ── User Profile Section ──
     _prof_row = user_profiles_df[user_profiles_df["user"] == selected_user]
@@ -2430,9 +2985,9 @@ if active_page == "Investigation":
     u5.metric("Medium-Risk Days", u_med_days)
     u6.metric("Days Observed", u_total_days)
 
-        # ── Alert Context Summary (shown when navigating from Alerts tab) ──
+    # ── Alert Context Summary (shown when navigating from Alerts tab) ──
     _alert_ctx = st.session_state.get("inv_alert_context")
-    if _alert_ctx and _alert_ctx.get("user") == selected_user:
+    if _alert_ctx and _alert_ctx.get("user") == _user:
         _ctx_risk = _alert_ctx.get("risk", "")
         _ctx_risk_color = RISK_COLORS.get(_ctx_risk, "#666666")
         _ctx_day = _alert_ctx.get("day", "")
@@ -2455,9 +3010,9 @@ if active_page == "Investigation":
 
         # ── Raw Alert Record ──
         _ctx_day_ts = pd.to_datetime(_ctx_day, errors="coerce")
-        _raw_row = merged_df[
-            (merged_df["user"] == selected_user) &
-            (merged_df["day"] == _ctx_day_ts)
+        _raw_row = _inv_merged[
+            (_inv_merged["user"] == _user) &
+            (_inv_merged["day"] == _ctx_day_ts)
         ]
 
         _ALERT_RECORD_FIELDS = [
@@ -2480,7 +3035,7 @@ if active_page == "Investigation":
                 return str(int(fv)) if fv == int(fv) else f"{fv:.2f}"
             except (TypeError, ValueError, OverflowError):
                 return str(val)
-            
+
         _BADGE_COLS = {"risk_levels", "if_risk_band"}
         _kv_parts = []
         if not _raw_row.empty:
@@ -2528,11 +3083,7 @@ if active_page == "Investigation":
         )
 
         # ── Top Reconstruction Error Contributors ──
-        _tc_raw = (
-            _raw_row.iloc[0]["top_contributors"]
-            if not _raw_row.empty and "top_contributors" in _raw_row.columns
-            else None
-        )
+        _tc_raw = _get_alert_detail(_user, _ctx_day_ts, "top_contributors")
         _tc_pairs = parse_top_contributors_with_values(_tc_raw)
 
         if _tc_pairs:
@@ -2580,12 +3131,11 @@ if active_page == "Investigation":
                     unsafe_allow_html=True,
                 )
 
-
         # ── PC-Level Drill-Down (UEBA Table A) ──
-        if ueba_a_df is not None:
-            _drill = ueba_a_df[
-                (ueba_a_df["user"] == selected_user) &
-                (ueba_a_df["day"] == _ctx_day_ts)
+        if _inv_ueba_a is not None:
+            _drill = _inv_ueba_a[
+                (_inv_ueba_a["user"] == _user) &
+                (_inv_ueba_a["day"] == _ctx_day_ts)
             ].copy()
             _drop_cols = [c for c in ("user", "day") if c in _drill.columns]
             if _drop_cols:
@@ -2594,7 +3144,7 @@ if active_page == "Investigation":
                 _drill = _drill.sort_values("pc").reset_index(drop=True)
             else:
                 _drill = _drill.reset_index(drop=True)
-            
+
             if _drill.empty:
                 st.markdown(
                     f"<div style='background:#0a0a0a;border:1px solid #1a1a1a;"
@@ -2606,7 +3156,6 @@ if active_page == "Investigation":
                     unsafe_allow_html=True,
                 )
             else:
-               
                 _drill_display = _drill.drop(columns=["pc"], errors="ignore")
                 _drill_cols = list(_drill_display.columns)
                 _drill_last = _drill_cols[-1] if _drill_cols else None
@@ -2646,7 +3195,6 @@ if active_page == "Investigation":
                     unsafe_allow_html=True,
                 )
 
-
     # ── Anomaly Timeline ──
     section_header("Anomaly Score Timeline", "sh_score_timeline")
     fig_timeline = go.Figure()
@@ -2664,7 +3212,6 @@ if active_page == "Investigation":
                 x=subset["day"], y=subset["if_anomaly_score"],
                 mode="markers", name=risk,
                 marker=dict(size=8, color=color, symbol="square", line=dict(width=1, color="#000")),
-
             ))
     fig_timeline.update_layout(**PLOTLY_LAYOUT, height=320, xaxis_title="Date", yaxis_title="Anomaly Score")
     st.plotly_chart(fig_timeline, use_container_width=True)
@@ -2708,7 +3255,7 @@ if active_page == "Investigation":
             fig_radar = go.Figure()
             fig_radar.add_trace(go.Scatterpolar(
                 r=user_vals, theta=radar_categories, fill="toself",
-                name=selected_user, line=dict(color="#e84545", width=2),
+                name=_user, line=dict(color="#e84545", width=2),
                 fillcolor="rgba(232,69,69,0.15)",
         ))
 
@@ -2811,6 +3358,40 @@ if active_page == "Investigation":
         user_data[display_cols].sort_values("day", ascending=False),
         use_container_width=True, height=350,
     )
+    # Auto-refresh is handled by the fragment's run_every="2s" — no time.sleep needed.
+
+
+# ══════════════════════════════════════════════════════════════
+# PAGE: Investigation
+# ══════════════════════════════════════════════════════════════
+
+if active_page == "Investigation":
+    st.markdown(
+        "<div class='page-header-block'>"
+        "<h1 class='page-title'>Investigation</h1>"
+        "<p class='page-subtitle'>Deep-dive into a single user&#39;s behavioral timeline, radar profile, and raw activity records.</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    _filter_bar("inv_flt")
+
+    # Build user list ordered by risk (highest first)
+    _risk_sorted = user_risk["user"].tolist()
+    _remaining = [u for u in all_users if u not in set(_risk_sorted)]
+    _all_users_sorted = _risk_sorted + _remaining
+
+    selected_user = st.selectbox(
+        "Search User ID",
+        _all_users_sorted,
+        index=None,
+        placeholder="Type to search, e.g. acm2278",
+        key="inv_user_select",
+    )
+
+    if selected_user is None:
+        st.info("Select a user above to begin investigation. Users are sorted by risk (highest first).")
+    else:
+        _render_investigation_content()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -2827,6 +3408,15 @@ if active_page == "Alerts":
     )
 
     # ── Live-simulation control row ────────────────────────────
+    # Detect Streamlit Cloud: the repo is mounted at /mount/src/ on the cloud runner.
+    # On Streamlit Cloud use live_replay.py (no tensorflow/joblib needed).
+    # Locally use live_simulation.py (full ML scoring pipeline).
+    _ON_CLOUD = os.path.exists("/mount/src")
+    _LIVE_SCRIPT = (
+        os.path.join(BASE_DIR, "live_replay.py")
+        if _ON_CLOUD
+        else LIVE_SIM_SCRIPT
+    )
     ctrl_start, ctrl_pause = st.columns([3, 2])
     with ctrl_start:
         if not st.session_state.live_mode:
@@ -2836,10 +3426,15 @@ if active_page == "Alerts":
                     os.remove(LIVE_OUTPUT)
                 if os.path.exists(LIVE_PAUSE_FLAG):
                     os.remove(LIVE_PAUSE_FLAG)
+                _cached_live_max_date.clear()
+                _cached_live_file_stats.clear()
+                _cached_live_rows.clear()
+                _get_live_user_data.clear()
                 st.session_state.live_page = 0
-                # Launch the unified simulation script as a subprocess
+                # On cloud: live_replay.py (pre-scored data, no ML deps)
+                # Locally: live_simulation.py (full encoder + isolation forest)
                 proc = subprocess.Popen(
-                    [sys.executable, LIVE_SIM_SCRIPT, "--interval", "0.5"],
+                    [sys.executable, _LIVE_SCRIPT, "--interval", "0.5"],
                     cwd=BASE_DIR,
                 )
                 st.session_state.live_proc = proc
@@ -2864,18 +3459,44 @@ if active_page == "Alerts":
                 st.session_state.live_page = 0
                 st.rerun()
     with ctrl_pause:
-        if st.session_state.live_mode:
             if not st.session_state.live_paused:
-                if st.button("⏸ PAUSE", key="pause_live", use_container_width=True):
-                    open(LIVE_PAUSE_FLAG, "w", encoding="utf-8").close()  # existence of the file signals pause
+                if st.button("⏸   PAUSE", key="pause_live", use_container_width=True):
+                    with open(LIVE_PAUSE_FLAG, "w", encoding="utf-8") as _pf:
+                        pass  # existence of the file signals pause
                     st.session_state.live_paused = True
                     st.rerun()
             else:
-                if st.button("▶ RESUME", key="resume_live", use_container_width=True):
+                if st.button("▶   RESUME", key="resume_live", use_container_width=True):
                     if os.path.exists(LIVE_PAUSE_FLAG):
                         os.remove(LIVE_PAUSE_FLAG)
                     st.session_state.live_paused = False
                     st.rerun()
+    components.html(
+        "<script>"
+        "(function(){"
+        "  function styleSimBtns(){"
+        "    var btns=window.parent.document.querySelectorAll('[data-testid=\"stButton\"] button');"
+        "    for(var i=0;i<btns.length;i++){"
+        "      var txt=(btns[i].innerText||btns[i].textContent||'').trim();"
+        "      if(txt.indexOf('LIVE SIMULATION')!==-1||txt==='⏸   PAUSE'||txt==='▶   RESUME'){"
+        "        btns[i].style.setProperty('padding','16px 24px','important');"
+        "        btns[i].style.setProperty('font-size','13px','important');"
+        "        btns[i].style.setProperty('letter-spacing','4px','important');"
+        "        btns[i].style.setProperty('color','#cccccc','important');"
+        "        btns[i].style.setProperty('border-color','#2a2a2a','important');"
+        "      }"
+        "    }"
+        "  }"
+        "  setTimeout(styleSimBtns,50);"
+        "  setTimeout(styleSimBtns,300);"
+        "})();"
+        "</script>",
+        height=0,
+    )
+    st.markdown(
+        "<hr style='border:none;border-top:1px solid #111;margin:16px 0 0 0;'>",
+        unsafe_allow_html=True,
+    )
 
     # ── LIVE mode ─────────────────────────────────────────────
     if st.session_state.live_mode:
@@ -2885,22 +3506,8 @@ if active_page == "Alerts":
         proc_running = proc is not None and proc.poll() is None
         stream_done  = False
 
-        # Read all scored rows emitted so far
-        live_rows = []
-        if os.path.exists(LIVE_OUTPUT):
-            with open(LIVE_OUTPUT, "r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if obj.get("_eos"):
-                        stream_done = True
-                    else:
-                        live_rows.append(obj)
+        # Read all scored rows emitted so far (cached to avoid re-reading 500 MB+ per rerun)
+        live_rows, stream_done = _cached_live_rows()
 
         if live_rows:
             live_df = pd.DataFrame(live_rows)
@@ -3059,10 +3666,10 @@ if active_page == "Alerts":
                     _cs = getattr(_r, "ui_composite_score", np.nan)
                     _sc_d = f"{float(_cs):.1f}" if pd.notna(_cs) else "--"
 
-                    _top_raw = getattr(_r, "top_contributors", None)
+                    _top_raw = _get_alert_detail(str(_user), _ts_p, "top_contributors")
                     _summary = build_alert_summary(_top_raw)
                     if _summary == "No contributor detail available for this alert.":
-                        _expl = getattr(_r, "explanation", "")
+                        _expl = _get_alert_detail(str(_user), _ts_p, "explanation") or ""
                         if isinstance(_expl, str) and _expl.strip():
                             _summary = _expl.strip()
                     # Escape HTML in user-derived strings
@@ -3185,6 +3792,7 @@ if active_page == "Alerts":
             # Natural end-of-stream: auto-stop
             st.session_state.live_proc = None
             st.session_state.live_mode = False
+            st.session_state.live_paused = False
             st.success("Simulation complete — all test rows processed.")
 
     # ── STATIC mode ───────────────────────────────────────────
@@ -3192,33 +3800,6 @@ if active_page == "Alerts":
         # Reset pagination and clear live state when returning to static mode
         if st.session_state.get("live_page") != 0:
             st.session_state.live_page = 0
-        _filter_bar("al_flt")
-        filtered_df = _get_filtered_df()
-
-        # Alert severity filter + sort controls
-        alert_cols = st.columns([2, 2, 2, 4])
-        with alert_cols[0]:
-            alert_risk = st.multiselect("Severity", ["HIGH", "MEDIUM", "LOW"], default=["HIGH", "MEDIUM"], key="alert_sev")
-        with alert_cols[1]:
-            min_pctl = st.slider("Min Percentile", 0.0, 100.0, 0.0, key="min_pctl")
-        with alert_cols[2]:
-            max_results = st.number_input("Max Rows", min_value=10, max_value=10000, value=500, step=50, key="max_rows")
-        with alert_cols[3]:
-            sort_choice = st.selectbox(
-                "Sort alerts by",
-                [
-                    "Highest score first",
-                    "Lowest score first",
-                    "Highest severity first",
-                    "Lowest severity first",
-                    "Most recent first",
-                    "Oldest first",
-                    "User A–Z",
-                    "User Z–A",
-                ],
-                index=0,
-                key="alert_sort_choice",
-            )
 
         # ── Top 10 Riskiest Users in Alerts ──
         section_header("Top 10 Riskiest Users", "sh_top_users")
@@ -3227,17 +3808,7 @@ if active_page == "Alerts":
             "Click a user to open their investigation profile.</p>",
             unsafe_allow_html=True,
         )
-        top_users = (
-            filtered_df.groupby("user", observed=True)
-            .agg(
-                max_percentile=("ae_percentile_rank", "max"),
-                critical_count=("ae_risk_band", lambda x: (x == "CRITICAL").sum()),
-                high_count=("ae_risk_band", lambda x: (x == "HIGH").sum()),
-            )
-            .reset_index()
-            .sort_values("max_percentile", ascending=False)
-            .head(10)
-        )
+        top_users = _al_top_users(*_ov_args())
 
         if top_users.empty:
             st.info("No users available in the current filter range.")
@@ -3287,12 +3858,13 @@ if active_page == "Alerts":
                         st.rerun()
                 st.markdown("<div style='border-bottom:1px solid #111;margin:0;'></div>", unsafe_allow_html=True)
 
-        # Alert severity filter within this tab
-        _severity_counts = {
-            tier: int((filtered_df["ae_risk_band"] == tier).sum()) for tier in RISK_TIERS
-        }
+        # ── Date/risk summary (no filter button here) ──
+        _active_risks = ", ".join(st.session_state.flt_risk) if len(st.session_state.flt_risk) < 4 else "All risk levels"
+        st.caption(
+            f"Date: {st.session_state.flt_date_start} to {st.session_state.flt_date_end}   |   Risk: {_active_risks}"
+        )
 
-
+#####################
 
         # ── Combined Triage Status & Severity Filter ──
         section_header("FILTER BY TRIAGE STATUS & SEVERITY", "sh_disp_sev_filter")
@@ -3407,9 +3979,9 @@ if active_page == "Alerts":
                 alert_data = alert_data.sort_values("user", ascending=True)
             else:  # User Z–A
                 alert_data = alert_data.sort_values("user", ascending=False)
-
-                if not show_suppressed_alerts:
-                    alert_data = alert_data.head(int(max_results))
+            alert_data = alert_data.head(int(max_results)))
+                    
+                    #########################
 
         # Cap card rendering to keep the UI responsive
         CARD_LIMIT = 10
@@ -3422,6 +3994,13 @@ if active_page == "Alerts":
             else:
                 st.info("No alerts match the current filters.")
         else:
+            # ── Alert Feed header with Filter button inline ──
+            _af_left, _af_right = st.columns([9, 1], vertical_alignment="bottom")
+            with _af_left:
+                st.markdown("<div class='section-header'>Alert Feed</div>", unsafe_allow_html=True)
+            with _af_right:
+                if st.button("Filter", key="al_flt", use_container_width=True):
+                    show_filters()
             if total_alerts > CARD_LIMIT:
                 st.caption(
                     f"Displaying top {CARD_LIMIT} of {total_alerts:,} matching alerts. "
@@ -3462,7 +4041,7 @@ if active_page == "Alerts":
                 day_str = (day_val.strftime("%Y-%m-%d") if hasattr(day_val, "strftime")
                            else str(day_val).split("T")[0].split(" ")[0])
                 pctl    = getattr(row, "ae_percentile_rank", 0.0)
-                top_raw = getattr(row, "top_contributors", None)
+                top_raw = _get_alert_detail(getattr(row, "user", ""), getattr(row, "day", None), "top_contributors")
                 summary = build_alert_summary(top_raw)
                 status  = str(getattr(row, "status", "")).upper()
                 supp_rule = getattr(row, "suppression_rule", None) or "—"
@@ -3589,7 +4168,6 @@ if active_page == "Channels":
         unsafe_allow_html=True,
     )
     _filter_bar("ch_flt")
-    filtered_df = _get_filtered_df()
 
     # ── Channel volume over time ──
     ch1, ch2 = st.columns(2)
@@ -3609,11 +4187,7 @@ if active_page == "Channels":
 
     with ch2:
         section_header("Channel Volume Share", "sh_chan_share")
-        ch_totals = {}
-        for channel, feats in CHANNELS.items():
-            valid = [f for f in feats if f in filtered_df.columns]
-            if valid:
-                ch_totals[channel] = filtered_df[valid].sum().sum()
+        ch_totals = _ch_totals(*_ov_args())
         if ch_totals:
             ch_df = pd.DataFrame(list(ch_totals.items()), columns=["Channel", "Total Events"])
             fig_ch_pie = px.pie(ch_df, values="Total Events", names="Channel",
@@ -3625,9 +4199,8 @@ if active_page == "Channels":
     # ── Feature-level box plots ──
     section_header("Feature Distributions by Risk Level", "sh_feat_dist")
     selected_feature = st.selectbox("Select Feature", RAW_FEATURES, key="feat_box")
-    if selected_feature in filtered_df.columns:
-        # Downsample for box plot — browser can't handle 2M+ points
-        box_df = filtered_df if len(filtered_df) <= MAX_PLOT_POINTS else filtered_df.sample(MAX_PLOT_POINTS, random_state=42)
+    box_df = _ch_box_sample(*_ov_args(), selected_feature)
+    if not box_df.empty:
         fig_box = px.box(
             box_df, x="ae_risk_band", y=selected_feature,
             color="ae_risk_band", color_discrete_map=RISK_COLORS,
@@ -3657,7 +4230,10 @@ if active_page == "Channels":
 
 
 # Keep live row counter and status fresh while browsing non-Alerts pages.
-if active_page != "Alerts" and st.session_state.live_mode:
+# Investigation is excluded: its @st.fragment(run_every="2s") handles its own
+# refresh cycle independently.  A full st.rerun() here would reset the fragment
+# timer every second, preventing it from ever firing on its own schedule.
+if active_page not in ("Alerts", "Investigation") and st.session_state.live_mode:
     _proc = st.session_state.live_proc
     _proc_running = _proc is not None and _proc.poll() is None
     if _proc_running and not st.session_state.live_paused:
