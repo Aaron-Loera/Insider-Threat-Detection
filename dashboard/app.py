@@ -16,6 +16,11 @@ import hashlib
 import html as _html_mod
 from db import init_db, upsert_disposition, get_disposition, get_all_dispositions
 
+ALERT_STATUS_OPTIONS = ["NEW", "INVESTIGATING", "RESOLVED", "DISMISSED"]
+
+def _on_status_change(user, day, key):
+    upsert_disposition(user, day, st.session_state[key])
+
 try:
     import pyrebase
     _PYREBASE_AVAILABLE = True
@@ -2545,8 +2550,7 @@ if active_page == "Alerts":
         if st.session_state.live_mode:
             if not st.session_state.live_paused:
                 if st.button("⏸ PAUSE", key="pause_live", use_container_width=True):
-                    with open(LIVE_PAUSE_FLAG, "w", encoding="utf-8") as _pf:
-                        pass  # existence of the file signals pause
+                    open(LIVE_PAUSE_FLAG, "w", encoding="utf-8").close()  # existence of the file signals pause
                     st.session_state.live_paused = True
                     st.rerun()
             else:
@@ -2971,26 +2975,40 @@ if active_page == "Alerts":
             tier: int((filtered_df["ae_risk_band"] == tier).sum()) for tier in RISK_TIERS
         }
 
-        section_header("Filter by severity", "sh_top_users")
 
-        _sev_cols = st.columns([1, 1, 1, 1, 4])
-        _tier_checked = {}
-        for _idx, _tier in enumerate(RISK_TIERS):
-            _color = RISK_COLORS[_tier]
-            _count = _severity_counts[_tier]
-            with _sev_cols[_idx]:
-                _tier_checked[_tier] = st.checkbox(
-                    _tier,
-                    value=(_tier in ["CRITICAL", "HIGH"]),
-                    key=f"alert_sev_{_tier}",
-                )
-                st.markdown(
-                    f"<span style='background:{_color}22;color:{_color};font-size:9px;"
-                    f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 6px;"
-                    f"border:1px solid {_color}55;display:inline-block;margin-top:-6px;'>"
-                    f"{_count:,} alert{'s' if _count != 1 else ''}</span>",
-                    unsafe_allow_html=True,
-                )
+
+        # ── Combined Triage Status & Severity Filter ──
+        section_header("FILTER BY TRIAGE STATUS & SEVERITY", "sh_disp_sev_filter")
+        # Stack filters vertically
+        with st.container():
+            # Triage status filter
+            _disp_filter = st.radio(
+                "Disposition filter",
+                options=["Show New Only", "Show All", "Show Investigating", "Show Resolved", "Show Dismissed"],
+                index=0,
+                horizontal=True,
+                key="alert_disp_filter",
+                label_visibility="collapsed",
+            )
+            # Severity filter
+            _sev_cols = st.columns([1, 1, 1, 1, 4])
+            _tier_checked = {}
+            for _idx, _tier in enumerate(RISK_TIERS):
+                _color = RISK_COLORS[_tier]
+                _count = _severity_counts[_tier]
+                with _sev_cols[_idx]:
+                    _tier_checked[_tier] = st.checkbox(
+                        _tier,
+                        value=(_tier in ["CRITICAL", "HIGH"]),
+                        key=f"alert_sev_{_tier}",
+                    )
+                    st.markdown(
+                        f"<span style='background:{_color}22;color:{_color};font-size:9px;"
+                        f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 6px;"
+                        f"border:1px solid {_color}55;display:inline-block;margin-top:-6px;'>"
+                        f"{_count:,} alert{'s' if _count != 1 else ''}</span>",
+                        unsafe_allow_html=True,
+                    )
 
         alert_risk = [t for t, checked in _tier_checked.items() if checked]
 
@@ -3002,6 +3020,28 @@ if active_page == "Alerts":
             (filtered_df["ae_risk_band"].isin(alert_risk)) &
             (filtered_df["ae_percentile_rank"] >= min_pctl)
         ].copy()
+
+        # Triage status filter logic
+        _disp_lookup = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
+        def _day_key(r) -> str:
+            dv = r["day"]
+            if hasattr(dv, "strftime"):
+                return dv.strftime("%Y-%m-%d")
+            return str(dv).split("T")[0].split(" ")[0]
+        _FILTER_TO_STATUS = {
+            "Show New Only": "NEW",
+            "Show Investigating": "INVESTIGATING",
+            "Show Resolved": "RESOLVED",
+            "Show Dismissed": "DISMISSED",
+        }
+        if _disp_filter in _FILTER_TO_STATUS:
+            _target_status = _FILTER_TO_STATUS[_disp_filter]
+            alert_data = alert_data[
+                alert_data.apply(
+                    lambda r: _disp_lookup.get((r["user"], _day_key(r)), "NEW") == _target_status,
+                    axis=1,
+                )
+            ].copy()
 
         # Sort based on explicit outcome label
         if sort_choice == "Highest score first":
@@ -3026,18 +3066,10 @@ if active_page == "Alerts":
         else:  # User Z–A
             alert_data = alert_data.sort_values("user", ascending=False)
 
-        alert_data = alert_data.head(int(max_results))
-
         # Cap card rendering to keep the UI responsive
         CARD_LIMIT = 10
         total_alerts = len(alert_data)
         card_data = alert_data.head(CARD_LIMIT)
-
-        _STATUS_OPTIONS = ["NEW", "INVESTIGATING", "RESOLVED", "DISMISSED"]
-        _disp_lookup = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
-
-        def _on_status_change(user, day, key):
-            upsert_disposition(user, day, st.session_state[key])
 
         if total_alerts == 0:
             st.info("No alerts match the current filters.")
@@ -3069,7 +3101,8 @@ if active_page == "Alerts":
                 risk    = getattr(row, "ae_risk_band",    "LOW")
                 user    = getattr(row, "user",           "—")
                 day_val = getattr(row, "day",            None)
-                day_str = day_val.strftime("%Y-%m-%d") if hasattr(day_val, "strftime") else str(day_val)
+                day_str = (day_val.strftime("%Y-%m-%d") if hasattr(day_val, "strftime")
+                           else str(day_val).split("T")[0].split(" ")[0])
                 pctl    = getattr(row, "ae_percentile_rank", 0.0)
                 top_raw = getattr(row, "top_contributors", None)
                 summary = build_alert_summary(top_raw)
@@ -3120,7 +3153,7 @@ if active_page == "Alerts":
                 with c_status:
                     st.selectbox(
                         "Status",
-                        options=_STATUS_OPTIONS,
+                        options=ALERT_STATUS_OPTIONS,
                         key=_disp_key,
                         on_change=_on_status_change,
                         args=(user, day_str, _disp_key),
