@@ -3979,7 +3979,7 @@ if active_page == "Alerts":
                 alert_data = alert_data.sort_values("user", ascending=True)
             else:  # User Z–A
                 alert_data = alert_data.sort_values("user", ascending=False)
-            alert_data = alert_data.head(int(max_results))
+            alert_data = alert_data.head(int(max_results)))
                     
                     #########################
 
