@@ -1122,31 +1122,20 @@ def load_ueba_a():
 
 @st.cache_resource(show_spinner="Loading dataset...")
 def load_data():
-    """Load pre-merged parquet and pre-compute user_risk.
+    """Merge alert_table_6 and ueba_dataset_6b, then pre-compute user_risk.
 
-    Uses @st.cache_resource (not cache_data) so the DataFrame is stored by
-    reference — no pickle serialisation overhead. cache_data would pickle the
-    250 MB DataFrame to disk on first call, temporarily doubling peak RAM and
-    pushing the container past the 1 GB Streamlit Cloud free-tier limit.
-
-    On cloud: downloads merged_dataset_5.parquet (62 MB) via hf_hub_download,
-    which streams to the HF local disk cache before reading — avoids holding
-    the compressed bytes AND the decompressed Arrow table in memory at the same
-    time (unlike the hf:// fsspec path which buffers in-process).
+    Uses @st.cache_resource so the DataFrame is stored by reference — no pickle
+    serialisation overhead on repeated Streamlit reruns.
     """
     import gc
     import logging as _logging
+    import pyarrow.parquet as _pq
     _log = _logging.getLogger("ueba.load_data")
     _log.warning("[load_data] started")
 
-    _HF_REPO  = "DSKittens/ueba-dashboard-dat"
-    _hf_token = st.secrets.get("huggingface", {}).get("token", None)
-
-    # Local path for the pre-merged parquet (built by scripts/build_merged_parquet.py)
-    _MERGED_LOCAL = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "explainability", "alert_table", "merged_dataset_5.parquet",
-    )
+    _BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _ALERT_PATH = os.path.join(_BASE, "explainability", "alert_table", "alert_table_6.parquet")
+    _UEBA_PATH  = os.path.join(_BASE, "processed_datasets", "ueba_dataset_6", "ueba_dataset_6b.parquet")
 
     def _downcast(df):
         for col in df.select_dtypes(include=["float64"]).columns:
@@ -1155,33 +1144,24 @@ def load_data():
             df[col] = df[col].astype("int32")
         return df
 
-    # ── Load single pre-merged file ──
-    _log.warning("[load_data] loading merged dataset")
-    if os.path.exists(_MERGED_LOCAL):
-        import pyarrow.parquet as _pq
-        _tbl = _pq.read_table(_MERGED_LOCAL)
-        merged = _tbl.to_pandas()
-        del _tbl
-        _log.warning("[load_data] loaded from local merged parquet")
-    else:
-        # Cloud: hf_hub_download caches the file to disk before reading.
-        # This avoids buffering the compressed bytes in-process (unlike hf://).
-        from huggingface_hub import hf_hub_download as _hf_dl
-        import pyarrow.parquet as _pq
-        _cached = _hf_dl(
-            repo_id=_HF_REPO,
-            filename="merged_dataset_5.parquet",
-            repo_type="dataset",
-            token=_hf_token,
-        )
-        _log.warning(f"[load_data] file cached at {_cached}")
-        _tbl = _pq.read_table(_cached)
-        _log.warning(f"[load_data] arrow table: {_tbl.nbytes/1e6:.0f} MB")
-        merged = _tbl.to_pandas()
-        del _tbl
-        _log.warning("[load_data] converted to pandas")
+    _log.warning("[load_data] loading alert table (v6)")
+    alert = _pq.read_table(_ALERT_PATH).to_pandas()
+    alert["day"] = pd.to_datetime(alert["day"], errors="coerce")
+    _downcast(alert)
 
+    _log.warning("[load_data] loading ueba dataset (v6b)")
+    ueba = _pq.read_table(_UEBA_PATH).to_pandas()
+    ueba["day"] = pd.to_datetime(ueba["day"], errors="coerce")
+    _downcast(ueba)
+
+    # Only bring in columns from alert_table that aren't already in ueba_dataset_6b
+    # (avoids duplicating department, role, supervisor, role_sensitivity).
+    _alert_only = ["user", "day"] + [c for c in alert.columns if c not in ueba.columns]
+    _log.warning("[load_data] merging")
+    merged = ueba.merge(alert[_alert_only], on=["user", "day"], how="left")
+    del alert, ueba
     gc.collect()
+
     _downcast(merged)
     merged["day"] = pd.to_datetime(merged["day"], errors="coerce")
     for _col in ("user", "ae_risk_band", "if_risk_band"):
@@ -2667,6 +2647,203 @@ def _render_investigation_content() -> None:
             unsafe_allow_html=True,
         )
 
+    # ── User Profile Section ──
+    _prof_row = user_profiles_df[user_profiles_df["user"] == _user]
+    _prof = _prof_row.iloc[0] if not _prof_row.empty else None
+
+    _name      = _prof["employee_name"]     if _prof is not None else _user
+    _dept      = _prof["department"]        if _prof is not None else "—"
+    _role      = _prof["role"]              if _prof is not None else "—"
+    _sup_id    = _prof["supervisor"]        if _prof is not None else None
+    _rs        = float(_prof["role_sensitivity"]) if _prof is not None else None
+
+    # Resolve supervisor display name (Name · user_id)
+    if _sup_id:
+        _sup_prof = user_profiles_df[user_profiles_df["user"] == _sup_id]
+        _sup_name = _sup_prof.iloc[0]["employee_name"] if not _sup_prof.empty else _sup_id
+        _sup_display = f"{_sup_name} &middot; <span style='color:#555;font-size:11px;'>{_sup_id}</span>"
+    else:
+        _sup_display = "—"
+
+    _all_u_rows = _u_rows
+    _total_alerts = len(_all_u_rows)
+    _first_alert  = _all_u_rows["day"].min().strftime("%Y-%m-%d") if not _all_u_rows.empty else "—"
+    _last_alert   = _all_u_rows["day"].max().strftime("%Y-%m-%d") if not _all_u_rows.empty else "—"
+
+    if _rs is not None:
+        if _rs >= 0.85:
+            _rs_color, _rs_label = "#ff1744", f"{_rs:.2f} · Critical"
+        elif _rs >= 0.70:
+            _rs_color, _rs_label = "#e84545", f"{_rs:.2f} · High"
+        elif _rs >= 0.50:
+            _rs_color, _rs_label = "#d4a017", f"{_rs:.2f} · Medium"
+        else:
+            _rs_color, _rs_label = "#3a86a8", f"{_rs:.2f} · Low"
+    else:
+        _rs_color, _rs_label = "#555", "—"
+
+    def _prof_field(label: str, value: str, value_color: str = "#e0e0e0") -> str:
+        return (
+            f"<div style='display:flex;flex-direction:column;gap:2px;'>"
+            f"<span style='font-family:JetBrains Mono,monospace;font-size:9px;"
+            f"text-transform:uppercase;letter-spacing:1.2px;color:#555;'>{label}</span>"
+            f"<span style='font-family:Inter,sans-serif;font-size:13px;font-weight:500;"
+            f"color:{value_color};'>{value}</span>"
+            f"</div>"
+        )
+
+    st.markdown(
+        "<div style='background:#0a0a0a;border:1px solid #1c1c1c;padding:16px 20px;margin:0 0 18px 0;'>"
+        # Name header row
+        f"<div style='margin-bottom:14px;border-bottom:1px solid #1c1c1c;padding-bottom:10px;"
+        f"display:flex;align-items:baseline;gap:12px;'>"
+        f"<span style='font-family:Inter,sans-serif;font-size:16px;font-weight:600;color:#e0e0e0;'>{_name}</span>"
+        f"<span style='font-family:JetBrains Mono,monospace;font-size:11px;color:#555;'>{_user}</span>"
+        f"</div>"
+        # Fields grid
+        "<div style='display:grid;grid-template-columns:repeat(6,1fr);gap:16px;'>"
+        + _prof_field("Department", _dept)
+        + _prof_field("Role", _role)
+        + _prof_field("Supervisor", _sup_display)
+        + _prof_field("Role Sensitivity", _rs_label, _rs_color)
+        + _prof_field("Total Alerts", f"{_total_alerts:,}")
+        + _prof_field("First / Last Alert", f"{_first_alert}&nbsp;&nbsp;→&nbsp;&nbsp;{_last_alert}")
+        + "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Alert History ──
+    _ah_disps = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
+
+    _FEAT_CHANNEL: dict[str, str] = {}
+    for _ch, _ch_feats in CHANNELS.items():
+        for _f in _ch_feats:
+            _FEAT_CHANNEL[_f] = _ch
+
+    _DISP_COLORS = {
+        "NEW":           "#3a86a8",
+        "INVESTIGATING": "#d4a017",
+        "RESOLVED":      "#2ec27e",
+        "DISMISSED":     "#555555",
+    }
+
+    def _threat_cats(tc_raw) -> list[str]:
+        feats = parse_top_contributors(tc_raw)
+        seen: set[str] = set()
+        cats: list[str] = []
+        for f in feats:
+            base = f.replace("_zscore", "").replace("_rolling_delta", "")
+            ch = _FEAT_CHANNEL.get(f) or _FEAT_CHANNEL.get(base)
+            if ch is None and (f in CROSS_FLAGS or base in CROSS_FLAGS):
+                ch = "Cross-Channel"
+            if ch and ch not in seen:
+                seen.add(ch)
+                cats.append(ch)
+        return cats
+
+    _ah_rows_df = _all_u_rows.sort_values("day", ascending=False).reset_index(drop=True)
+    section_header("Alert History", "sh_alert_history")
+
+    _AH_PAGE_SIZE = 10
+    _ah_total = len(_ah_rows_df)
+    _ah_total_pages = max(1, (_ah_total + _AH_PAGE_SIZE - 1) // _AH_PAGE_SIZE)
+
+    _ah_page_key = f"ah_page_{_user}"
+    if _ah_page_key not in st.session_state or st.session_state.get("_ah_last_user") != _user:
+        st.session_state[_ah_page_key] = 0
+    st.session_state["_ah_last_user"] = _user
+
+    _ah_page = st.session_state[_ah_page_key]
+    _ah_slice = _ah_rows_df.iloc[_ah_page * _AH_PAGE_SIZE : (_ah_page + 1) * _AH_PAGE_SIZE]
+
+    def _cat_badge(cat: str) -> str:
+        c = CHANNEL_COLOR_MAP.get(cat, "#bb44f0")
+        return (
+            f"<span style='background:{c}22;color:{c};font-size:9px;"
+            f"font-family:JetBrains Mono,monospace;letter-spacing:0.8px;"
+            f"padding:1px 5px;border:1px solid {c}55;margin-right:3px;"
+            f"white-space:nowrap;display:inline-block;'>{cat}</span>"
+        )
+
+    _ah_tbody_parts: list[str] = []
+    for _, _ahr in _ah_slice.iterrows():
+        _ahr_day = _ahr["day"]
+        _ahr_day_str = _ahr_day.strftime("%Y-%m-%d") if hasattr(_ahr_day, "strftime") else str(_ahr_day)
+        _ahr_risk = str(_ahr.get("ae_risk_band", "")).upper()
+        _ahr_pctl = float(_ahr.get("ae_percentile_rank", 0.0))
+        _ahr_rc = RISK_COLORS.get(_ahr_risk, "#666666")
+        _ahr_cats = _threat_cats(_ahr.get("top_contributors"))
+        _ahr_disp = _ah_disps.get((_ahr["user"], _ahr_day_str), "NEW")
+        _ahr_dc = _DISP_COLORS.get(_ahr_disp, "#555555")
+
+        _ahr_cat_html = (
+            "".join(_cat_badge(c) for c in _ahr_cats)
+            if _ahr_cats
+            else "<span style='color:#444;font-family:JetBrains Mono,monospace;font-size:11px;'>—</span>"
+        )
+
+        _ah_tbody_parts.append(
+            "<tr>"
+            f"<td style='font-family:JetBrains Mono,monospace;font-size:11px;color:#aaa;"
+            f"padding:8px 16px 8px 0;border-bottom:1px solid #0f0f0f;white-space:nowrap;"
+            f"vertical-align:middle;'>{_ahr_day_str}</td>"
+            f"<td style='padding:8px 16px 8px 0;border-bottom:1px solid #0f0f0f;"
+            f"white-space:nowrap;vertical-align:middle;'>"
+            f"<span style='background:{_ahr_rc}22;color:{_ahr_rc};font-size:9px;"
+            f"font-family:JetBrains Mono,monospace;letter-spacing:1px;"
+            f"padding:2px 6px;border:1px solid {_ahr_rc}55;'>{_ahr_risk}</span></td>"
+            f"<td style='font-family:JetBrains Mono,monospace;font-size:11px;color:{_ahr_rc};"
+            f"padding:8px 16px 8px 0;border-bottom:1px solid #0f0f0f;white-space:nowrap;"
+            f"vertical-align:middle;'>P{_ahr_pctl:.1f}</td>"
+            f"<td style='padding:8px 16px 8px 0;border-bottom:1px solid #0f0f0f;"
+            f"min-width:200px;vertical-align:middle;'>{_ahr_cat_html}</td>"
+            f"<td style='padding:8px 0 8px 0;border-bottom:1px solid #0f0f0f;"
+            f"white-space:nowrap;vertical-align:middle;'>"
+            f"<span style='background:{_ahr_dc}22;color:{_ahr_dc};font-size:9px;"
+            f"font-family:JetBrains Mono,monospace;letter-spacing:1px;"
+            f"padding:2px 6px;border:1px solid {_ahr_dc}55;'>{_ahr_disp}</span></td>"
+            "</tr>"
+        )
+
+    _ah_th = (
+        "font-family:JetBrains Mono,monospace;font-size:10px;font-weight:600;"
+        "color:#555;text-transform:uppercase;letter-spacing:1.2px;"
+        "padding-bottom:10px;padding-right:16px;border-bottom:1px solid #1a1a1a;"
+    )
+    st.markdown(
+        "<div style='background:#0a0a0a;border:1px solid #1c1c1c;padding:14px 18px 10px 18px;"
+        "margin:0 0 4px 0;overflow-x:auto;-webkit-overflow-scrolling:touch;'>"
+        "<table style='width:100%;border-collapse:collapse;min-width:600px;'>"
+        "<thead><tr>"
+        f"<th style='{_ah_th}'>Day</th>"
+        f"<th style='{_ah_th}'>Risk</th>"
+        f"<th style='{_ah_th}'>AE Pctl</th>"
+        f"<th style='{_ah_th}'>Threat Categories</th>"
+        f"<th style='{_ah_th.replace('padding-right:16px;', 'padding-right:0;')}'>Disposition</th>"
+        "</tr></thead>"
+        f"<tbody>{''.join(_ah_tbody_parts)}</tbody>"
+        "</table></div>",
+        unsafe_allow_html=True,
+    )
+
+    _ah_pg_left, _ah_pg_mid, _ah_pg_right = st.columns([1, 4, 1])
+    _ah_start = _ah_page * _AH_PAGE_SIZE + 1
+    _ah_end = min(_ah_start + _AH_PAGE_SIZE - 1, _ah_total)
+    with _ah_pg_left:
+        if st.button("← Previous", key="ah_prev", disabled=(_ah_page == 0), use_container_width=True):
+            st.session_state[_ah_page_key] -= 1
+            st.rerun()
+    with _ah_pg_mid:
+        st.markdown(
+            f"<div style='text-align:center;font-family:JetBrains Mono,monospace;font-size:11px;"
+            f"color:#555;padding-top:6px;'>{_ah_start}–{_ah_end} of {_ah_total}</div>",
+            unsafe_allow_html=True,
+        )
+    with _ah_pg_right:
+        if st.button("Next →", key="ah_next", disabled=(_ah_page >= _ah_total_pages - 1), use_container_width=True):
+            st.session_state[_ah_page_key] += 1
+            st.rerun()
+
     # ── User KPI Row ──
     u1, u2, u3, u4, u5, u6 = st.columns(6)
     u_max_score = user_data["if_anomaly_score"].max()
@@ -3532,30 +3709,134 @@ if active_page == "Alerts":
             f"Date: {st.session_state.flt_date_start} to {st.session_state.flt_date_end}   |   Risk: {_active_risks}"
         )
 
-        # Read alert controls from session state (set via filter modal)
-        alert_risk  = st.session_state.flt_alert_sev or ["CRITICAL", "HIGH"]
-        min_pctl    = st.session_state.flt_min_pctl
-        max_results = st.session_state.flt_max_rows
-        sort_choice = st.session_state.flt_sort_choice
+#####################
 
-        # Active alert filter summary pill
-        _sev_summary = " ".join(
-            f"<span style='background:{RISK_COLORS.get(t,'#888')}22;color:{RISK_COLORS.get(t,'#888')};"
-            f"font-size:9px;font-family:JetBrains Mono,monospace;letter-spacing:1px;"
-            f"padding:1px 7px;border:1px solid {RISK_COLORS.get(t,'#888')}55;"
-            f"display:inline-block;margin-right:4px;'>{t}</span>"
-            for t in RISK_TIERS if t in alert_risk
-        )
-        st.markdown(
-            f"<p style='font-family:JetBrains Mono,monospace;font-size:10px;color:#444;margin:4px 0 16px 0;'>"
-            f"{_sev_summary}&nbsp; &middot;&nbsp; Min P{min_pctl:.0f}"
-            f"&nbsp; &middot;&nbsp; {sort_choice}&nbsp; &middot;&nbsp; Max {max_results:,} rows</p>",
-            unsafe_allow_html=True,
-        )
+        # ── Combined Triage Status & Severity Filter ──
+        section_header("FILTER BY TRIAGE STATUS & SEVERITY", "sh_disp_sev_filter")
+        # Stack filters vertically
+        with st.container():
+            # Triage status filter
+            _disp_filter = st.radio(
+                "Disposition filter",
+                options=["Show New Only", "Show All", "Show Investigating", "Show Resolved", "Show Dismissed"],
+                index=0,
+                horizontal=True,
+                key="alert_disp_filter",
+                label_visibility="collapsed",
+            )
+            # Severity filter
+            _sev_cols = st.columns([1, 1, 1, 1, 4])
+            _severity_counts = {
+                tier: int((filtered_df["ae_risk_band"] == tier).sum())
+                if "ae_risk_band" in filtered_df.columns else 0
+                for tier in RISK_TIERS
+            }
+            _tier_checked = {}
+            for _idx, _tier in enumerate(RISK_TIERS):
+                _color = RISK_COLORS[_tier]
+                _count = _severity_counts[_tier]
+                with _sev_cols[_idx]:
+                    _tier_checked[_tier] = st.checkbox(
+                        _tier,
+                        value=(_tier in ["CRITICAL", "HIGH"]),
+                        key=f"alert_sev_{_tier}",
+                    )
+                    st.markdown(
+                        f"<span style='background:{_color}22;color:{_color};font-size:9px;"
+                        f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 6px;"
+                        f"border:1px solid {_color}55;display:inline-block;margin-top:-6px;'>"
+                        f"{_count:,} alert{'s' if _count != 1 else ''}</span>",
+                        unsafe_allow_html=True,
+                    )
 
-        alert_data = _al_alert_data(
-            *_ov_args(), tuple(alert_risk), min_pctl, max_results, sort_choice
-        )
+        alert_risk = [t for t, checked in _tier_checked.items() if checked]
+
+                # Suppressed Alerts viewing mode toggle
+        _supp_check_col = st.columns([5, 1])
+        with _supp_check_col[0]:
+            show_suppressed_alerts = st.checkbox(
+                "View Suppressed Alerts",
+                value=False,
+                key="alert_view_suppressed",
+            )
+            if show_suppressed_alerts:
+                st.markdown(
+                    f"<span style='background:#d4a01722;color:#d4a017;font-size:9px;"
+                    f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 6px;"
+                    f"border:1px solid #d4a01755;display:inline-block;margin-top:-6px;'>"
+                    f"Top 10 suppressed</span>",
+                    unsafe_allow_html=True,
+                )
+
+        # Pull filter state set by the global filter dialog
+        min_pctl    = st.session_state.get("flt_min_pctl", 0.0)
+        sort_choice = st.session_state.get("flt_sort_choice", "Highest score first")
+        max_results = st.session_state.get("flt_max_results", 500)
+
+        # Centralized severity mapping — extend here when new bands are added
+        _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+
+        # Suppressed Alerts mode: show only suppressed alerts (top 10)
+        if show_suppressed_alerts:
+            alert_data = (
+                filtered_df[
+                    filtered_df["status"].astype(str).str.upper() == "SUPPRESSED"
+                ].copy()
+                if "status" in filtered_df.columns
+                else pd.DataFrame()
+            )
+            if "ae_percentile_rank" in alert_data.columns:
+                alert_data = alert_data[alert_data["ae_percentile_rank"] >= min_pctl]
+                alert_data = alert_data.sort_values("ae_percentile_rank", ascending=False)
+            elif "if_percentile_rank" in alert_data.columns:
+                alert_data = alert_data[alert_data["if_percentile_rank"] >= min_pctl]
+                alert_data = alert_data.sort_values("if_percentile_rank", ascending=False)
+        else:
+            # Normal mode: filter by selected severities, exclude suppressed alerts
+            alert_data = filtered_df[
+                (filtered_df["ae_risk_band"].isin(alert_risk)) &
+                (filtered_df["ae_percentile_rank"] >= min_pctl) &
+                (
+                    ~(filtered_df["status"].astype(str).str.upper() == "SUPPRESSED")
+                    if "status" in filtered_df.columns
+                    else True
+                )
+            ].copy()
+
+        # Sort based on explicit outcome label (skip in suppressed mode, already sorted)
+        if not show_suppressed_alerts:
+            if sort_choice == "Highest score first":
+                if "ae_percentile_rank" in alert_data.columns:
+                    alert_data = alert_data.sort_values("ae_percentile_rank", ascending=False)
+            elif sort_choice == "Lowest score first":
+                if "ae_percentile_rank" in alert_data.columns:
+                    alert_data = alert_data.sort_values("ae_percentile_rank", ascending=True)
+            elif sort_choice in ("Highest severity first", "Lowest severity first"):
+                _asc = sort_choice == "Lowest severity first"
+                alert_data["_risk_sort_key"] = alert_data["ae_risk_band"].astype(str).map(_RISK_ORDER).fillna(-1)
+                if "ae_percentile_rank" in alert_data.columns:
+                    alert_data = alert_data.sort_values(
+                        ["_risk_sort_key", "ae_percentile_rank"],
+                        ascending=[_asc, False],
+                    ).drop(columns=["_risk_sort_key"])
+                else:
+                    alert_data = alert_data.sort_values(
+                        ["_risk_sort_key"],
+                        ascending=[_asc],
+                    ).drop(columns=["_risk_sort_key"])
+            elif sort_choice == "Most recent first":
+                alert_data["day"] = pd.to_datetime(alert_data["day"], errors="coerce")
+                alert_data = alert_data.sort_values("day", ascending=False)
+            elif sort_choice == "Oldest first":
+                alert_data["day"] = pd.to_datetime(alert_data["day"], errors="coerce")
+                alert_data = alert_data.sort_values("day", ascending=True)
+            elif sort_choice == "User A–Z":
+                alert_data = alert_data.sort_values("user", ascending=True)
+            else:  # User Z–A
+                alert_data = alert_data.sort_values("user", ascending=False)
+            alert_data = alert_data.head(int(max_results))
+                    
+                    #########################
 
         # Cap card rendering to keep the UI responsive
         CARD_LIMIT = 10
