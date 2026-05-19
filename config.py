@@ -52,8 +52,8 @@ LDAP_PATH = _local_or("LDAP_PATH", _ldap_default)
 
 
 # Active Model Version
-MODEL_VERSION = _local_or("MODEL_VERSION", "5")
-LIVE_MODEL_VERSION = _local_or("LIVE_MODEL_VERSION", _local_or("MODEL_VERSION", "5"))
+MODEL_VERSION = _local_or("MODEL_VERSION", "6")
+LIVE_MODEL_VERSION = _local_or("LIVE_MODEL_VERSION", _local_or("MODEL_VERSION", "6"))
 
 
 # Version-Scoped Internal Paths
