@@ -1137,6 +1137,23 @@ def load_data():
     _ALERT_PATH = os.path.join(_BASE, "explainability", "alert_table", "alert_table_6.parquet")
     _UEBA_PATH  = os.path.join(_BASE, "processed_datasets", "ueba_dataset_6", "ueba_dataset_6b.parquet")
 
+    _HF_BASE = "https://huggingface.co/datasets/Melusi-S/DSK-UEBA-Dataset6/resolve/main"
+    _DOWNLOADS = [
+        (_ALERT_PATH, f"{_HF_BASE}/alert_table_6.parquet"),
+        (_UEBA_PATH,  f"{_HF_BASE}/ueba_dataset_6b.parquet"),
+    ]
+
+    def _fetch(local_path, url):
+        import urllib.request
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        _log.warning(f"[load_data] downloading {os.path.basename(local_path)} from HuggingFace…")
+        urllib.request.urlretrieve(url, local_path)
+        _log.warning(f"[load_data] saved {local_path}")
+
+    for _local, _url in _DOWNLOADS:
+        if not os.path.exists(_local):
+            _fetch(_local, _url)
+
     def _downcast(df):
         for col in df.select_dtypes(include=["float64"]).columns:
             df[col] = df[col].astype("float32")
