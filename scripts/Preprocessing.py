@@ -1160,7 +1160,7 @@ def save_dataset(dataset: pd.DataFrame, filename: str, output_dir: str=DEFAULT_O
         str: Full path to the saved dataset
     """
     # Ensures directory exists
-    save_path = os.path.join(os.getcwd(), "processed_datasets", output_dir)
+    save_path = os.path.join(os.getcwd(), output_dir)
     os.makedirs(save_path, exist_ok=True)
 
     fmt = filename.split(".")[-1]
