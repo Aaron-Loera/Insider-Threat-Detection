@@ -66,43 +66,62 @@ _PASSTHROUGH_COLS: list[str] = [
     "suspicious_upload_flag", "cloud_upload_flag", "non_primary_pc_risk_flag",
 ]
 
-# ── Column aliases: v5 dataset renamed some features; map back to v1 names ───
-_V5_TO_V1_RENAME: dict[str, str] = {
-    "external_emails_sent": "external_emails",
-    "attachments_sent":     "attachements_sent",   # v1 had typo; scaler was fitted on it
-    # z-scores
-    "external_emails_sent_zscore":  "external_emails_zscore",
-    "attachments_sent_zscore":      "attachements_sent_zscore",
-    # rolling deltas
-    "external_emails_sent_rolling_delta": "external_emails_rolling_delta",
-    "attachments_sent_rolling_delta":     "attachements_sent_rolling_delta",
-}
+_V5_TO_V1_RENAME: dict[str, str] = {}
 
-# Ordered list of the 54 feature columns the v1 scaler/encoder were trained on
+# Ordered list of the 108 feature columns
 _V1_FEATURE_COLS: list[str] = [
+    # Base features
     "logon_count", "logoff_count", "off_hours_logon",
     "file_open_count", "file_write_count", "file_copy_count", "file_delete_count",
-    "unique_files_accessed", "off_hours_files_accessed",
+    "off_hours_files_accessed",
     "usb_insert_count", "usb_remove_count", "off_hours_usb_usage",
-    "emails_sent", "unique_recipients", "external_emails", "attachements_sent",
-    "off_hours_emails",
+    "emails_sent", "external_emails_sent", "attachments_sent", "off_hours_emails",
+    "http_total_requests", "http_visit_count", "http_download_count", "http_upload_count",
+    "http_jobsite_visits", "http_cloud_storage_visits", "http_suspicious_site_visits",
+    "off_hours_http_requests", "http_long_url_count",
+    "pc_seen_before", "new_pc_after_stable_history", "pc_prior_use_ratio",
+    "primary_pc_activity_ratio", "distinct_pcs_used_prior",
+    "pcs_used_count", "non_primary_pc_used_flag", "non_primary_pc_http_requests_flag",
+    "non_primary_pc_usb_flag", "non_primary_pc_file_copy_flag",
+    "unique_files_accessed", "unique_recipients", "unique_domains_visited",
+    # Z-scores
     "logon_count_zscore", "logoff_count_zscore", "off_hours_logon_zscore",
     "file_open_count_zscore", "file_write_count_zscore", "file_copy_count_zscore",
     "file_delete_count_zscore", "unique_files_accessed_zscore",
     "off_hours_files_accessed_zscore", "usb_insert_count_zscore",
     "usb_remove_count_zscore", "off_hours_usb_usage_zscore",
-    "emails_sent_zscore", "unique_recipients_zscore", "external_emails_zscore",
-    "attachements_sent_zscore", "off_hours_emails_zscore",
+    "emails_sent_zscore", "external_emails_sent_zscore", "attachments_sent_zscore",
+    "off_hours_emails_zscore", "unique_recipients_zscore",
+    "http_total_requests_zscore", "http_visit_count_zscore", "http_download_count_zscore",
+    "http_upload_count_zscore", "http_jobsite_visits_zscore",
+    "http_cloud_storage_visits_zscore", "http_suspicious_site_visits_zscore",
+    "off_hours_http_requests_zscore", "http_long_url_count_zscore",
+    "unique_domains_visited_zscore",
+    "pcs_used_count_zscore", "non_primary_pc_used_flag_zscore",
+    "non_primary_pc_http_requests_flag_zscore", "non_primary_pc_usb_flag_zscore",
+    "non_primary_pc_file_copy_flag_zscore",
+    # Rolling deltas
     "logon_count_rolling_delta", "logoff_count_rolling_delta",
     "off_hours_logon_rolling_delta", "file_open_count_rolling_delta",
     "file_write_count_rolling_delta", "file_copy_count_rolling_delta",
     "file_delete_count_rolling_delta", "unique_files_accessed_rolling_delta",
     "off_hours_files_accessed_rolling_delta", "usb_insert_count_rolling_delta",
     "usb_remove_count_rolling_delta", "off_hours_usb_usage_rolling_delta",
-    "emails_sent_rolling_delta", "unique_recipients_rolling_delta",
-    "external_emails_rolling_delta", "attachements_sent_rolling_delta",
-    "off_hours_emails_rolling_delta",
-    "usb_file_activity_flag", "off_hours_activity_flag", "external_comm_activity_flag",
+    "emails_sent_rolling_delta", "external_emails_sent_rolling_delta",
+    "attachments_sent_rolling_delta", "off_hours_emails_rolling_delta",
+    "unique_recipients_rolling_delta",
+    "http_total_requests_rolling_delta", "http_visit_count_rolling_delta",
+    "http_download_count_rolling_delta", "http_upload_count_rolling_delta",
+    "http_jobsite_visits_rolling_delta", "http_cloud_storage_visits_rolling_delta",
+    "http_suspicious_site_visits_rolling_delta", "off_hours_http_requests_rolling_delta",
+    "http_long_url_count_rolling_delta", "unique_domains_visited_rolling_delta",
+    "pcs_used_count_rolling_delta", "non_primary_pc_used_flag_rolling_delta",
+    "non_primary_pc_http_requests_flag_rolling_delta", "non_primary_pc_usb_flag_rolling_delta",
+    "non_primary_pc_file_copy_flag_rolling_delta",
+    # Cross-channel flags
+    "off_hours_activity_flag", "usb_file_activity_flag", "external_comm_activity_flag",
+    "jobsite_usb_activity_flag", "suspicious_upload_flag", "cloud_upload_flag",
+    "non_primary_pc_risk_flag",
 ]
 
 # ── Global WebSocket client registry ─────────────────────────────────────────

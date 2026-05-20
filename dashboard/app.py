@@ -3378,6 +3378,16 @@ if active_page == "Alerts":
         # Read all scored rows emitted so far (cached to avoid re-reading 500 MB+ per rerun)
         live_rows, stream_done = _cached_live_rows()
 
+        # Detect crash: process has exited (non-None poll) before writing any rows
+        if not live_rows and not proc_running and proc is not None:
+            _exit_code = proc.poll()
+            if _exit_code is not None and _exit_code != 0:
+                st.error(
+                    f"Live simulation process exited with code {_exit_code} before producing "
+                    "any output. Check the terminal for error details (e.g. missing model files "
+                    "or a feature-count mismatch). Click **⏹ STOP LIVE SIMULATION** to reset."
+                )
+
         if live_rows:
             live_df = pd.DataFrame(live_rows)
             # Keep only the columns users care about; drop duplicate/diagnostic fields.
@@ -3867,13 +3877,7 @@ if active_page == "Alerts":
         # Cap card rendering to keep the UI responsive
         CARD_LIMIT = 10
         total_alerts = len(alert_data)
-        total_pages = max(1, math.ceil(total_alerts / CARD_LIMIT))
-
-        if st.session_state.al_page >= total_pages:
-            st.session_state.al_page = 0
-
-        page_start = st.session_state.al_page * CARD_LIMIT
-        card_data = alert_data.iloc[page_start : page_start + CARD_LIMIT]
+        card_data = alert_data.head(CARD_LIMIT)
 
         if total_alerts == 0:
             st.info("No alerts match the current filters.")
@@ -3887,8 +3891,8 @@ if active_page == "Alerts":
                     show_filters()
             if total_alerts > CARD_LIMIT:
                 st.caption(
-                    f"Showing {page_start + 1}–{min(page_start + CARD_LIMIT, total_alerts):,} "
-                    f"of {total_alerts:,} matching alerts."
+                    f"Displaying top {CARD_LIMIT} of {total_alerts:,} matching alerts. "
+                    "Use the export button below for the complete set."
                 )
 
             # ── Column header row ──
@@ -3972,25 +3976,6 @@ if active_page == "Alerts":
                     "<div style='border-bottom:1px solid #0d0d0d;margin:2px 0;'></div>",
                     unsafe_allow_html=True,
                 )
-
-        # ── Pagination controls ──
-        if total_pages > 1:
-            pg_cols = st.columns([1, 2, 1])
-            with pg_cols[0]:
-                if st.button("← Prev", key="al_prev", disabled=(st.session_state.al_page == 0), use_container_width=True):
-                    st.session_state.al_page -= 1
-                    st.rerun()
-            with pg_cols[1]:
-                st.markdown(
-                    f"<div style='text-align:center;color:#aaa;font-size:0.85rem;padding-top:6px;'>"
-                    f"Page {st.session_state.al_page + 1} of {total_pages}"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-            with pg_cols[2]:
-                if st.button("Next →", key="al_next", disabled=(st.session_state.al_page >= total_pages - 1), use_container_width=True):
-                    st.session_state.al_page += 1
-                    st.rerun()
 
         # ── Export (columns + top_contributors if present) ──
         alert_display_cols = ["user", "day", "ae_risk_band", "if_anomaly_score", "ae_percentile_rank"]
