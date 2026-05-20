@@ -2665,6 +2665,12 @@ def _render_investigation_content() -> None:
         )
 
     # ── User Profile Section ──
+    _PROFILE_COLS = ["user", "employee_name", "department", "role", "supervisor", "role_sensitivity"]
+    _avail = [c for c in _PROFILE_COLS if c in _inv_merged.columns]
+    if len(_avail) > 1:
+        user_profiles_df = _inv_merged[_avail].drop_duplicates("user").reset_index(drop=True)
+    else:
+        user_profiles_df = pd.DataFrame(columns=_PROFILE_COLS)
     _prof_row = user_profiles_df[user_profiles_df["user"] == _user]
     _prof = _prof_row.iloc[0] if not _prof_row.empty else None
 
@@ -3727,6 +3733,8 @@ if active_page == "Alerts":
         )
 
 #####################
+
+        filtered_df = _get_filtered_df()
 
         # ── Combined Triage Status & Severity Filter ──
         section_header("FILTER BY TRIAGE STATUS & SEVERITY", "sh_disp_sev_filter")
