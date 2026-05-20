@@ -3,7 +3,9 @@ import numpy as np
 import pandas as pd
 from urllib.parse import urlparse
 
+# -------------------------------------------------------------
 # Layer A
+# -------------------------------------------------------------
 
 # Constants
 DEFAULT_OUTPUT_DIR = "processed_datasets"
@@ -109,10 +111,10 @@ def load_ldap(cert_path: str) -> pd.DataFrame:
     and the last record per user is kept so that late role-changes win.
 
     Args:
-        cert_path: The base path containing the CERT dataset (same value as CERT_PATH).
+        cert_path: The base path containing the CERT dataset
 
     Returns:
-        pd.DataFrame with columns [user, role, department, team].
+        pd.DataFrame: DataFrame with columns [user, role, department, team].
     """
     ldap_dir = os.path.join(cert_path, "LDAP")
     if not os.path.isdir(ldap_dir):
@@ -314,22 +316,27 @@ def _compute_hourly_subday(
     hourly_counts: pd.DataFrame,
     keys: list,
     prefix: str,
-    include_peak: bool = True,
+    include_peak: bool=True,
 ) -> pd.DataFrame:
     """
-    Compute per-group Shannon entropy and peak-hour count from a long-format hourly count frame.
+    Compute per-group Shannon entropy and peak-hour count from a hourly count frame.
 
     Args:
         hourly_counts: DataFrame with columns keys + ["hour", "count"].
         keys: Group-by keys (e.g. ["user", "pc", "day"]).
         prefix: Column name prefix for output columns.
-        include_peak: When False, skips peak_hour_count (useful for low-volume channels).
+        include_peak: When True, returns peak hour count (useful for low-volume channels).
 
     Returns:
-        DataFrame with keys + [f"{prefix}_hourly_entropy"] and optionally f"{prefix}_peak_hour_count".
+        pd.DataFrame: DataFrame with entropy and peak-hour count data
     """
+    # Summing total activity count on (user, pc, day, hour) granularity
     totals = hourly_counts.groupby(keys, observed=True)["count"].transform("sum")
+     
+    # Computing probability for each hour slot
     p = hourly_counts["count"] / totals.clip(lower=1)
+    
+    # Assigning entropy scores
     hourly_counts = hourly_counts.copy()
     hourly_counts["_p_log_p"] = p * np.log(p + 1e-10)
     entropy = (
@@ -339,6 +346,8 @@ def _compute_hourly_subday(
         .rename(f"{prefix}_hourly_entropy")
         .reset_index()
     )
+    
+    # Returns peak hour count if specified
     if not include_peak:
         return entropy
     peak = (
@@ -349,19 +358,18 @@ def _compute_hourly_subday(
     )
     return entropy.merge(peak, on=keys)
 
-
 def _compute_longest_run(
     df: pd.DataFrame,
     keys: list,
-    timestamp_col: str = "timestamp",
-    gap_minutes: int = 30,
-    prefix: str = "",
+    timestamp_col: str="timestamp",
+    gap_minutes: int=30,
+    prefix: str="",
 ) -> pd.DataFrame:
     """
     Vectorized longest contiguous activity run per key group.
 
     A new run begins when consecutive events (within the same group, sorted by time)
-    are more than gap_minutes apart.
+    are more than `gap_minutes` apart.
 
     Args:
         df: Event-level DataFrame.
@@ -375,15 +383,22 @@ def _compute_longest_run(
     """
     df_s = df.sort_values(keys + [timestamp_col]).copy()
     prev_ts = df_s.groupby(keys, observed=True, sort=False)[timestamp_col].shift(1)
+
+    # Computing inter-event gap in minutes to identify run boundaries
     gap_min = (df_s[timestamp_col] - prev_ts).dt.total_seconds() / 60
+
+    # Assigning a run ID per group — each gap exceeding gap_minutes starts a new run
     df_s["_new_run"] = (gap_min.isna() | (gap_min > gap_minutes)).astype(int)
     df_s["_run_id"] = df_s.groupby(keys, observed=True, sort=False)["_new_run"].cumsum()
 
+    # Computing duration of each run as (last_event − first_event) in minutes
     run_dur = (
         df_s.groupby(keys + ["_run_id"], observed=True)[timestamp_col]
         .agg(run_dur=lambda x: (x.max() - x.min()).total_seconds() / 60)
         .reset_index()
     )
+
+    # Taking the maximum run duration per group as the session length
     result = (
         run_dur.groupby(keys, observed=True)["run_dur"]
         .max()
@@ -393,37 +408,40 @@ def _compute_longest_run(
     return result
 
 
-def compute_user_work_hours(logon_df: pd.DataFrame, min_history: int = 30) -> pd.DataFrame:
+def compute_user_work_hours(logon_df: pd.DataFrame, min_history: int=30) -> pd.DataFrame:
     """
     Derives a per-user business-hour envelope from historical logon patterns.
 
     For each user, the 10th and 90th percentile of their logon-event hours define
-    start_hour / end_hour.  Users with fewer than min_history logon-days fall back to
-    the population default (9, 17) with schedule_complete=False.
+    start_hour / end_hour.  Users with fewer than `min_history` logon-days fall back to
+    the population default.
 
     Args:
-        logon_df: Normalized logon DataFrame (must have "activity", "timestamp", "user", "day").
-        min_history: Minimum number of distinct prior logon-days required before deriving a
-            personal schedule.
+        logon_df: Normalized logon DataFrame.
+        min_history: Minimum number of distinct prior logon-days required.
 
     Returns:
-        pd.DataFrame with columns [user, start_hour, end_hour, schedule_complete].
+        pd.DataFrame: DataFrame with columns [user, start_hour, end_hour, schedule_complete].
     """
     logon_events = logon_df[logon_df["activity"] == "Logon"].copy()
     logon_events["hour"] = logon_events["timestamp"].dt.hour
 
-    def _envelope(group):
+    def _envelope(group: pd.DataFrame):
+        # Validating the minimum number of days
         n_days = group["day"].nunique()
         if n_days < min_history:
             return pd.Series({"start_hour": 9, "end_hour": 17, "schedule_complete": False})
+        # Computing the 10th and 90th percentiles
         p10 = int(group["hour"].quantile(0.10))
         p90 = int(group["hour"].quantile(0.90))
         p10 = max(0, min(23, p10))
         p90 = max(0, min(23, p90))
         if p10 >= p90:
             return pd.Series({"start_hour": 9, "end_hour": 17, "schedule_complete": False})
+        
         return pd.Series({"start_hour": p10, "end_hour": p90, "schedule_complete": True})
 
+    # Applying envelope helper function
     result = (
         logon_events.groupby("user", observed=True, sort=False)
         .apply(_envelope)
@@ -446,6 +464,17 @@ def _compute_off_hours(
     When user_work_hours is None, applies the scalar default_hours tuple to all rows.
     When provided, performs a per-user lookup and falls back to default_hours for any
     user whose schedule could not be derived (schedule_complete=False).
+
+    Args:
+        hour: Integer hour-of-day Series extracted from the event timestamps.
+        user: Categorical user identifier Series aligned with hour.
+        user_work_hours: Per-user schedule table from compute_user_work_hours(), or None
+            to apply default_hours uniformly.
+        default_hours: Fallback (start_hour, end_hour) tuple used when user_work_hours
+            is None or a user has no derived schedule.
+
+    Returns:
+        pd.Series: Boolean Series — True where the event falls outside working hours.
     """
     if user_work_hours is None:
         return (hour < default_hours[0]) | (hour > default_hours[1])
@@ -459,21 +488,21 @@ def _compute_off_hours(
 
 def extract_logon_features(
     norm_df: pd.DataFrame,
-    work_hours: tuple = (9, 17),
-    user_work_hours: pd.DataFrame | None = None,
+    work_hours: tuple=(9, 17),
+    user_work_hours: pd.DataFrame | None=None,
 ) -> pd.DataFrame:
     """
     Extracts daily authentication behavior features from logon events to create an aggregated feature table.
 
     Args:
         norm_df: The normalized logon dataframe
-        work_hours: Fallback population work-hour window used when user_work_hours is None
-        user_work_hours: Per-user schedule table from compute_user_work_hours(); when provided,
-            each user's off-hours mask is derived from their personal 10th/90th-percentile window
+        work_hours: Fallback population work-hour window
+        user_work_hours: Per-user schedule table from `compute_user_work_hours`
 
     Returns:
         pd.DataFrame: Aggregated logon behavior features per (user, pc, day)
     """
+    # Computing logon data
     hour = norm_df["timestamp"].dt.hour
     off_hours = _compute_off_hours(hour, norm_df["user"], user_work_hours, work_hours)
     is_late_night = (hour >= 22) | (hour < 5)
@@ -488,6 +517,7 @@ def extract_logon_features(
         hour=hour,
     )
 
+    # Grouping data on (user, pc, day) level
     KEYS = ["user", "pc", "day"]
     features = (
         df.groupby(KEYS, observed=True, sort=False)
@@ -504,6 +534,7 @@ def extract_logon_features(
         df.groupby(KEYS + ["hour"], observed=True, sort=False)
         .size().rename("count").reset_index()
     )
+    # Computing subday features
     subday = _compute_hourly_subday(hourly_counts, KEYS, prefix="logon")
     subday_run = _compute_longest_run(df, KEYS, prefix="logon")
     features = features.merge(subday, on=KEYS, how="left").merge(subday_run, on=KEYS, how="left")
@@ -941,7 +972,7 @@ def merge_behavioral_features(feature_tables: list[pd.DataFrame], merge_cols: li
     merged_df.sort_values(by=merge_cols, inplace=True)
     merged_df.reset_index(drop=True, inplace=True)
     
-    # Ensuring no duplicate rows are 
+    # Ensuring no duplicate rows exist in the final dataset
     if merged_df.duplicated(subset=merge_cols).any():
         raise ValueError("Duplicate rows detected after merging feature tables.")
     
@@ -993,7 +1024,7 @@ def add_pc_features(df: pd.DataFrame, min_history: int=10) -> pd.DataFrame:
         first_seen.groupby(df["user"], observed=True).cumsum() - first_seen.astype(int)
     )
 
-    # Tracking the number of unique PC's used on a given day
+    # Tracking the number of unique PCs used on a given day
     same_day_counts = (
         df.groupby(["user", "day"], observed=True, sort=False)["pc"]
         .transform("nunique")
@@ -1001,7 +1032,7 @@ def add_pc_features(df: pd.DataFrame, min_history: int=10) -> pd.DataFrame:
     
     df["n_pcs_used_today"] = same_day_counts
     
-    # Identifies new PC usage after an established history
+    # Identifying new PC usage after an established history
     df["new_pc_after_stable_history"] = (
         (df["pc_prior_use_count"] == 0) &
         (df["user_total_prior_days"] >= min_history)
@@ -1014,23 +1045,21 @@ def add_pc_features(df: pd.DataFrame, min_history: int=10) -> pd.DataFrame:
 
 def build_layer_a(
     cert_path: str,
-    work_hours: tuple = (9, 17),
-    return_nunique_frames: bool = False,
-    compute_schedules: bool = True,
-    schedule_min_history: int = 30,
-    save_schedule_to: str | None = None,
+    work_hours: tuple=(9, 17),
+    return_nunique_frames: bool=False,
+    compute_schedules: bool=True,
+    schedule_min_history: int=30,
+    save_schedule_to: str | None=None,
 ) -> pd.DataFrame | tuple[pd.DataFrame, dict]:
     """
     Builds the complete layer A drill-down-ready dataset at the (user, pc, day) level.
 
     Args:
         cert_path: The base path containing the CERT dataset
-        work_hours: Fallback population work-hour window (applied when compute_schedules is False
-            or when a user has insufficient logon history)
-        return_nunique_frames: When True, also returns a dict of identity frames needed
-            by collapse_layer() to compute true per-(user, day) nunique values at Layer B.
-            Keys are the output column names; values are (source_df, value_col) tuples.
-        compute_schedules: When True, derives per-user work-hour envelopes from logon history
+        work_hours: Fallback population work-hour window
+        return_nunique_frames: Returns a dict of identity frames needed
+            by `collapse_layer()` to compute true (user, day) unique values at Layer B.
+        compute_schedules: Derives per-user work-hour envelopes from logon history
             and passes them to every extract function.
         schedule_min_history: Minimum prior logon-days required before a personal schedule is used.
         save_schedule_to: Optional file path (.parquet) to persist the per-user work-hour schedule
@@ -1057,39 +1086,39 @@ def build_layer_a(
             normalized_logs[name] = normalize_shared_columns(df)
             import gc; gc.collect()
 
-    # Derive per-user work-hour envelopes from logon history so off-hours flags are
-    # personal rather than population-fixed — flex-time users stop inflating off_hours_*.
-    user_wh: pd.DataFrame | None = None
+    # Deriving per-user work-hours 
     if compute_schedules:
         print("Deriving per-user work-hour schedules from logon history...")
-        user_wh = compute_user_work_hours(normalized_logs["logon"], min_history=schedule_min_history)
-        complete = user_wh["schedule_complete"].sum()
-        print(f"  {complete}/{len(user_wh)} users have a personal schedule; rest fall back to {work_hours}.")
+        user_work_hours = compute_user_work_hours(normalized_logs["logon"], min_history=schedule_min_history)
+        complete = user_work_hours["schedule_complete"].sum()
+        print(f"  {complete}/{len(user_work_hours)} users have a personal schedule, the rest fall back to {work_hours}.")
 
+    # Extracting behavioral features per channel
     if return_nunique_frames:
         print("Extracting logon features...")
-        logon_ft = extract_logon_features(normalized_logs["logon"], work_hours, user_work_hours=user_wh)
+        logon_ft = extract_logon_features(normalized_logs["logon"], work_hours, user_work_hours=user_work_hours)
         print("Extracting file features (chunked)...")
-        file_features, file_id = extract_file_features_chunked(normalized_logs["file"], work_hours, return_identity_frame=True, user_work_hours=user_wh)
+        file_features, file_id = extract_file_features_chunked(normalized_logs["file"], work_hours, return_identity_frame=True, user_work_hours=user_work_hours)
         print("Extracting device (USB) features...")
-        device_ft = extract_device_features(normalized_logs["device"], work_hours, user_work_hours=user_wh)
+        device_ft = extract_device_features(normalized_logs["device"], work_hours, user_work_hours=user_work_hours)
         print("Extracting email features (chunked)...")
-        email_features, email_id = extract_email_features_chunked(normalized_logs["email"], work_hours, return_identity_frame=True, user_work_hours=user_wh)
+        email_features, email_id = extract_email_features_chunked(normalized_logs["email"], work_hours, return_identity_frame=True, user_work_hours=user_work_hours)
         print("Extracting HTTP features (chunked)...")
-        http_features, http_id = extract_http_features_chunked(normalized_logs["http"], work_hours, return_identity_frame=True, user_work_hours=user_wh)
+        http_features, http_id = extract_http_features_chunked(normalized_logs["http"], work_hours, return_identity_frame=True, user_work_hours=user_work_hours)
 
         feature_tables = [logon_ft, file_features, device_ft, email_features, http_features]
     else:
         print("Extracting logon features...")
-        logon_ft = extract_logon_features(normalized_logs["logon"], work_hours, user_work_hours=user_wh)
+        logon_ft = extract_logon_features(normalized_logs["logon"], work_hours, user_work_hours=user_work_hours)
         print("Extracting file features (chunked)...")
-        file_ft = extract_file_features_chunked(normalized_logs["file"], work_hours, user_work_hours=user_wh)
+        file_ft = extract_file_features_chunked(normalized_logs["file"], work_hours, user_work_hours=user_work_hours)
         print("Extracting device (USB) features...")
-        device_ft = extract_device_features(normalized_logs["device"], work_hours, user_work_hours=user_wh)
+        device_ft = extract_device_features(normalized_logs["device"], work_hours, user_work_hours=user_work_hours)
         print("Extracting email features (chunked)...")
-        email_ft = extract_email_features_chunked(normalized_logs["email"], work_hours, user_work_hours=user_wh)
+        email_ft = extract_email_features_chunked(normalized_logs["email"], work_hours, user_work_hours=user_work_hours)
         print("Extracting HTTP features (chunked)...")
-        http_ft = extract_http_features_chunked(normalized_logs["http"], work_hours, user_work_hours=user_wh)
+        http_ft = extract_http_features_chunked(normalized_logs["http"], work_hours, user_work_hours=user_work_hours)
+        
         feature_tables = [logon_ft, file_ft, device_ft, email_ft, http_ft]
 
     # Merging the feature tables
@@ -1101,9 +1130,10 @@ def build_layer_a(
     layer_a_matrix = add_pc_features(behavioral_matrix)
     print(f"Layer A complete — {len(layer_a_matrix):,} rows, {len(layer_a_matrix.columns)} features.")
 
-    if user_wh is not None and save_schedule_to:
+    # Saving work hours if specified
+    if user_work_hours is not None and save_schedule_to:
         os.makedirs(os.path.dirname(os.path.abspath(save_schedule_to)), exist_ok=True)
-        user_wh.to_parquet(save_schedule_to, index=False)
+        user_work_hours.to_parquet(save_schedule_to, index=False)
         print(f"Per-user work-hour schedule saved to: {save_schedule_to}")
 
     if return_nunique_frames:
@@ -1119,11 +1149,11 @@ def build_layer_a(
 
 def save_dataset(dataset: pd.DataFrame, filename: str, output_dir: str=DEFAULT_OUTPUT_DIR) -> str:
     """
-    Saves the UEBA-enhanced dataset to the specified path as a CSV file.
+    Saves the UEBA-enhanced dataset to the specified path as a CSV or Parquet file.
     
     Args:
         dataset: The UEBA-enhanced dataset
-        file_name: The desired name of the CSV dataset
+        filename: The desired name of the dataset file (must end in .csv or .parquet)
         output_dir: Directory where processed outputs are saved
         
     Returns:
@@ -1132,13 +1162,20 @@ def save_dataset(dataset: pd.DataFrame, filename: str, output_dir: str=DEFAULT_O
     # Ensures directory exists
     save_path = os.path.join(os.getcwd(), "processed_datasets", output_dir)
     os.makedirs(save_path, exist_ok=True)
-    
+
+    fmt = filename.split(".")[-1]
+    if fmt not in ("csv", "parquet"):
+        raise ValueError(f"Please specify either 'csv' or 'parquet' format. Got {fmt}.")
+
     # Creates full file path
     file_path = os.path.join(save_path, filename)
     
     # Saving the dataset
-    dataset.to_csv(file_path)
-    print(f"Dataset successfully saved to: {file_path}")
+    if fmt == "csv":
+        dataset.to_csv(file_path)
+    else:
+        dataset.to_parquet(file_path, index=False)
+    print(f"Successfully saved to: {file_path}")
 
     return file_path
 
@@ -1162,19 +1199,19 @@ def chronological_split(
     Returns:
         tuple: A training and testing DataFrame
     """
-    if csv_path is None and df is None:
-        raise ValueError("Please provide either a CSV path or a DataFrame to create a split.")
-
     if df is None:
+        if csv_path is None:
+            raise ValueError("Please provide either a CSV path or a DataFrame to create a split.")
         df = pd.read_csv(csv_path, index_col=0)
 
-    # Normalize "user" and "day" columns
+    # Normalizing "user" and "day" columns
     df["user"] = df["user"].str.strip().str.lower()
     df["day"] = pd.to_datetime(df["day"]).dt.normalize()
 
-    # Ensure sorted globally by time — no reset_index to avoid a full-DataFrame copy
+    # Ensuring sorted globally by time
     df = df.sort_values("day")
 
+    # Specifying cutoff day
     unique_days = np.sort(df["day"].unique())
     cutoff_index = int(len(unique_days) * split_ratio)
     cutoff_day = unique_days[cutoff_index]
@@ -1185,7 +1222,9 @@ def chronological_split(
     return train_df, test_df
 
 
+# -------------------------------------------------------------
 # Layer B
+# -------------------------------------------------------------
 
 # Constants
 LAYER_B_ID_COLS = ["user", "day"]
@@ -1250,7 +1289,7 @@ LAYER_B_CONTEXT_MAX_COLS = [
 ]
 
 LAYER_B_UEBA_BASE_FEATURES = [
-    # --- Auth ---
+    # Authentication
     "logon_count",
     "logoff_count",
     "off_hours_logon",
@@ -1258,7 +1297,7 @@ LAYER_B_UEBA_BASE_FEATURES = [
     "logon_hourly_entropy",
     "logon_peak_hour_count",
     "logon_longest_active_run_minutes",
-    # --- File ---
+    # File activity
     "file_open_count",
     "file_write_count",
     "file_copy_count",
@@ -1269,14 +1308,14 @@ LAYER_B_UEBA_BASE_FEATURES = [
     "file_hourly_entropy",
     "file_peak_hour_count",
     "file_longest_active_run_minutes",
-    # --- Removable media ---
+    # Removable media
     "usb_insert_count",
     "usb_remove_count",
     "off_hours_usb_usage",
     "device_late_night_count",
     "device_hourly_entropy",
     "device_longest_active_run_minutes",
-    # --- Email ---
+    # Email activity
     "emails_sent",
     "external_emails_sent",
     "attachments_sent",
@@ -1285,7 +1324,7 @@ LAYER_B_UEBA_BASE_FEATURES = [
     "email_late_night_count",
     "email_hourly_entropy",
     "email_peak_hour_count",
-    # --- HTTP ---
+    # HTTP activity
     "http_total_requests",
     "http_visit_count",
     "http_download_count",
@@ -1299,7 +1338,7 @@ LAYER_B_UEBA_BASE_FEATURES = [
     "http_late_night_count",
     "http_hourly_entropy",
     "http_peak_hour_count",
-    # --- PC ---
+    # PC activity
     "pcs_used_count",
     "non_primary_pc_used_flag",
     "non_primary_pc_http_requests_flag",
@@ -1424,8 +1463,8 @@ def get_layer_b_features(df: pd.DataFrame) -> list[str]:
     Args:
         df: The collapsed layer B dataset
         
-    Returns
-        str: A list of feature column names
+    Returns:
+        list[str]: A list of feature column names
     """
     col_names = [col for col in LAYER_B_UEBA_BASE_FEATURES if col in df.columns]
     return col_names
@@ -1441,7 +1480,7 @@ def apply_ueba_enhancements(
     longhorizon_min_history: int = 30,
 ) -> pd.DataFrame:
     """
-    Applying UEBA-specific enhancements to a behavioral matrix such as:
+    Applies UEBA-specific enhancements to a behavioral matrix such as:
     - Per-user causal z-score deviations over a bounded trailing window
     - Long-horizon (90-day) z-scores to catch gradual behavioral drift
     - Causal rolling mean deltas that exclude the current row
@@ -1683,7 +1722,9 @@ def build_layer_b(
     return layer_b_df
 
 
+# -------------------------------------------------------------
 # Drill-Down Functionality
+# -------------------------------------------------------------
 
 # Functions
 def get_drilldown(layer_a_df: pd.DataFrame, user: str, day: str, sorting_cols: list[str] | None=None) -> pd.DataFrame:
@@ -1697,7 +1738,7 @@ def get_drilldown(layer_a_df: pd.DataFrame, user: str, day: str, sorting_cols: l
         sorting_cols: Columns used to sort returned values
         
     Returns:
-        pd.DataFrame: 
+        pd.DataFrame: Subset of layer A rows for the specified user and day.
     """
     # Lookup of the specified user and day
     drilldown_df = layer_a_df[(layer_a_df["user"] == user) & (layer_a_df["day"] == day)].copy()

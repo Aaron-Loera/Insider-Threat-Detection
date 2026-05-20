@@ -50,7 +50,7 @@ INSIDERS_PATH = _local_or("INSIDERS_PATH", _insiders_default)
 
 # Active Model Version
 MODEL_VERSION = _local_or("MODEL_VERSION", "6")
-LIVE_MODEL_VERSION = _local_or("LIVE_MODEL_VERSION", "5")
+LIVE_MODEL_VERSION = _local_or("LIVE_MODEL_VERSION", "6")
 
 # Peer-group column used by apply_peer_group_enhancements (see scripts/Preprocessing.py).
 # Swappable to "department" or "team" once role granularity is evaluated.
@@ -86,7 +86,7 @@ UEBA_CALIB_EVAL_PATH = _local_or(
 # Preprocessing Output Directory (notebook: CERT_Preprocessing)
 DEFAULT_OUTPUT_DIR = _local_or(
     "DEFAULT_OUTPUT_DIR",
-    f"ueba_dataset_{V}",
+    os.path.join("processed_datasets", f"ueba_dataset_{V}")
 )
 
 
