@@ -48,8 +48,8 @@ INSIDERS_PATH = _local_or("INSIDERS_PATH", _insiders_default)
 
 
 # Active Model Version
-MODEL_VERSION = _local_or("MODEL_VERSION", "5")
-LIVE_MODEL_VERSION = _local_or("LIVE_MODEL_VERSION", _local_or("MODEL_VERSION", "5"))
+MODEL_VERSION = _local_or("MODEL_VERSION", "6")
+LIVE_MODEL_VERSION = _local_or("LIVE_MODEL_VERSION", _local_or("MODEL_VERSION", "6"))
 
 
 # Version-Scoped Internal Paths
@@ -132,6 +132,10 @@ LIVE_IF_PATH = _local_or(
 LIVE_IF_SCORES_PATH = _local_or(
     "LIVE_IF_SCORES_PATH",
     os.path.join(BASE_DIR, "isolation_forests", f"iforest_model_{LV}", "anomaly_scores.npy"),
+)
+LIVE_AE_PATH = _local_or(
+    "LIVE_AE_PATH",
+    os.path.join(BASE_DIR, "encoders", f"encoder_model_{LV}", "autoencoder_model.keras"),
 )
 _live_input_parquet = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{LV}", f"ueba_dataset_{LV}_test_stream.parquet")
 _live_input_csv     = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{LV}", f"ueba_dataset_{LV}_test_stream.csv")
