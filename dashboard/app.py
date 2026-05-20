@@ -2736,7 +2736,7 @@ def _render_investigation_content() -> None:
     )
 
     # ── Alert History ──
-    _ah_disps = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
+    _ah_disps = st.session_state.get("alert_dispositions", {})
 
     _FEAT_CHANNEL: dict[str, str] = {}
     for _ch, _ch_feats in CHANNELS.items():
