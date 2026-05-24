@@ -1604,6 +1604,7 @@ def _add_multihorizon_features(df: pd.DataFrame, feature_cols: list) -> pd.DataF
     df = df.sort_values(["user", "day"]).copy()
     user_grp = df.groupby("user", observed=True, sort=False)
 
+    new_cols = {}
     for col in feature_cols:
         if col not in df.columns:
             continue
@@ -1613,13 +1614,14 @@ def _add_multihorizon_features(df: pd.DataFrame, feature_cols: list) -> pd.DataF
         sum_7d = shifted_grp.rolling(window=7, min_periods=1).sum().reset_index(level=0, drop=True)
         sum_30d = shifted_grp.rolling(window=30, min_periods=1).sum().reset_index(level=0, drop=True)
 
-        df[f"{col}_7d_sum"] = sum_7d
-        df[f"{col}_30d_sum"] = sum_30d
+        new_cols[f"{col}_7d_sum"] = sum_7d
+        new_cols[f"{col}_30d_sum"] = sum_30d
+        
         # ε = 0.5 suppresses noise on near-zero baselines; clip bounds AE input magnitude
         daily_avg_30d = sum_30d / 30
-        df[f"{col}_1d_over_30d_ratio"] = (df[col] / (daily_avg_30d + 0.5)).clip(0, 50)
+        new_cols[f"{col}_1d_over_30d_ratio"] = (df[col] / (daily_avg_30d + 0.5)).clip(0, 50)
 
-    return df
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
 
 def apply_peer_group_enhancements(
@@ -1632,7 +1634,7 @@ def apply_peer_group_enhancements(
     Adds leave-one-out peer-group z-scores to a (user, day) behavioral matrix.
 
     For each (peer_group, day) cohort, the mean and std are computed excluding the
-    current user (leave-one-out), then each user's value is standardised against that
+    current user (leave-one-out), then each user's value is standardized against that
     peer baseline. Columns are named ``{feature}_peer_zscore`` and clipped to [-10, 10]
     to match the convention used for per-user z-scores.
 

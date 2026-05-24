@@ -66,7 +66,7 @@ LV = LIVE_MODEL_VERSION
 # Training Dataset
 UEBA_PATH = _local_or(
     "UEBA_PATH",
-    os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{V}", f"ueba_dataset_{V}_train.csv"),
+    os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{V}", f"ueba_dataset_{V}_train.parquet"),
 )
 
 # Calibration slice (held-out 10%, insider-free — used for baseline fitting and threshold calibration)

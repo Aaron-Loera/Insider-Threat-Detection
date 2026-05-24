@@ -1,5 +1,6 @@
 # Imports 
 import os
+import config
 import joblib
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
@@ -7,9 +8,8 @@ from tensorflow.keras.models import load_model
 from scripts.UEBAIsolationForest import UEBAIsolationForest
 from scripts.Preprocessing import chronological_split  # re-export for backward compatibility
 
-__all__ = ["chronological_split", "get_insiders", "build_insider_mask", "get_scores"]
+__all__ = ["chronological_split", "get_insiders", "build_insider_mask", "prepare_ae_training_data", "get_scores"]
 
-import config
 
 SCALER_PATH = config.SCALER_PATH
 ENCODER_PATH = config.ENCODER_PATH
@@ -71,6 +71,38 @@ def build_insider_mask(df: pd.DataFrame, windows: pd.DataFrame) -> pd.Series:
             (df["day"] <= row["end_day"])
         )
     return mask    
+
+
+def prepare_ae_training_data(
+    train_df: pd.DataFrame,
+    insiders_df: pd.DataFrame,
+    val_ratio: float=0.15,
+) -> tuple:
+    """
+    Prepares clean training splits for Autoencoder training.
+
+    Applies baseline gating, separates insider rows, and produces a
+    chronological fit/validation split on normal-behavior data only.
+
+    Args:
+        train_df: The calibration-excluded training set (output of CERT_Preprocessing).
+        insiders_df: Ground-truth insider windows from `get_insiders()`.
+        val_ratio: Fraction of normal-behavior rows held out for validation (default 0.15).
+
+    Returns:
+        tuple: [train_fit, train_val, train_normal, train_df, insider_mask]
+    """
+    # Ensuring there's at least 14 days of prior history
+    train_df = train_df[train_df["baseline_complete"]].copy().reset_index(drop=True)
+
+    # Building insider mask
+    insider_mask = build_insider_mask(train_df, insiders_df)
+    train_normal = train_df[~insider_mask].copy()
+
+    # Creating validation set
+    train_fit, train_val = chronological_split(df=train_normal, split_ratio=1.0-val_ratio)
+
+    return (train_fit, train_val, train_normal, train_df, insider_mask)
 
 
 def get_scores(newData_df: pd.DataFrame) -> pd.DataFrame:
