@@ -1,4 +1,5 @@
 import os
+import re
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -309,6 +310,104 @@ class Autoencoder:
         plt.show()
 
         return values
+
+
+    def compute_channel_reconstruction_error(
+        self,
+        feature_matrix: np.ndarray,
+        insider_labels: pd.Series | np.ndarray,
+        feature_names: list[str],
+        save_path: str | None = None,
+    ) -> dict[str, dict[str, float]]:
+        """
+        Computes mean squared reconstruction error per behavioral channel and compares normal
+        vs. insider rows. Renders a grouped bar chart with one bar pair per channel.
+
+        Args:
+            feature_matrix: The scaled UEBA feature matrix
+            insider_labels: Binary labels (1 = insider, 0 = normal)
+            feature_names: Ordered list of column names corresponding to each feature_matrix column,
+                used to assign each feature dimension to its behavioral channel
+            save_path: Optional path to persist the figure as PNG
+
+        Returns:
+            dict: Per-channel error summary {channel: {"normal_mse": float, "insider_mse": float, "ratio": float}}
+        """
+        _CHANNEL_PATTERNS = [
+            ("Auth",          re.compile(r"logon|logoff")),
+            ("File",          re.compile(r"file_|unique_files")),
+            ("USB",           re.compile(r"usb_|device_")),
+            ("Email",         re.compile(r"email|attachment|recipient")),
+            ("HTTP",          re.compile(r"http_|unique_domain")),
+            ("PC",            re.compile(r"pcs_used|non_primary_pc")),
+            ("Cross-Channel", re.compile(r"_flag$")),
+        ]
+
+        if isinstance(insider_labels, pd.Series):
+            insider_labels = insider_labels.astype(int).values
+
+        reconstruction = self.autoencoder.predict(feature_matrix, verbose=0)
+        sq_errors = np.square(feature_matrix - reconstruction)
+
+        normal_idx  = np.where(insider_labels == 0)[0]
+        insider_idx = np.where(insider_labels == 1)[0]
+
+        col_to_channel = {}
+        for col in feature_names:
+            assigned = "Other"
+            for name, pat in _CHANNEL_PATTERNS:
+                if pat.search(col):
+                    assigned = name
+                    break
+            col_to_channel[col] = assigned
+
+        channel_order = [name for name, _ in _CHANNEL_PATTERNS] + ["Other"]
+        results: dict[str, dict[str, float]] = {}
+        ch_normal_mse: dict[str, float] = {}
+        ch_insider_mse: dict[str, float] = {}
+
+        for ch in channel_order:
+            col_indices = [i for i, c in enumerate(feature_names) if col_to_channel[c] == ch]
+            if not col_indices:
+                continue
+            n_mse = float(sq_errors[normal_idx][:, col_indices].mean())
+            if insider_idx.size > 0:
+                i_mse = float(sq_errors[insider_idx][:, col_indices].mean())
+                ratio = i_mse / n_mse if n_mse > 0 else float("nan")
+            else:
+                i_mse = float("nan")
+                ratio = float("nan")
+            ch_normal_mse[ch]  = n_mse
+            ch_insider_mse[ch] = i_mse
+            results[ch] = {"normal_mse": n_mse, "insider_mse": i_mse, "ratio": ratio}
+
+        channels = list(results.keys())
+        x_pos    = np.arange(len(channels))
+        width    = 0.35
+
+        plt.figure(figsize=(11, 5))
+        plt.bar(x_pos - width / 2, [ch_normal_mse[ch] for ch in channels],
+                width, label="Normal", color="#3a86a8", alpha=0.85)
+        if insider_idx.size > 0:
+            plt.bar(x_pos + width / 2, [ch_insider_mse[ch] for ch in channels],
+                    width, label="Insider", color="#e84545", alpha=0.85)
+        plt.xticks(x_pos, channels, rotation=30, ha="right")
+        plt.ylabel("Mean Squared Reconstruction Error")
+        plt.title("Per-Channel AE Reconstruction Error: Normal vs Insider")
+        plt.legend()
+        plt.grid(True, alpha=0.3, axis="y")
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(os.path.join(save_path, "channel_reconstruction_error.png"), dpi=150)
+        plt.show()
+
+        print(f"\n{'Channel':>15}  {'Normal MSE':>12}  {'Insider MSE':>12}  {'Ratio (I/N)':>12}")
+        print("-" * 56)
+        for ch in channels:
+            r = results[ch]
+            print(f"{ch:>15}  {r['normal_mse']:>12.5f}  {r['insider_mse']:>12.5f}  {r['ratio']:>12.2f}")
+
+        return results
 
 
 def plot_loss(history, save_path) -> None:
