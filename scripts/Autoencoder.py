@@ -89,50 +89,47 @@ class Autoencoder:
     def train(self, x_train: np.ndarray, save_path: str, epochs: int=100, batch_size: int=256, x_val: np.ndarray=None):
         """
         Trains the autoencoder with early stopping.
-        
+
         Args:
             x_train: The scaled and filtered training feature matrix (i.e., no insider rows)
             save_path: The path to store the training log and model artifacts
             epochs: Maximum number of epochs
             batch_size: Batch size
-            x_val: The scaled and filtered validation feature matrix (i.e., no insider rows). If None,
-                   a 10% random validation_split is used as fallback.
+            x_val: The scaled and filtered validation feature matrix (i.e., no insider rows).
+                Required — a chronological held-out split must be prepared by the caller
+                (see prepare_data.prepare_ae_training_data). A random validation_split
+                fallback was removed to prevent silent leakage of future data into the baseline.
         """
+        if x_val is None:
+            raise ValueError(
+                "x_val is required. Pass a chronologically held-out, insider-free "
+                "validation matrix produced by prepare_ae_training_data; the previous "
+                "random validation_split fallback broke temporal integrity."
+            )
+
         log_save_path = os.path.join(save_path, "training_log.csv")
         csv_logger = CSVLogger(log_save_path, append=False)
-        
+
         early_stop = EarlyStopping(
             monitor="val_loss",
             patience=10,
             restore_best_weights=True,
             verbose=1
         )
-        
+
         callbacks = [csv_logger, early_stop]
-        
-        if x_val is not None:
-            history = self.autoencoder.fit(
-                x_train,
-                x_train,
-                validation_data=(x_val, x_val),
-                epochs=epochs,
-                batch_size=batch_size,
-                shuffle=True,
-                verbose=1,
-                callbacks=callbacks
-            )
-        else:
-            history = self.autoencoder.fit(
-                x_train,
-                x_train,
-                epochs=epochs,
-                batch_size=batch_size,
-                validation_split=0.1,
-                shuffle=True,
-                verbose=1,
-                callbacks=callbacks
-            )
-        
+
+        history = self.autoencoder.fit(
+            x_train,
+            x_train,
+            validation_data=(x_val, x_val),
+            epochs=epochs,
+            batch_size=batch_size,
+            shuffle=True,
+            verbose=1,
+            callbacks=callbacks
+        )
+
         return history
         
     
@@ -254,7 +251,7 @@ class Autoencoder:
         return score
 
 
-    def compute_recall_thresholds(self, feature_matrix: np.ndarray, insider_labels: pd.Series | np.ndarray, percentiles: list = [80, 90, 95], save_path: str | None = None) -> dict[str, float]:
+    def compute_recall_thresholds(self, feature_matrix: np.ndarray, insider_labels: pd.Series | np.ndarray, percentiles: list = [80, 90, 95], threshold_source: np.ndarray | None = None, save_path: str | None = None) -> dict[str, float]:
         """
         Computes recall at several percentile thresholds of reconstruction error. Renders
         a bar chart of recall per percentile with captured/total annotations above each bar.
@@ -263,12 +260,17 @@ class Autoencoder:
             feature_matrix: The scaled UEBA feature matrix
             insider_labels: Binary labels (1 = insider, 0 = normal)
             percentiles: List of percentile thresholds
+            threshold_source: Optional 1-D error array used to derive percentile thresholds. When
+                supplied, thresholds are computed from this distribution (e.g. the insider-free
+                calibration baseline) rather than the evaluation errors themselves — avoiding the
+                circularity of measuring recall against a threshold defined by the same data.
             save_path: Optional path to persist the figure as PNG
 
         Returns:
             dict: Recall values {percentile: recall score}
         """
         errors = self.reconstruction_error(feature_matrix)
+        source = np.asarray(threshold_source) if threshold_source is not None else errors
 
         if isinstance(insider_labels, pd.Series):
             insider_labels = insider_labels.astype(int).values
@@ -278,7 +280,7 @@ class Autoencoder:
         total_insiders = insider_labels.sum()
 
         for pct in percentiles:
-            threshold = np.percentile(errors, pct)
+            threshold = np.percentile(source, pct)
             flagged = errors >= threshold
             captured = insider_labels[flagged].sum()
             recall = captured / total_insiders
@@ -333,14 +335,17 @@ class Autoencoder:
         Returns:
             dict: Per-channel error summary {channel: {"normal_mse": float, "insider_mse": float, "ratio": float}}
         """
+        # Cross-Channel must be checked first: derived flags like `non_primary_pc_usb_flag`
+        # would otherwise be greedily attributed to USB (or PC, File, etc.) by the
+        # single-channel patterns below.
         _CHANNEL_PATTERNS = [
+            ("Cross-Channel", re.compile(r"_flag$")),
             ("Auth",          re.compile(r"logon|logoff")),
             ("File",          re.compile(r"file_|unique_files")),
             ("USB",           re.compile(r"usb_|device_")),
             ("Email",         re.compile(r"email|attachment|recipient")),
             ("HTTP",          re.compile(r"http_|unique_domain")),
             ("PC",            re.compile(r"pcs_used|non_primary_pc")),
-            ("Cross-Channel", re.compile(r"_flag$")),
         ]
 
         if isinstance(insider_labels, pd.Series):

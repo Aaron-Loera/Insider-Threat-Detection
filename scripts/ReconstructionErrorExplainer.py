@@ -75,28 +75,44 @@ class ReconstructionErrorExplainer:
         return contribution_ratio
     
     
+    # v6 suffix patterns ordered longest-first to prevent partial matches
+    # (e.g., "_zscore_90d" must be stripped before "_zscore")
+    _FAMILY_SUFFIXES = (
+        "_zscore_90d",
+        "_peer_zscore",
+        "_1d_over_30d_ratio",
+        "_longest_active_run_minutes",
+        "_late_night_count",
+        "_hourly_entropy",
+        "_peak_hour_count",
+        "_rolling_delta",
+        "_7d_sum",
+        "_30d_sum",
+        "_zscore",
+    )
+
     def _build_family_map(self, features: list) -> dict:
         """
         Groups features by their underlying behavioral concept.
 
         Features sharing the same base name (e.g., logon_count, logon_count_zscore,
-        logon_count_rolling_delta) are placed in one family so they count as a single
-        concept during group aggregation rather than inflating the group score.
-        
+        logon_count_rolling_delta, logon_count_zscore_90d) are placed in one family
+        so they count as a single concept during group aggregation rather than
+        inflating the group score.
+
         Args:
             features: List of feature columns
-            
+
         Returns:
             dict: Family dictionary to use for group reconstruction error
         """
         families = {}
         for f in features:
-            if f.endswith("_zscore"):
-                base = f[: -len("_zscore")]
-            elif f.endswith("_rolling_delta"):
-                base = f[: -len("_rolling_delta")]
-            else:
-                base = f
+            base = f
+            for suffix in self._FAMILY_SUFFIXES:
+                if f.endswith(suffix):
+                    base = f[: -len(suffix)]
+                    break
             families.setdefault(base, []).append(f)
         return families
 
@@ -239,6 +255,10 @@ def save_table(df: pd.DataFrame, save_path: str) -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     full_path = os.path.join(output_dir, save_path)
-    df.to_parquet(full_path, index=False)
+    df_out = df.copy()
+    float_cols = df_out.select_dtypes(include="float64").columns
+    if len(float_cols):
+        df_out[float_cols] = df_out[float_cols].astype("float32")
+    df_out.to_parquet(full_path, index=False)
 
     print("Successfully saved to:", full_path)

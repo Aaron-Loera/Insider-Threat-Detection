@@ -16,14 +16,16 @@ class UEBAIsolationForest:
     Isolation Forest for anomaly detection on Autoencoder latent embeddings.
     """
 
-    def __init__(self, n_estimators: int=200, max_samples: str="auto", contamination: float=0.001, random_state: int=42) -> None:
+    def __init__(self, n_estimators: int=200, max_samples: str="auto", contamination: str | float="auto", random_state: int=42) -> None:
         """
         Initializes the Isolation Forest.
 
         Args:
             n_estimators: The number of trees in the forest
             max_samples: The subsample size for each tree
-            contamination: Expected proportion of anomalies
+            contamination: Expected proportion of anomalies in the training data. Use "auto"
+                when training on insider-free data and deriving alert thresholds from a
+                separate clean calibration baseline.
             random_state: Random seed for reproducibility
 
         Returns:
@@ -109,23 +111,24 @@ class UEBAIsolationForest:
 
 
     @staticmethod
-    def compute_contamination_rate(total_embeddings: np.ndarray, normal_embeddings: np.ndarray) -> float:
+    def compute_contamination_rate(total_embeddings: np.ndarray, normal_embeddings: np.ndarray) -> str | float:
         """
-        Calculates the optimal contamination rate for an Isolation Forest.
+        Returns the contamination value to pass to sklearn's IsolationForest.
 
-        The normal embeddings are subtracted from the total embeddings to identify the ratio of insiders.
-        The contamination rate is then assigned using `max(computed_value, 0.001)` for numerical stability.
+        Since training is done on insider-free embeddings, there is no meaningful insider
+        ratio to compute in the training set itself. sklearn's "auto" heuristic
+        (offset_ = -0.5) avoids hard-coding an operational alert rate into the model fit;
+        thresholds for alerting should instead be derived from the held-out clean
+        calibration baseline (see UEBA_CALIBRATION_PATH / IF_BASELINE_PATH).
 
         Args:
-            total_embeddings: Latent embeddings containing normal and insider rows
-            normal_embeddings: Latent embeddings containing only normal-behavior rows
+            total_embeddings: Latent embeddings containing normal and insider rows (unused)
+            normal_embeddings: Latent embeddings containing only normal-behavior rows (unused)
 
         Returns:
-            float: The optimal contamination rate
+            str: "auto"
         """
-        n_insiders = len(total_embeddings) - len(normal_embeddings)
-        computed_rate = n_insiders / len(total_embeddings)
-        return max(computed_rate, 0.001)
+        return "auto"
 
 
     def compute_separation_ratio(self, latent_embeddings: np.ndarray, insider_labels: pd.Series | np.ndarray, save_path: str | None = None) -> float:
@@ -251,7 +254,7 @@ class UEBAIsolationForest:
         return score
 
 
-    def compute_recall_thresholds(self, latent_embeddings: np.ndarray, insider_labels: pd.Series | np.ndarray, percentiles: list = [80, 90, 95], save_path: str | None = None) -> dict[str, float]:
+    def compute_recall_thresholds(self, latent_embeddings: np.ndarray, insider_labels: pd.Series | np.ndarray, percentiles: list = [80, 90, 95], threshold_source: np.ndarray | None = None, save_path: str | None = None) -> dict[str, float]:
         """
         Compute the recall at several percentile thresholds of the anomaly score distribution.
         Renders a bar chart of recall per percentile with captured/total annotations above each bar.
@@ -260,12 +263,17 @@ class UEBAIsolationForest:
             latent_embeddings: Latent embedding matrix of shape (n_samples, latent_emb_dim)
             insider_labels: Binary labels (1 = insider, 0 = normal)
             percentiles: List of percentile thresholds
+            threshold_source: Optional 1-D score array used to derive percentile thresholds. When
+                supplied, thresholds are computed from this distribution (e.g. the insider-free
+                calibration baseline) rather than the evaluation scores themselves — avoiding the
+                circularity of measuring recall against a threshold defined by the same data.
             save_path: Optional path to persist the figure as PNG
 
         Returns:
             dict: Recall values {percentile: recall score}
         """
         scores = self.anomaly_score(latent_embeddings)
+        source = np.asarray(threshold_source) if threshold_source is not None else scores
 
         if isinstance(insider_labels, pd.Series):
             insider_labels = insider_labels.astype(int).values
@@ -275,7 +283,7 @@ class UEBAIsolationForest:
         total_insiders = insider_labels.sum()
 
         for pct in percentiles:
-            threshold = np.percentile(scores, pct)
+            threshold = np.percentile(source, pct)
             flagged = scores >= threshold
             captured = insider_labels[flagged].sum()
             recall = captured / total_insiders
@@ -746,22 +754,25 @@ class UEBAIsolationForest:
         return user_peak
 
 
-    def compute_score_distribution_shift(self, latent_embeddings: np.ndarray, train_score_dist: np.ndarray, thresholds: dict | None = None, save_path: str | None = None) -> tuple[float, float]:
+    def compute_score_distribution_shift(self, latent_embeddings: np.ndarray, reference_score_dist: np.ndarray, thresholds: dict | None = None, save_path: str | None = None) -> tuple[float, float]:
         """
-        Runs a Kolmogorov-Smirnov test comparing the training and test anomaly score distributions.
-        Renders overlaid histograms with optional percentile threshold lines.
+        Runs a Kolmogorov-Smirnov test comparing a reference score distribution against the
+        scores produced from the supplied embeddings. Renders overlaid histograms with optional
+        percentile threshold lines.
 
         Args:
             latent_embeddings: Latent embedding matrix of shape (n_samples, latent_emb_dim)
-            train_score_dist: Anomaly scores from the training distribution
+            reference_score_dist: Reference anomaly score distribution. Pass the clean calibration
+                baseline when verifying that operational thresholds will produce the expected
+                alert rates on evaluation data.
             thresholds: Optional dict {percentile: score_value} to overlay as vertical lines
             save_path: Optional path to persist the figure as 'score_distribution_shift.png'
 
         Returns:
             tuple[float, float]: (ks_stat, ks_pval)
         """
-        test_scores = self.anomaly_score(latent_embeddings)
-        ks_stat, ks_pval = ks_2samp(train_score_dist, test_scores)
+        eval_scores = self.anomaly_score(latent_embeddings)
+        ks_stat, ks_pval = ks_2samp(reference_score_dist, eval_scores)
 
         print(f"\nKolmogorov-Smirnov Distribution Shift Test")
         print(f"  KS Statistic : {ks_stat:.4f}")
@@ -772,10 +783,10 @@ class UEBAIsolationForest:
             print("  Distributions are consistent (p >= 0.05)")
 
         plt.figure(figsize=(10, 5))
-        plt.hist(train_score_dist, bins=60, color="#3a86a8", alpha=0.5, density=True,
-                 label="Training Distribution")
-        plt.hist(test_scores, bins=60, color="#e84545", alpha=0.5, density=True,
-                 label="Test Distribution")
+        plt.hist(reference_score_dist, bins=60, color="#3a86a8", alpha=0.5, density=True,
+                 label="Reference (clean baseline)")
+        plt.hist(eval_scores, bins=60, color="#e84545", alpha=0.5, density=True,
+                 label="Evaluation")
         if thresholds:
             threshold_colors = ["#28a745", "#d4a017", "#ff1744"]
             for (pct, thresh), col in zip(sorted(thresholds.items()), threshold_colors):
@@ -783,7 +794,7 @@ class UEBAIsolationForest:
                             label=f"{pct}th pct ({thresh:.4f})")
         plt.xlabel("Anomaly Score")
         plt.ylabel("Density")
-        plt.title(f"Score Distribution: Training vs Test (KS={ks_stat:.4f}, p={ks_pval:.4f})")
+        plt.title(f"Score Distribution: Reference vs Evaluation (KS={ks_stat:.4f}, p={ks_pval:.4f})")
         plt.legend(fontsize=9)
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
