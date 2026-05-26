@@ -8,6 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import json
+import math
 import os
 import subprocess
 import time
@@ -1139,31 +1140,37 @@ def load_peer_baselines():
 
 @st.cache_resource(show_spinner="Loading dataset...")
 def load_data():
-    """Load pre-merged parquet and pre-compute user_risk.
+    """Merge alert_table_6 and ueba_dataset_6b, then pre-compute user_risk.
 
-    Uses @st.cache_resource (not cache_data) so the DataFrame is stored by
-    reference — no pickle serialisation overhead. cache_data would pickle the
-    250 MB DataFrame to disk on first call, temporarily doubling peak RAM and
-    pushing the container past the 1 GB Streamlit Cloud free-tier limit.
-
-    On cloud: downloads merged_dataset_5.parquet (62 MB) via hf_hub_download,
-    which streams to the HF local disk cache before reading — avoids holding
-    the compressed bytes AND the decompressed Arrow table in memory at the same
-    time (unlike the hf:// fsspec path which buffers in-process).
+    Uses @st.cache_resource so the DataFrame is stored by reference — no pickle
+    serialisation overhead on repeated Streamlit reruns.
     """
     import gc
     import logging as _logging
+    import pyarrow.parquet as _pq
     _log = _logging.getLogger("ueba.load_data")
     _log.warning("[load_data] started")
 
-    _HF_REPO  = "DSKittens/ueba-dashboard-dat"
-    _hf_token = st.secrets.get("huggingface", {}).get("token", None)
+    _BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _ALERT_PATH = os.path.join(_BASE, "explainability", "alert_table", "alert_table_6.parquet")
+    _UEBA_PATH  = os.path.join(_BASE, "processed_datasets", "ueba_dataset_6", "ueba_dataset_6b.parquet")
 
-    # Local path for the pre-merged parquet (built by scripts/build_merged_parquet.py)
-    _MERGED_LOCAL = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "explainability", "alert_table", "merged_dataset_5.parquet",
-    )
+    _HF_BASE = "https://huggingface.co/datasets/Melusi-S/DSK-UEBA-Dataset6/resolve/main"
+    _DOWNLOADS = [
+        (_ALERT_PATH, f"{_HF_BASE}/alert_table_6.parquet"),
+        (_UEBA_PATH,  f"{_HF_BASE}/ueba_dataset_6b.parquet"),
+    ]
+
+    def _fetch(local_path, url):
+        import urllib.request
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        _log.warning(f"[load_data] downloading {os.path.basename(local_path)} from HuggingFace…")
+        urllib.request.urlretrieve(url, local_path)
+        _log.warning(f"[load_data] saved {local_path}")
+
+    for _local, _url in _DOWNLOADS:
+        if not os.path.exists(_local):
+            _fetch(_local, _url)
 
     def _downcast(df):
         for col in df.select_dtypes(include=["float64"]).columns:
@@ -1172,33 +1179,24 @@ def load_data():
             df[col] = df[col].astype("int32")
         return df
 
-    # ── Load single pre-merged file ──
-    _log.warning("[load_data] loading merged dataset")
-    if os.path.exists(_MERGED_LOCAL):
-        import pyarrow.parquet as _pq
-        _tbl = _pq.read_table(_MERGED_LOCAL)
-        merged = _tbl.to_pandas()
-        del _tbl
-        _log.warning("[load_data] loaded from local merged parquet")
-    else:
-        # Cloud: hf_hub_download caches the file to disk before reading.
-        # This avoids buffering the compressed bytes in-process (unlike hf://).
-        from huggingface_hub import hf_hub_download as _hf_dl
-        import pyarrow.parquet as _pq
-        _cached = _hf_dl(
-            repo_id=_HF_REPO,
-            filename="merged_dataset_5.parquet",
-            repo_type="dataset",
-            token=_hf_token,
-        )
-        _log.warning(f"[load_data] file cached at {_cached}")
-        _tbl = _pq.read_table(_cached)
-        _log.warning(f"[load_data] arrow table: {_tbl.nbytes/1e6:.0f} MB")
-        merged = _tbl.to_pandas()
-        del _tbl
-        _log.warning("[load_data] converted to pandas")
+    _log.warning("[load_data] loading alert table (v6)")
+    alert = _pq.read_table(_ALERT_PATH).to_pandas()
+    alert["day"] = pd.to_datetime(alert["day"], errors="coerce")
+    _downcast(alert)
 
+    _log.warning("[load_data] loading ueba dataset (v6b)")
+    ueba = _pq.read_table(_UEBA_PATH).to_pandas()
+    ueba["day"] = pd.to_datetime(ueba["day"], errors="coerce")
+    _downcast(ueba)
+
+    # Only bring in columns from alert_table that aren't already in ueba_dataset_6b
+    # (avoids duplicating department, role, supervisor, role_sensitivity).
+    _alert_only = ["user", "day"] + [c for c in alert.columns if c not in ueba.columns]
+    _log.warning("[load_data] merging")
+    merged = ueba.merge(alert[_alert_only], on=["user", "day"], how="left")
+    del alert, ueba
     gc.collect()
+
     _downcast(merged)
     merged["day"] = pd.to_datetime(merged["day"], errors="coerce")
     for _col in ("user", "ae_risk_band", "if_risk_band"):
@@ -1207,14 +1205,6 @@ def load_data():
     gc.collect()
     _log.warning(f"[load_data] merged: {merged.shape}, {merged.memory_usage(deep=True).sum()/1e6:.1f} MB")
 
-    # Merge — include alert-context columns from the alert table
-    analyst_cols = [
-    "user", "day", "if_anomaly_score", "ae_percentile_rank", "ae_risk_band",
-    "top_contributors", "if_percentile_rank", "if_risk_band", "explanation",
-    "composite_risk_band", "status", "suppression_rule",
-]
-    analyst_cols = [c for c in analyst_cols if c in analyst.columns]
-    merged = ueba.merge(analyst[analyst_cols], on=["user", "day"], how="left")
     # Cast risk bands to ordered categorical
     _risk_cat = pd.CategoricalDtype(categories=["LOW", "MEDIUM", "HIGH", "CRITICAL"], ordered=True)
     for _col in ("ae_risk_band", "if_risk_band"):
@@ -2763,10 +2753,16 @@ def _render_investigation_content() -> None:
         )
 
     # ── User Profile Section ──
-    _prof_row = user_profiles_df[user_profiles_df["user"] == selected_user]
+    _PROFILE_COLS = ["user", "employee_name", "department", "role", "supervisor", "role_sensitivity"]
+    _avail = [c for c in _PROFILE_COLS if c in _inv_merged.columns]
+    if len(_avail) > 1:
+        user_profiles_df = _inv_merged[_avail].drop_duplicates("user").reset_index(drop=True)
+    else:
+        user_profiles_df = pd.DataFrame(columns=_PROFILE_COLS)
+    _prof_row = user_profiles_df[user_profiles_df["user"] == _user]
     _prof = _prof_row.iloc[0] if not _prof_row.empty else None
 
-    _name      = _prof["employee_name"]     if _prof is not None else selected_user
+    _name      = _prof["employee_name"]     if _prof is not None else _user
     _dept      = _prof["department"]        if _prof is not None else "—"
     _role      = _prof["role"]              if _prof is not None else "—"
     _sup_id    = _prof["supervisor"]        if _prof is not None else None
@@ -2780,7 +2776,7 @@ def _render_investigation_content() -> None:
     else:
         _sup_display = "—"
 
-    _all_u_rows = user_data_dict.get(selected_user, pd.DataFrame())
+    _all_u_rows = _u_rows
     _total_alerts = len(_all_u_rows)
     _first_alert  = _all_u_rows["day"].min().strftime("%Y-%m-%d") if not _all_u_rows.empty else "—"
     _last_alert   = _all_u_rows["day"].max().strftime("%Y-%m-%d") if not _all_u_rows.empty else "—"
@@ -2813,7 +2809,7 @@ def _render_investigation_content() -> None:
         f"<div style='margin-bottom:14px;border-bottom:1px solid #1c1c1c;padding-bottom:10px;"
         f"display:flex;align-items:baseline;gap:12px;'>"
         f"<span style='font-family:Inter,sans-serif;font-size:16px;font-weight:600;color:#e0e0e0;'>{_name}</span>"
-        f"<span style='font-family:JetBrains Mono,monospace;font-size:11px;color:#555;'>{selected_user}</span>"
+        f"<span style='font-family:JetBrains Mono,monospace;font-size:11px;color:#555;'>{_user}</span>"
         f"</div>"
         # Fields grid
         "<div style='display:grid;grid-template-columns:repeat(6,1fr);gap:16px;'>"
@@ -2863,10 +2859,10 @@ def _render_investigation_content() -> None:
     _ah_total = len(_ah_rows_df)
     _ah_total_pages = max(1, (_ah_total + _AH_PAGE_SIZE - 1) // _AH_PAGE_SIZE)
 
-    _ah_page_key = f"ah_page_{selected_user}"
-    if _ah_page_key not in st.session_state or st.session_state.get("_ah_last_user") != selected_user:
+    _ah_page_key = f"ah_page_{_user}"
+    if _ah_page_key not in st.session_state or st.session_state.get("_ah_last_user") != _user:
         st.session_state[_ah_page_key] = 0
-    st.session_state["_ah_last_user"] = selected_user
+    st.session_state["_ah_last_user"] = _user
 
     _ah_page = st.session_state[_ah_page_key]
     _ah_slice = _ah_rows_df.iloc[_ah_page * _AH_PAGE_SIZE : (_ah_page + 1) * _AH_PAGE_SIZE]
@@ -3509,6 +3505,16 @@ if active_page == "Alerts":
         # Read all scored rows emitted so far (cached to avoid re-reading 500 MB+ per rerun)
         live_rows, stream_done = _cached_live_rows()
 
+        # Detect crash: process has exited (non-None poll) before writing any rows
+        if not live_rows and not proc_running and proc is not None:
+            _exit_code = proc.poll()
+            if _exit_code is not None and _exit_code != 0:
+                st.error(
+                    f"Live simulation process exited with code {_exit_code} before producing "
+                    "any output. Check the terminal for error details (e.g. missing model files "
+                    "or a feature-count mismatch). Click **⏹ STOP LIVE SIMULATION** to reset."
+                )
+
         if live_rows:
             live_df = pd.DataFrame(live_rows)
             # Keep only the columns users care about; drop duplicate/diagnostic fields.
@@ -3866,6 +3872,8 @@ if active_page == "Alerts":
 
 #####################
 
+        filtered_df = _get_filtered_df()
+
         # ── Combined Triage Status & Severity Filter ──
         section_header("FILTER BY TRIAGE STATUS & SEVERITY", "sh_disp_sev_filter")
         # Stack filters vertically
@@ -3881,6 +3889,11 @@ if active_page == "Alerts":
             )
             # Severity filter
             _sev_cols = st.columns([1, 1, 1, 1, 4])
+            _severity_counts = {
+                tier: int((filtered_df["ae_risk_band"] == tier).sum())
+                if "ae_risk_band" in filtered_df.columns else 0
+                for tier in RISK_TIERS
+            }
             _tier_checked = {}
             for _idx, _tier in enumerate(RISK_TIERS):
                 _color = RISK_COLORS[_tier]
@@ -3918,7 +3931,12 @@ if active_page == "Alerts":
                     unsafe_allow_html=True,
                 )
 
-       # Centralized severity mapping — extend here when new bands are added
+        # Pull filter state set by the global filter dialog
+        min_pctl    = st.session_state.get("flt_min_pctl", 0.0)
+        sort_choice = st.session_state.get("flt_sort_choice", "Highest score first")
+        max_results = st.session_state.get("flt_max_results", 500)
+
+        # Centralized severity mapping — extend here when new bands are added
         _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 
         # Suppressed Alerts mode: show only suppressed alerts (top 10)

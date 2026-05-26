@@ -15,6 +15,7 @@ per-row disk-read overhead present in the old two-file design.
 import argparse
 import asyncio
 import json
+import math
 import os
 import sys
 import signal
@@ -42,6 +43,88 @@ PAUSE_FLAG                  = config.LIVE_PAUSE_FLAG
 _FALLBACK_CRITICAL = 95.0
 _FALLBACK_HIGH     = 90.0
 _FALLBACK_MEDIUM   = 80.0
+
+# Behavioral feature columns to pass through to the JSONL output so that the
+# Investigation page can render the radar chart, heatmap, cross-channel flags,
+# and raw activity table with full data (not just scoring metadata).
+_PASSTHROUGH_COLS: list[str] = [
+    # Raw counts
+    "logon_count", "logoff_count", "off_hours_logon",
+    "file_open_count", "file_write_count", "file_copy_count",
+    "file_delete_count", "unique_files_accessed", "off_hours_files_accessed",
+    "usb_insert_count", "usb_remove_count", "off_hours_usb_usage",
+    "emails_sent", "unique_recipients", "external_emails_sent",
+    "attachments_sent", "off_hours_emails",
+    "http_total_requests", "http_visit_count", "http_download_count",
+    "http_upload_count", "http_jobsite_visits", "http_cloud_storage_visits",
+    "http_suspicious_site_visits", "off_hours_http_requests",
+    "http_long_url_count", "unique_domains_visited",
+    "pcs_used_count", "non_primary_pc_used_flag",
+    "non_primary_pc_http_requests_flag", "non_primary_pc_usb_flag",
+    "non_primary_pc_file_copy_flag",
+    # Cross-channel flags
+    "usb_file_activity_flag", "off_hours_activity_flag",
+    "external_comm_activity_flag", "jobsite_usb_activity_flag",
+    "suspicious_upload_flag", "cloud_upload_flag", "non_primary_pc_risk_flag",
+]
+
+_V5_TO_V1_RENAME: dict[str, str] = {}
+
+# Ordered list of the 108 feature columns
+_V1_FEATURE_COLS: list[str] = [
+    # Base features
+    "logon_count", "logoff_count", "off_hours_logon",
+    "file_open_count", "file_write_count", "file_copy_count", "file_delete_count",
+    "off_hours_files_accessed",
+    "usb_insert_count", "usb_remove_count", "off_hours_usb_usage",
+    "emails_sent", "external_emails_sent", "attachments_sent", "off_hours_emails",
+    "http_total_requests", "http_visit_count", "http_download_count", "http_upload_count",
+    "http_jobsite_visits", "http_cloud_storage_visits", "http_suspicious_site_visits",
+    "off_hours_http_requests", "http_long_url_count",
+    "pc_seen_before", "new_pc_after_stable_history", "pc_prior_use_ratio",
+    "primary_pc_activity_ratio", "distinct_pcs_used_prior",
+    "pcs_used_count", "non_primary_pc_used_flag", "non_primary_pc_http_requests_flag",
+    "non_primary_pc_usb_flag", "non_primary_pc_file_copy_flag",
+    "unique_files_accessed", "unique_recipients", "unique_domains_visited",
+    # Z-scores
+    "logon_count_zscore", "logoff_count_zscore", "off_hours_logon_zscore",
+    "file_open_count_zscore", "file_write_count_zscore", "file_copy_count_zscore",
+    "file_delete_count_zscore", "unique_files_accessed_zscore",
+    "off_hours_files_accessed_zscore", "usb_insert_count_zscore",
+    "usb_remove_count_zscore", "off_hours_usb_usage_zscore",
+    "emails_sent_zscore", "external_emails_sent_zscore", "attachments_sent_zscore",
+    "off_hours_emails_zscore", "unique_recipients_zscore",
+    "http_total_requests_zscore", "http_visit_count_zscore", "http_download_count_zscore",
+    "http_upload_count_zscore", "http_jobsite_visits_zscore",
+    "http_cloud_storage_visits_zscore", "http_suspicious_site_visits_zscore",
+    "off_hours_http_requests_zscore", "http_long_url_count_zscore",
+    "unique_domains_visited_zscore",
+    "pcs_used_count_zscore", "non_primary_pc_used_flag_zscore",
+    "non_primary_pc_http_requests_flag_zscore", "non_primary_pc_usb_flag_zscore",
+    "non_primary_pc_file_copy_flag_zscore",
+    # Rolling deltas
+    "logon_count_rolling_delta", "logoff_count_rolling_delta",
+    "off_hours_logon_rolling_delta", "file_open_count_rolling_delta",
+    "file_write_count_rolling_delta", "file_copy_count_rolling_delta",
+    "file_delete_count_rolling_delta", "unique_files_accessed_rolling_delta",
+    "off_hours_files_accessed_rolling_delta", "usb_insert_count_rolling_delta",
+    "usb_remove_count_rolling_delta", "off_hours_usb_usage_rolling_delta",
+    "emails_sent_rolling_delta", "external_emails_sent_rolling_delta",
+    "attachments_sent_rolling_delta", "off_hours_emails_rolling_delta",
+    "unique_recipients_rolling_delta",
+    "http_total_requests_rolling_delta", "http_visit_count_rolling_delta",
+    "http_download_count_rolling_delta", "http_upload_count_rolling_delta",
+    "http_jobsite_visits_rolling_delta", "http_cloud_storage_visits_rolling_delta",
+    "http_suspicious_site_visits_rolling_delta", "off_hours_http_requests_rolling_delta",
+    "http_long_url_count_rolling_delta", "unique_domains_visited_rolling_delta",
+    "pcs_used_count_rolling_delta", "non_primary_pc_used_flag_rolling_delta",
+    "non_primary_pc_http_requests_flag_rolling_delta", "non_primary_pc_usb_flag_rolling_delta",
+    "non_primary_pc_file_copy_flag_rolling_delta",
+    # Cross-channel flags
+    "off_hours_activity_flag", "usb_file_activity_flag", "external_comm_activity_flag",
+    "jobsite_usb_activity_flag", "suspicious_upload_flag", "cloud_upload_flag",
+    "non_primary_pc_risk_flag",
+]
 
 # ── Global WebSocket client registry ─────────────────────────────────────────
 _ws_clients: set = set()
@@ -112,6 +195,13 @@ class LiveScorer:
                      if c in ("user", "pc", "day") or str(c).startswith("Unnamed:")]
         feat_df = row_df.drop(columns=drop_cols)
 
+        # Normalise column names: rename v5 aliases to the names the scaler was fitted on,
+        # then select exactly the expected feature columns (handles datasets with more or
+        # fewer columns than the model version requires).
+        feat_df = feat_df.rename(columns=_V5_TO_V1_RENAME)
+        expected_cols = [c for c in _V1_FEATURE_COLS if c in feat_df.columns]
+        feat_df = feat_df[expected_cols]
+
         t0 = time.perf_counter()
         scaled    = self.scaler.transform(feat_df.values.astype("float32"))
         embedding = self.encoder.predict(scaled, verbose=0)
@@ -143,6 +233,22 @@ class LiveScorer:
             "if_risk_band":      if_risk_band,
             "_score_ms":         round(elapsed_ms, 1),   # diagnostic; dashboard ignores this
         }
+
+        # Pass through behavioral features so the Investigation page can render
+        # all charts (radar, heatmap, flags) with full data for live records.
+        for _col in _PASSTHROUGH_COLS:
+            if _col in row_df.columns:
+                _v = row_df[_col].iloc[0]
+                # Convert numpy scalars → Python native; NaN → None (valid JSON)
+                if hasattr(_v, "item"):
+                    _v = _v.item()
+                try:
+                    if math.isnan(_v):
+                        _v = None
+                except TypeError:
+                    pass
+                payload[_col] = _v
+
         return payload
 
 

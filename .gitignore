@@ -28,6 +28,7 @@ scripts/build_alert_table_v1.py
 .claude/settings.local.json
 
 # Streamlit secrets (contains Firebase credentials — never commit)
+.streamlit/secrets.toml
 dashboard/.streamlit
 
 # live results file 
