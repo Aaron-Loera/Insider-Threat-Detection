@@ -8,7 +8,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import json
-import math
 import os
 import subprocess
 import time
@@ -16,6 +15,12 @@ import ast as _ast
 import hmac
 import hashlib
 import html as _html_mod
+from db import init_db, upsert_disposition, get_disposition, get_all_dispositions
+
+ALERT_STATUS_OPTIONS = ["NEW", "INVESTIGATING", "RESOLVED", "DISMISSED"]
+
+def _on_status_change(user, day, key):
+    upsert_disposition(user, day, st.session_state[key])
 
 try:
     import pyrebase
@@ -990,6 +995,8 @@ if not st.session_state.get("authenticated", False):
 if st.session_state.pop("_set_cookie", False):
     _set_auth_cookie(st.session_state.get("auth_user_email", ""))
 
+
+init_db()
 
 # ──────────────────────────────────────────────────────────────
 # Data Loading
@@ -1981,6 +1988,7 @@ def _get_filtered_df() -> pd.DataFrame:
         tuple(sorted(st.session_state.flt_risk)),
     )
 
+filtered_df = _get_filtered_df()
 
 @st.cache_data(show_spinner=False)
 def _pop_channel_avgs() -> dict[str, float]:
@@ -3745,8 +3753,6 @@ if active_page == "Alerts":
 
 #####################
 
-        filtered_df = _get_filtered_df()
-
         # ── Combined Triage Status & Severity Filter ──
         section_header("FILTER BY TRIAGE STATUS & SEVERITY", "sh_disp_sev_filter")
         # Stack filters vertically
@@ -3812,6 +3818,17 @@ if active_page == "Alerts":
         # Centralized severity mapping — extend here when new bands are added
         _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 
+        # Build triage disposition lookup from SQLite: {(user, day_str): status}
+        _triage_all = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
+
+        # Map radio label → disposition status value
+        _DISP_FILTER_MAP = {
+            "Show New Only":      "NEW",
+            "Show Investigating": "INVESTIGATING",
+            "Show Resolved":      "RESOLVED",
+            "Show Dismissed":     "DISMISSED",
+        }
+
         # Suppressed Alerts mode: show only suppressed alerts (top 10)
         if show_suppressed_alerts:
             alert_data = (
@@ -3838,6 +3855,19 @@ if active_page == "Alerts":
                     else True
                 )
             ].copy()
+
+            # Apply triage disposition filter (SQLite-backed, row-level lookup)
+            if _disp_filter in _DISP_FILTER_MAP:
+                _target = _DISP_FILTER_MAP[_disp_filter]
+                _day_strs = alert_data["day"].apply(
+                    lambda d: d.strftime("%Y-%m-%d") if hasattr(d, "strftime")
+                    else str(d).split("T")[0].split(" ")[0]
+                )
+                _row_statuses = pd.Series(
+                    [_triage_all.get((u, d), "NEW") for u, d in zip(alert_data["user"], _day_strs)],
+                    index=alert_data.index,
+                )
+                alert_data = alert_data[_row_statuses == _target]
 
         # Sort based on explicit outcome label (skip in suppressed mode, already sorted)
         if not show_suppressed_alerts:
@@ -3880,7 +3910,10 @@ if active_page == "Alerts":
         card_data = alert_data.head(CARD_LIMIT)
 
         if total_alerts == 0:
-            st.info("No alerts match the current filters.")
+            if show_suppressed_alerts:
+                st.info("No suppressed alerts found in the current filter range.")
+            else:
+                st.info("No alerts match the current filters.")
         else:
             # ── Alert Feed header with Filter button inline ──
             _af_left, _af_right = st.columns([9, 1], vertical_alignment="bottom")
@@ -3900,29 +3933,50 @@ if active_page == "Alerts":
                 "font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
                 "text-transform:uppercase;letter-spacing:1.5px;"
             )
-            _h_risk, _h_info, _h_day, _h_pctl, _h_btn = st.columns([1, 5, 2, 1, 2])
-            _h_risk.markdown(f"<span style='{_HDR}'>Risk</span>", unsafe_allow_html=True)
-            _h_info.markdown(f"<span style='{_HDR}'>User / Investigation hint</span>", unsafe_allow_html=True)
-            _h_day.markdown(f"<span style='{_HDR}'>Day</span>", unsafe_allow_html=True)
-            _h_pctl.markdown(f"<span style='{_HDR}'>Percentile</span>", unsafe_allow_html=True)
+            if show_suppressed_alerts:
+                _h_risk, _h_info, _h_rule, _h_day, _h_pctl, _h_status, _h_btn = st.columns([1, 4, 3, 2, 1, 2, 2])
+                _h_risk.markdown(f"<span style='{_HDR}'>Risk</span>", unsafe_allow_html=True)
+                _h_info.markdown(f"<span style='{_HDR}'>User / Reason</span>", unsafe_allow_html=True)
+                _h_rule.markdown(f"<span style='{_HDR}'>Suppression Rule</span>", unsafe_allow_html=True)
+                _h_day.markdown(f"<span style='{_HDR}'>Day</span>", unsafe_allow_html=True)
+                _h_pctl.markdown(f"<span style='{_HDR}'>Pctl</span>", unsafe_allow_html=True)
+                _h_status.markdown(f"<span style='{_HDR}'>Status</span>", unsafe_allow_html=True)
+            else:
+                _h_risk, _h_info, _h_day, _h_pctl, _h_status, _h_btn = st.columns([1, 5, 2, 1, 2, 2])
+                _h_risk.markdown(f"<span style='{_HDR}'>Risk</span>", unsafe_allow_html=True)
+                _h_info.markdown(f"<span style='{_HDR}'>User / Investigation hint</span>", unsafe_allow_html=True)
+                _h_day.markdown(f"<span style='{_HDR}'>Day</span>", unsafe_allow_html=True)
+                _h_pctl.markdown(f"<span style='{_HDR}'>Percentile</span>", unsafe_allow_html=True)
+                _h_status.markdown(f"<span style='{_HDR}'>Status</span>", unsafe_allow_html=True)
             st.markdown(
                 "<div style='border-bottom:1px solid #1a1a1a;margin:0 0 2px 0;'></div>",
                 unsafe_allow_html=True,
             )
 
             # ── Per-alert card rows ──
+            _disp_lookup = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
             for i, row in enumerate(card_data.itertuples()):
-                risk    = getattr(row, "ae_risk_band",    "LOW")
+                risk    = getattr(row, "composite_risk_band", "MEDIUM") if show_suppressed_alerts else getattr(row, "ae_risk_band", "LOW")
                 user    = getattr(row, "user",           "—")
                 day_val = getattr(row, "day",            None)
-                day_str = day_val.strftime("%Y-%m-%d") if hasattr(day_val, "strftime") else str(day_val)
+                day_str = (day_val.strftime("%Y-%m-%d") if hasattr(day_val, "strftime")
+                           else str(day_val).split("T")[0].split(" ")[0])
                 pctl    = getattr(row, "ae_percentile_rank", 0.0)
                 top_raw = _get_alert_detail(getattr(row, "user", ""), getattr(row, "day", None), "top_contributors")
                 summary = build_alert_summary(top_raw)
+                status  = str(getattr(row, "status", "")).upper()
+                supp_rule = getattr(row, "suppression_rule", None) or "—"
 
                 risk_color = RISK_COLORS.get(risk, "#666666")
+                _disp_key = f"disp_{user}_{day_str}"
+                _cur_status = _disp_lookup.get((user, day_str), "NEW")
+                if _disp_key not in st.session_state:
+                    st.session_state[_disp_key] = _cur_status
 
-                c_risk, c_info, c_day, c_pctl, c_btn = st.columns([1, 5, 2, 1, 2])
+                if show_suppressed_alerts:
+                    c_risk, c_info, c_rule, c_day, c_pctl, c_status, c_btn = st.columns([1, 4, 3, 2, 1, 2, 2])
+                else:
+                    c_risk, c_info, c_day, c_pctl, c_status, c_btn = st.columns([1, 5, 2, 1, 2, 2])
 
                 with c_risk:
                     st.markdown(
@@ -3933,6 +3987,15 @@ if active_page == "Alerts":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
+                    if status == "SUPPRESSED" and show_suppressed_alerts:
+                        st.markdown(
+                            f"<div style='padding-top:2px;'>"
+                            f"<span style='background:#9a8b7722;color:#9a8b77;font-size:9px;"
+                            f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:2px 6px;"
+                            f"border:1px solid #9a8b7755;display:inline-block;'>SUPPRESSED</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
 
                 with c_info:
                     st.markdown(
@@ -3944,6 +4007,15 @@ if active_page == "Alerts":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
+
+                if show_suppressed_alerts:
+                    with c_rule:
+                        st.markdown(
+                            f"<div style='font-family:JetBrains Mono,monospace;font-size:10px;"
+                            f"color:#d4a017;padding-top:5px;word-break:break-all;'>"
+                            f"{_html_mod.escape(str(supp_rule))}</div>",
+                            unsafe_allow_html=True,
+                        )
 
                 with c_day:
                     st.markdown(
@@ -3959,8 +4031,18 @@ if active_page == "Alerts":
                         unsafe_allow_html=True,
                     )
 
+                with c_status:
+                    st.selectbox(
+                        "Status",
+                        options=ALERT_STATUS_OPTIONS,
+                        key=_disp_key,
+                        on_change=_on_status_change,
+                        args=(user, day_str, _disp_key),
+                        label_visibility="collapsed",
+                    )
+
                 with c_btn:
-                    if st.button("Investigate →", key=f"al_inv_{i}", use_container_width=True):
+                    if st.button("Investigate →", key=f"al_inv_{i}_{show_suppressed_alerts}", use_container_width=True):
                         st.session_state["inv_user_select"] = user
                         st.session_state["inv_alert_context"] = {
                             "user": user,
@@ -3979,6 +4061,7 @@ if active_page == "Alerts":
 
         # ── Export (columns + top_contributors if present) ──
         alert_display_cols = ["user", "day", "ae_risk_band", "if_anomaly_score", "ae_percentile_rank"]
+        alert_display_cols = [c for c in alert_display_cols if c in alert_data.columns]
         alert_display_cols += [c for c in CROSS_FLAGS if c in alert_data.columns]
         if "top_contributors" in alert_data.columns:
             alert_display_cols.append("top_contributors")
