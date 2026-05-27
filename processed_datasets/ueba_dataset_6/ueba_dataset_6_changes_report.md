@@ -12,7 +12,7 @@ terms of downstream model behavior (Autoencoder + Isolation Forest).
 | Metric                          | v5         | v6           |
 |---------------------------------|------------|--------------|
 | Layer A features                | 37         | 54           |
-| Layer B features                | 110        | 407          |
+| Layer B features                | 110        | 414          |
 | Off-hours definition            | Static (9, 17) for all users | Per-user envelope from history, with (9, 17) fallback |
 | Primary z-score window          | Unbounded expanding | 30-day rolling (min 14 days history) |
 | Long-horizon z-score            | —          | 90-day rolling (min 30 days history) |
@@ -202,15 +202,20 @@ the v5 single-horizon z-score collapsed into one signal.
 **What was added.** A new ingestion step and enhancement pass:
 
 - `load_ldap()` reads CERT's monthly LDAP snapshot files
-  (`LDAP/YYYY-MM.csv`), keeps the latest record per user (so role-changes
-  win), and returns `[user, role, department, team]`.
+  (`LDAP/YYYY-MM.csv`) and **retains all snapshot rows** without deduplication.
+  This design preserves the full snapshot history so that `build_user_profiles()`
+  can compute the `is_active` flag from snapshot presence. The function
+  returns `[user, employee_name, role, department, team, functional_unit,
+  supervisor, _snapshot]`, where `_snapshot` is a `pd.Timestamp` parsed from
+  the filename (`YYYY-MM`).
 - `apply_peer_group_enhancements()` computes a leave-one-out z-score for
   each `(peer_group, day)` cohort: every base feature gets a
   `<feature>_peer_zscore` column standardized against the user's peers,
-  clipped to `[-10, 10]`. Peer grouping is configurable via `PEER_GROUP_KEY`
-  in `config.py` (default `role`, swappable to `department` or `team`).
-  Leave-one-out variance is computed via the variance-decomposition trick
-  to avoid an expensive per-group apply.
+  clipped to `[-10, 10]`. Before mapping peer groups, it collapses `ldap_df`
+  to one row per user (latest snapshot wins) internally. Peer grouping is
+  configurable via `PEER_GROUP_KEY` in `config.py` (default `role`,
+  swappable to `department` or `team`). Leave-one-out variance is computed
+  via the variance-decomposition trick to avoid an expensive per-group apply.
 
 **Why this matters for modeling.** The per-user z-score answers "is this
 unusual for *this* user?" — but a user who has been compromised for weeks
@@ -220,6 +225,50 @@ this unusual for someone in this role?" — which a single user's history
 cannot mask. Combining the two is what unlocks detection of insiders whose
 entire baseline is the anomaly, not just users whose recent activity
 deviates from their own past.
+
+### 2.6 User profile enrichment (LDAP identity columns + role sensitivity)
+
+**What was added.** After peer-group z-scores are applied, `build_layer_b()`
+calls two additional LDAP helpers:
+
+- `build_user_profiles(ldap_raw)` collapses the multi-snapshot LDAP table to
+  one row per user (latest snapshot wins via `groupby + last()`), then appends
+  a boolean `is_active` flag — `True` iff the user appears in the most recent
+  LDAP monthly file. This produces a user-level lookup with columns
+  `[user, employee_name, role, department, functional_unit, supervisor, is_active]`.
+
+- `compute_role_sensitivity(role, department)` maps each user's role and
+  department to a `float32` sensitivity weight in `[0.0, 1.0]`.
+  Executives, IT-admin, and finance roles receive `0.80–1.00`; standard
+  individual contributors receive `0.30–0.50`. Finance departments
+  (Accounting, Payroll, FinancialPlanning, Pricing) receive a floor of `0.70`
+  regardless of role. Users with an unrecognised role default to `0.50`.
+
+These two outputs are left-joined onto the final Layer B matrix, adding the
+following columns to every `(user, day)` row:
+
+| Column            | Type      | Source                        |
+|-------------------|-----------|-------------------------------|
+| `employee_name`   | str       | LDAP (latest snapshot)        |
+| `role`            | str       | LDAP (latest snapshot)        |
+| `department`      | str       | LDAP (latest snapshot)        |
+| `functional_unit` | str       | LDAP (latest snapshot)        |
+| `supervisor`      | str/None  | LDAP (latest snapshot)        |
+| `role_sensitivity`| float32   | `compute_role_sensitivity()`  |
+| `is_active`       | bool      | Snapshot presence flag        |
+
+Missing users (not in LDAP) receive `employee_name = user`, `Unknown` for
+categorical fields, `role_sensitivity = 0.5`, and `is_active = False`.
+
+**Why this matters for modeling and triage.** `role_sensitivity` gives the
+downstream risk-banding logic a principled way to weight anomaly scores
+by how damaging a breach would be for that role — an IT-admin or CFO
+anomaly is not equivalent to a stockroom clerk anomaly at the same raw
+percentile. `is_active` enables the alert pipeline to suppress or
+down-weight alerts for former employees who appear in test data due to
+lag in log retention. `employee_name`, `department`, and `supervisor` are
+surfaced in the dashboard's Investigation tab for analyst triage without
+requiring a separate LDAP lookup at query time.
 
 ---
 
@@ -231,7 +280,9 @@ The v6 preprocessing pipeline produces the following files under
 - `ueba_dataset_6a.csv` / `ueba_dataset_6a.parquet` — Layer A,
   `(user, pc, day)` granularity, for drill-down analysis (54 features).
 - `ueba_dataset_6b.csv` / `ueba_dataset_6b.parquet` — Layer B,
-  `(user, day)` model-ready matrix (407 features).
+  `(user, day)` model-ready matrix (407 features), including LDAP-derived
+  identity columns (`employee_name`, `role`, `department`, `functional_unit`,
+  `supervisor`, `role_sensitivity`, `is_active`) joined from `build_user_profiles()`.
 - `ueba_dataset_6_train.parquet` — first ~80% chronologically (model training).
 - `ueba_dataset_6_calibration.parquet` — middle ~10%, insiders removed,
   used to fit AE/IF baselines and threshold calibration.
@@ -255,3 +306,6 @@ The v6 preprocessing pipeline produces the following files under
 | Detecting users whose entire baseline is anomalous        | Peer-group z-scores against LDAP role                               |
 | Reducing cold-start false positives                       | `baseline_complete` gate                                            |
 | Honest threshold calibration                              | Insider-free calibration slice                                      |
+| Role-weighted risk prioritization                         | `role_sensitivity` (0.3–1.0) from `compute_role_sensitivity()`      |
+| Suppressing stale-employee false positives                | `is_active` flag from LDAP snapshot presence                        |
+| Analyst triage without secondary LDAP lookup              | `employee_name`, `department`, `supervisor` pre-joined to Layer B   |

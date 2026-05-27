@@ -152,6 +152,19 @@ RECON_TABLE_PATH = _local_or(
     ),
 )
 
+# Peer-group baselines — (department, day, <behavioral features>) parquet used by
+# the Investigation tab to render peer-comparison charts.  Generated from the
+# training dataset by grouping on (department, day) and computing column means.
+# The dashboard degrades gracefully (peer comparison disabled) when this file
+# does not yet exist.
+PEER_BASELINES_PATH = _local_or(
+    "PEER_BASELINES_PATH",
+    os.path.join(
+        BASE_DIR, "processed_datasets", f"ueba_dataset_{V}",
+        f"peer_baselines_{V}.parquet",
+    ),
+)
+
 # Live-Simulation Paths (uses LIVE_MODEL_VERSION)
 LIVE_ENCODER_PATH = _local_or(
     "LIVE_ENCODER_PATH",

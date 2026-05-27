@@ -1,3 +1,5 @@
+import gc
+import json
 import os
 import numpy as np
 import pandas as pd
@@ -105,16 +107,21 @@ def load_raw_logs(cert_path: str) -> dict:
 
 def load_ldap(cert_path: str) -> pd.DataFrame:
     """
-    Loads per-user role/department metadata from the CERT LDAP monthly snapshot files.
+    Loads per-user identity metadata from the CERT LDAP monthly snapshot files.
 
-    CERT ships one LDAP CSV per month (LDAP/YYYY-MM.csv). Files are sorted chronologically
-    and the last record per user is kept so that late role-changes win.
+    CERT ships one LDAP CSV per month (LDAP/YYYY-MM.csv). All snapshot rows are
+    retained (no dedupe at this stage) so that downstream helpers can compute the
+    `is_active` flag from snapshot-presence. The latest-record-wins semantic is
+    preserved by `build_user_profiles` (and by the dedupe inside
+    `apply_peer_group_enhancements`).
 
     Args:
         cert_path: The base path containing the CERT dataset
 
     Returns:
-        pd.DataFrame: DataFrame with columns [user, role, department, team].
+        pd.DataFrame: DataFrame with columns
+            [user, employee_name, role, department, team, functional_unit, supervisor, _snapshot].
+            `_snapshot` is a pd.Timestamp parsed from the filename (YYYY-MM).
     """
     ldap_dir = os.path.join(cert_path, "LDAP")
     if not os.path.isdir(ldap_dir):
@@ -124,24 +131,146 @@ def load_ldap(cert_path: str) -> pd.DataFrame:
     for fname in sorted(os.listdir(ldap_dir)):
         if not fname.endswith(".csv"):
             continue
+        snapshot = pd.to_datetime(fname.replace(".csv", ""))
         df = pd.read_csv(
             os.path.join(ldap_dir, fname),
-            usecols=["user_id", "role", "department", "team"],
+            usecols=["user_id", "employee_name", "role", "department", "team",
+                     "functional_unit", "supervisor"],
         )
         df = df.rename(columns={"user_id": "user"})
+        df["_snapshot"] = snapshot
         frames.append(df)
 
     if not frames:
         raise ValueError("No LDAP CSV files found in: " + ldap_dir)
 
     combined = pd.concat(frames, ignore_index=True)
-    # Keep the latest record per user (last file wins on duplicate user_id rows)
-    combined = combined.drop_duplicates(subset=["user"], keep="last")
     combined["user"] = combined["user"].str.strip().str.lower()
-    for col in ["role", "department", "team"]:
+    combined["supervisor"] = combined["supervisor"].astype(str).str.strip().str.lower()
+    combined.loc[combined["supervisor"].isin(["", "nan", "none"]), "supervisor"] = None
+    for col in ["role", "department", "team", "functional_unit"]:
         combined[col] = combined[col].fillna("Unknown").str.strip()
-    print(f"Loaded LDAP metadata: {len(combined):,} users, {combined['role'].nunique()} unique roles.")
-    return combined[["user", "role", "department", "team"]].reset_index(drop=True)
+    combined["employee_name"] = combined["employee_name"].fillna("Unknown").str.strip()
+    print(
+        f"Loaded {len(frames)} LDAP snapshots: {combined['user'].nunique():,} unique users, "
+        f"{combined['role'].nunique()} unique roles, {len(combined):,} total rows."
+    )
+    return combined[
+        ["user", "employee_name", "role", "department", "team",
+         "functional_unit", "supervisor", "_snapshot"]
+    ].reset_index(drop=True)
+
+
+# ───────────────────────────────────────────────────────────────────
+# LDAP profile helpers
+# ───────────────────────────────────────────────────────────────────
+
+def build_user_profiles(ldap_raw: pd.DataFrame) -> pd.DataFrame:
+    """
+    Builds a per-user profile table from LDAP snapshot rows.
+
+    Args:
+        ldap_raw: Raw LDAP rows from load_ldap(); must contain a lowercase `user`
+            column and a `_snapshot` datetime column.
+
+    Returns:
+        pd.DataFrame: User profile table with only the most recent snapshot per
+            user, plus an `is_active` flag that is True iff the user appears in
+            the most recent LDAP monthly file.
+    """
+    latest_snapshot = ldap_raw["_snapshot"].max()
+
+    user_profiles = (
+        ldap_raw
+        .sort_values("_snapshot")
+        .groupby("user", as_index=False)
+        .last()
+        [["user", "employee_name", "role", "department", "functional_unit",
+          "supervisor", "_snapshot"]]
+    )
+
+    user_profiles["is_active"] = user_profiles["_snapshot"] == latest_snapshot
+    user_profiles = user_profiles.drop(columns="_snapshot")
+    return user_profiles
+
+
+# Sensitivity weights by role. Executives/finance/IT-admin: 0.8–1.0; standard employees: 0.3–0.5.
+_ROLE_SENSITIVITY: dict[str, float] = {
+    "President": 1.00,
+    "VicePresident": 0.95,
+    "Director": 0.90,
+    "ITAdmin": 0.90,
+    "Accountant": 0.85,
+    "FinancialAnalyst": 0.85,
+    "Attorney": 0.80,
+    "Economist": 0.80,
+    "Manager": 0.75,
+    "ProjectManager": 0.75,
+    "LabManager": 0.70,
+    "HumanResourceSpecialist": 0.70,
+    "Supervisor": 0.65,
+    "ComputerScientist": 0.50,
+    "Physicist": 0.50,
+    "Mathematician": 0.50,
+    "Statistician": 0.50,
+    "Scientist": 0.50,
+    "SoftwareDeveloper": 0.50,
+    "SoftwareEngineer": 0.50,
+    "WebDeveloper": 0.50,
+    "ComputerProgrammer": 0.50,
+    "PurchasingClerk": 0.45,
+    "SystemsEngineer": 0.45,
+    "SoftwareQualityEngineer": 0.45,
+    "ChiefEngineer": 0.45,
+    "HardwareEngineer": 0.40,
+    "ElectricalEngineer": 0.40,
+    "MechanicalEngineer": 0.40,
+    "MaterialsEngineer": 0.40,
+    "IndustrialEngineer": 0.40,
+    "HealthSafetyEngineer": 0.40,
+    "TestEngineer": 0.40,
+    "FieldServiceEngineer": 0.40,
+    "Engineer": 0.40,
+    "SecurityGuard": 0.40,
+    "Nurse": 0.40,
+    "NursePractitioner": 0.40,
+    "Salesman": 0.35,
+    "Technician": 0.35,
+    "TechnicalWriter": 0.35,
+    "InstructionalCoordinator": 0.30,
+    "ProductionLineWorker": 0.30,
+    "StockroomClerk": 0.30,
+    "AdministrativeAssistant": 0.30,
+    "AdministrativeStaff": 0.30,
+}
+
+# Finance departments receive a floor of 0.70 regardless of role.
+_FINANCE_DEPARTMENTS: frozenset[str] = frozenset({
+    "1 - Accounting",
+    "2 - Payroll",
+    "3 - FinancialPlanning",
+    "2 - Pricing",
+})
+
+
+def compute_role_sensitivity(role: pd.Series, department: pd.Series) -> pd.Series:
+    """
+    Maps role and department to a 0–1 sensitivity weight.
+
+    Executives, finance roles/departments, and IT-admin receive 0.8–1.0.
+    Standard employees receive 0.3–0.5. Users with an unrecognised role default to 0.5.
+
+    Args:
+        role: Series of role strings (may contain NaN or "UNKNOWN").
+        department: Series of department strings aligned with role.
+
+    Returns:
+        pd.Series of float32 sensitivity scores in [0.0, 1.0].
+    """
+    sensitivity = role.map(_ROLE_SENSITIVITY)
+    finance_mask = department.isin(_FINANCE_DEPARTMENTS)
+    sensitivity = sensitivity.where(~finance_mask, sensitivity.clip(lower=0.70))
+    return sensitivity.fillna(0.5).astype("float32")
 
 
 def normalize_shared_columns(df: pd.DataFrame, remove_cols: list=["id"], sort: bool=True) -> pd.DataFrame:
@@ -1180,6 +1309,61 @@ def save_dataset(dataset: pd.DataFrame, filename: str, output_dir: str=DEFAULT_O
     return file_path
 
 
+def save_nunique_frames(nunique_frames: dict, safepoint_dir: str) -> None:
+    """
+    Persists nunique identity frames to disk as a Layer A safepoint.
+
+    Saves each DataFrame in nunique_frames as a parquet file and writes a
+    nunique_manifest.json recording the value_col string for each entry.
+    Use load_nunique_frames() to reconstruct the dict on restart.
+
+    Args:
+        nunique_frames: Mapping of output column name → (source_df, value_col),
+            as returned by build_layer_a(return_nunique_frames=True).
+        safepoint_dir: Directory to write the parquet files and manifest into.
+    """
+    os.makedirs(safepoint_dir, exist_ok=True)
+    manifest = {}
+    for col_name, (source_df, value_col) in nunique_frames.items():
+        fname = f"nunique_{col_name}.parquet"
+        source_df.to_parquet(os.path.join(safepoint_dir, fname), index=False)
+        manifest[col_name] = {"file": fname, "value_col": value_col}
+    manifest_path = os.path.join(safepoint_dir, "nunique_manifest.json")
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+    print(f"Safepoint created at: {safepoint_dir}")
+
+
+def load_nunique_frames(safepoint_dir: str) -> dict:
+    """
+    Reconstructs nunique_frames from a Layer A safepoint written by save_nunique_frames().
+
+    Args:
+        safepoint_dir: Directory containing the parquet files and nunique_manifest.json.
+
+    Returns:
+        dict: Mapping of output column name → (source_df, value_col), ready to pass
+            to build_layer_b() as the nunique_frames argument.
+
+    Raises:
+        FileNotFoundError: If safepoint_dir or nunique_manifest.json does not exist.
+    """
+    manifest_path = os.path.join(safepoint_dir, "nunique_manifest.json")
+    if not os.path.exists(manifest_path):
+        raise FileNotFoundError(
+            f"Safepoint manifest not found at: {manifest_path}\n"
+            "Run the Layer A safepoint cell first to generate it."
+        )
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    nunique_frames = {}
+    for col_name, meta in manifest.items():
+        fpath = os.path.join(safepoint_dir, meta["file"])
+        nunique_frames[col_name] = (pd.read_parquet(fpath), meta["value_col"])
+    print(f"Safepoint loaded from: {safepoint_dir}")
+    return nunique_frames
+
+
 def chronological_split(
     csv_path: str | None=None,
     df: pd.DataFrame | None=None,
@@ -1499,7 +1683,6 @@ def apply_ueba_enhancements(
     Returns:
         pd.DataFrame: An enhanced UEBA-ready feature dataset
     """
-    df = df.copy()
     df.sort_values(by=["user", "day"], inplace=True)
     df.reset_index(drop=True, inplace=True)
 
@@ -1521,8 +1704,10 @@ def apply_ueba_enhancements(
         .replace(0, np.nan)
     )
     z_scores = ((df[feature_cols] - prior_mean) / prior_std).fillna(0.0)
-    z_scores = z_scores.clip(-10, 10)
+    z_scores = z_scores.clip(-10, 10).astype("float32")
     z_scores.columns = [f"{col}_zscore" for col in feature_cols]
+    df[z_scores.columns] = z_scores
+    del prior_mean, prior_std, z_scores
 
     # Long-horizon z-score: 90-day window catches gradual shifts that outrun the 30-day window.
     print("  Computing per-user long-horizon (90d) z-score deviations...")
@@ -1536,8 +1721,10 @@ def apply_ueba_enhancements(
         .replace(0, np.nan)
     )
     z_scores_90 = ((df[feature_cols] - prior_mean_90) / prior_std_90).fillna(0.0)
-    z_scores_90 = z_scores_90.clip(-10, 10)
+    z_scores_90 = z_scores_90.clip(-10, 10).astype("float32")
     z_scores_90.columns = [f"{col}_zscore_90d" for col in feature_cols]
+    df[z_scores_90.columns] = z_scores_90
+    del prior_mean_90, prior_std_90, z_scores_90
 
     # Computing temporal rolling deltas (legacy short window; retained for back-compat)
     print("  Computing causal rolling mean deltas...")
@@ -1545,16 +1732,18 @@ def apply_ueba_enhancements(
         user_shifted.rolling(window=rolling_window, min_periods=1).mean()
         .reset_index(level=0, drop=True)
     )
-    rolling_deltas = (df[feature_cols] - prior_rolling).fillna(0.0)
+    rolling_deltas = (df[feature_cols] - prior_rolling).fillna(0.0).astype("float32")
     rolling_deltas.columns = [f"{col}_rolling_delta" for col in feature_cols]
+    df[rolling_deltas.columns] = rolling_deltas
+    del prior_rolling, rolling_deltas, shifted, user_shifted
 
     # Per-user history gate: true only once we have enough prior observations for a stable baseline.
     # Downstream risk banding must not promote to CRITICAL where baseline_complete is False.
     prior_day_count = df.groupby("user", observed=True, sort=False).cumcount()
     baseline_complete = (prior_day_count >= zscore_min_history).astype(bool)
     baseline_complete.name = "baseline_complete"
-
-    df = pd.concat([df, z_scores, z_scores_90, rolling_deltas, baseline_complete], axis=1)
+    df["baseline_complete"] = baseline_complete
+    gc.collect()
         
     # Extracting off-hour columns
     print("  Adding cross-channel risk flags...")
@@ -1614,12 +1803,12 @@ def _add_multihorizon_features(df: pd.DataFrame, feature_cols: list) -> pd.DataF
         sum_7d = shifted_grp.rolling(window=7, min_periods=1).sum().reset_index(level=0, drop=True)
         sum_30d = shifted_grp.rolling(window=30, min_periods=1).sum().reset_index(level=0, drop=True)
 
-        new_cols[f"{col}_7d_sum"] = sum_7d
-        new_cols[f"{col}_30d_sum"] = sum_30d
+        new_cols[f"{col}_7d_sum"] = sum_7d.astype("float32")
+        new_cols[f"{col}_30d_sum"] = sum_30d.astype("float32")
         
         # ε = 0.5 suppresses noise on near-zero baselines; clip bounds AE input magnitude
         daily_avg_30d = sum_30d / 30
-        new_cols[f"{col}_1d_over_30d_ratio"] = (df[col] / (daily_avg_30d + 0.5)).clip(0, 50)
+        new_cols[f"{col}_1d_over_30d_ratio"] = (df[col] / (daily_avg_30d + 0.5)).clip(0, 50).astype("float32")
 
     return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
@@ -1650,7 +1839,12 @@ def apply_peer_group_enhancements(
     """
     df = df.copy()
 
-    role_map = ldap_df.set_index("user")[peer_col].to_dict()
+    # load_ldap() now retains all snapshot rows so that build_user_profiles can compute
+    # is_active. Collapse to one row per user (latest snapshot wins) before mapping.
+    ldap_latest = ldap_df.sort_values("_snapshot").drop_duplicates(subset=["user"], keep="last") \
+        if "_snapshot" in ldap_df.columns \
+        else ldap_df.drop_duplicates(subset=["user"], keep="last")
+    role_map = ldap_latest.set_index("user")[peer_col].to_dict()
     df["_peer_group"] = df["user"].map(role_map).fillna("Unknown")
 
     valid_cols = [c for c in feature_cols if c in df.columns]
@@ -1720,6 +1914,21 @@ def build_layer_b(
     if ldap_df is not None:
         print(f"Applying peer-group enhancements (peer_col='{peer_col}')...")
         layer_b_df = apply_peer_group_enhancements(layer_b_df, feature_cols=feature_cols, ldap_df=ldap_df, peer_col=peer_col)
+
+        print("Joining LDAP user profiles (employee_name, department, role, supervisor, "
+              "functional_unit, role_sensitivity, is_active)...")
+        user_profiles = build_user_profiles(ldap_df)
+        user_profiles["role_sensitivity"] = compute_role_sensitivity(
+            user_profiles["role"], user_profiles["department"]
+        )
+        layer_b_df = layer_b_df.merge(user_profiles, on="user", how="left")
+        layer_b_df["employee_name"] = layer_b_df["employee_name"].fillna(layer_b_df["user"])
+        for col in ["department", "role", "functional_unit"]:
+            layer_b_df[col] = layer_b_df[col].fillna("Unknown")
+        layer_b_df["supervisor"] = layer_b_df["supervisor"].where(layer_b_df["supervisor"].notna(), None)
+        layer_b_df["role_sensitivity"] = layer_b_df["role_sensitivity"].fillna(0.5).astype("float32")
+        layer_b_df["is_active"] = layer_b_df["is_active"].fillna(False).astype(bool)
+
     print(f"Layer B complete — {len(layer_b_df):,} rows, {len(layer_b_df.columns)} features.")
     return layer_b_df
 

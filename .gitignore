@@ -9,6 +9,7 @@
 *.pdf
 settings.json
 calibration_thresholds.json
+nunique_manifest.json
 
 # Notebooks
 Scratch.ipynb
@@ -33,3 +34,6 @@ dashboard/.streamlit
 
 # live results file 
 processed_datasets/live_results.jsonl
+
+# Database
+dashboard/alert_state.db

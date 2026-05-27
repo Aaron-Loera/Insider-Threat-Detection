@@ -1211,6 +1211,22 @@ def load_data():
         if _col in merged.columns:
             merged[_col] = merged[_col].astype(_risk_cat)
 
+    # Defense in depth: enforce the v6 baseline_complete gate at read time.
+    # Upstream Alert_Object_Builder already filters baseline_complete=False rows before
+    # risk banding, but re-applying here protects against alert_table regenerations that
+    # skipped the filter (cold-start users would otherwise surface as false CRITICAL).
+    if "baseline_complete" in merged.columns:
+        _ungated = ~merged["baseline_complete"].fillna(False).astype(bool)
+        for _band_col in ("ae_risk_band", "if_risk_band", "composite_risk_band"):
+            if _band_col in merged.columns:
+                _crit_mask = _ungated & (merged[_band_col] == "CRITICAL")
+                if _crit_mask.any():
+                    merged.loc[_crit_mask, _band_col] = "HIGH"
+                    _log.warning(
+                        f"[load_data] baseline_complete gate demoted "
+                        f"{int(_crit_mask.sum())} CRITICAL→HIGH in {_band_col}"
+                    )
+
     # ── Pre-compute per-user risk summary ──
     user_risk = (
         merged.groupby("user", observed=True)
