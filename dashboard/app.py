@@ -1145,10 +1145,14 @@ def load_data():
     _ALERT_PATH = os.path.join(_BASE, "explainability", "alert_table", "alert_table_6.parquet")
     _UEBA_PATH  = os.path.join(_BASE, "processed_datasets", "ueba_dataset_6", "ueba_dataset_6b.parquet")
 
-    _HF_BASE = "https://huggingface.co/datasets/Melusi-S/DSK-UEBA-Dataset6/resolve/main"
+    _HF_BASE = "https://huggingface.co/datasets/InsiderGuard-AI/UEBA-dataset-6/resolve/main"
+    _TEST_STREAM_PATH = os.path.join(
+        _BASE, "processed_datasets", "ueba_dataset_6", "ueba_dataset_6_test_stream.parquet"
+    )
     _DOWNLOADS = [
-        (_ALERT_PATH, f"{_HF_BASE}/alert_table_6.parquet"),
-        (_UEBA_PATH,  f"{_HF_BASE}/ueba_dataset_6b.parquet"),
+        (_ALERT_PATH,       f"{_HF_BASE}/alert_table_6.parquet"),
+        (_UEBA_PATH,        f"{_HF_BASE}/ueba_dataset_6b.parquet"),
+        (_TEST_STREAM_PATH, f"{_HF_BASE}/ueba_dataset_6_test_stream.parquet"),
     ]
 
     def _fetch(local_path, url):
