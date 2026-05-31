@@ -457,20 +457,20 @@ def save_table(df: pd.DataFrame, save_path: str) -> None:
 
     Args:
         df: DataFrame table
-        save_path: Path to save table to
+        save_path: Path to save table to; may include subdirectory components
+            (e.g. "alert_table_6/alert_table_6.parquet")
 
     Returns:
         None:
     """
-    # Ensuring output directory exists
     output_dir = r"explainability\alert_table"
-    os.makedirs(output_dir, exist_ok=True)
 
     format = save_path.split(".")[-1]
     if format not in ("csv", "parquet"):
         raise ValueError(f"Please specify either 'csv' or 'parquet' format. Got {format}.")
-    
+
     full_path = os.path.join(output_dir, save_path)
+    os.makedirs(os.path.dirname(full_path), exist_ok=True)
     if format == "csv":
         df.to_csv(full_path, index=False)
     else:

@@ -10,6 +10,7 @@
 settings.json
 calibration_thresholds.json
 nunique_manifest.json
+feature_cols.json
 
 # Notebooks
 Scratch.ipynb
@@ -37,3 +38,6 @@ processed_datasets/live_results.jsonl
 
 # Database
 dashboard/alert_state.db
+
+# Hugging Face
+.hf_token

@@ -1021,6 +1021,7 @@ from config import (
     UEBA_A_PARQUET, UEBA_A_CSV,
     LIVE_OUTPUT, LIVE_PAUSE_FLAG, LIVE_SIM_SCRIPT,
     PEER_BASELINES_PATH,
+    CALIB_ALERT_TABLE_PARQUET,
 )
 
 # Only load columns the dashboard actually uses
@@ -1152,7 +1153,7 @@ def load_data():
     _log.warning("[load_data] started")
 
     _BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    _ALERT_PATH = os.path.join(_BASE, "explainability", "alert_table", "alert_table_6.parquet")
+    _ALERT_PATH = os.path.join(_BASE, "explainability", "alert_table", "alert_table_6", "alert_table_6.parquet")
     _UEBA_PATH  = os.path.join(_BASE, "processed_datasets", "ueba_dataset_6", "ueba_dataset_6b.parquet")
 
     _HF_BASE = "https://huggingface.co/datasets/Melusi-S/DSK-UEBA-Dataset6/resolve/main"
@@ -1183,6 +1184,19 @@ def load_data():
     alert = _pq.read_table(_ALERT_PATH).to_pandas()
     alert["day"] = pd.to_datetime(alert["day"], errors="coerce")
     _downcast(alert)
+
+    # Load calibration-period alert table if available; concat to close the train→test time gap
+    if os.path.exists(CALIB_ALERT_TABLE_PARQUET):
+        _log.warning("[load_data] loading calibration alert table — concatenating with train")
+        _calib_alert = _pq.read_table(CALIB_ALERT_TABLE_PARQUET).to_pandas()
+        _calib_alert["day"] = pd.to_datetime(_calib_alert["day"], errors="coerce")
+        _downcast(_calib_alert)
+        alert = pd.concat([alert, _calib_alert], ignore_index=True)
+        del _calib_alert
+        gc.collect()
+        _log.warning(f"[load_data] combined alert table: {len(alert):,} rows")
+    else:
+        _log.warning(f"[load_data] calibration alert table not found at {CALIB_ALERT_TABLE_PARQUET} — train period only")
 
     _log.warning("[load_data] loading ueba dataset (v6b)")
     ueba = _pq.read_table(_UEBA_PATH).to_pandas()

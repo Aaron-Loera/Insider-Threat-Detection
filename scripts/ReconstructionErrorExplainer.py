@@ -1,3 +1,13 @@
+"""
+Reconstruction error decomposition utilities for autoencoder-based anomaly detection.
+
+Provides `ReconstructionErrorExplainer`, which decomposes a trained autoencoder's
+per-sample MSE into feature-level and behavioral-channel-level contributions.
+Output is consumed by `Alert_Object_Builder` to surface top anomalous channels
+in analyst-facing risk alerts.
+
+Also exports `save_table()` for persisting explanation DataFrames as Parquet.
+"""
 import os
 import numpy as np
 import pandas as pd
@@ -59,11 +69,11 @@ class ReconstructionErrorExplainer:
     
     def compute_contribution_ratio(self, feature_error: np.ndarray, total_error: np.ndarray) -> np.ndarray:
         """
-        Computes the percentage contributions fo each feature to the total error.
+        Computes the percentage contribution of each feature to the total error.
         
         Args:
             feature_error: An array containing feature-level errors
-            total_errors: An array containing total reconstruction error per sample
+            total_error: An array containing total reconstruction error per sample
             
         Returns:
             np.ndarray: The contribution ratio of the shape: (n_samples, n_features)

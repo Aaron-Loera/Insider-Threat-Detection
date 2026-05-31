@@ -31,8 +31,14 @@ This is a UEBA (User and Entity Behavior Analytics) insider threat detection sys
 **1. `dashboard/app.py`** — Streamlit web UI for security analysts
 - Loads two pre-computed datasets at startup (cached via `@st.cache_data`): `explainability/alert_table/alert_table_6.parquet` and `processed_datasets/ueba_dataset_6/ueba_dataset_6_train.parquet`
 - Merges them on `(user, day)` keys
+- Re-enforces the `baseline_complete` gate at load time: CRITICAL bands are demoted to HIGH for any user with fewer than 14 days of history, guarding against alert tables regenerated without the filter
 - Four tabs: Overview (KPIs + charts), Investigation (per-user deep dive), Alerts (filterable feed), Channels (feature analysis)
 - Global sidebar filters (date range, risk level, user search) drive all views
+
+**`dashboard/db.py`** — SQLite-backed alert disposition store
+- `init_db()` creates the `alert_dispositions` table on first run (`alert_state.db` lives alongside `app.py`)
+- `upsert_disposition(user, day, status, note)` — idempotent upsert keyed on `(user, day)`
+- `get_disposition` / `get_all_dispositions` — read-path helpers for the dashboard
 
 **2. `live_simulation.py`** — Real-time scoring engine
 - `LiveScorer` class loads encoder model, StandardScaler, and Isolation Forest once at startup
@@ -48,20 +54,18 @@ Raw CERT logs (logon/file/device/email/http CSVs)
   → CERT_Preprocessing.ipynb     # Feature engineering → ueba_dataset_5/ (train/test split, 108 features)
   → Autoencoder.ipynb            # Train autoencoder on insider-filtered normal data, extract 16-dim embeddings + scaler
   → Isolation_Forest.ipynb       # Train IF on normal-behavior embeddings, compute anomaly scores
-  → Alert_Object_Builder.ipynb   # Merge scores + features → alert_table_5.parquet, cases_5.parquet
+  → Alert_Object_Builder.ipynb   # Inner-join scores + features → alert_table_6.parquet, cases_6.parquet; asserts row counts align to surface pipeline drift early
 ```
 
 `prepare_data.py` provides shared utilities for the notebooks: `chronological_split` (90/10 train/test), `get_insiders`, `build_insider_mask`, and `get_scores`.
 
 ### Model Artifacts
 
-- `encoders/encoder_model_6a/` — **recommended offline model**; trained on insider-filtered normal behavior from ueba_dataset_6; same architecture as model 5 (dropout 0.2, linear latent activation, early stopping patience=10, 80/10/10 chronological split, calibration-aware training); learning rate 0.001; training loss ~22.93%, validation loss ~15.81%
+- `encoders/encoder_model_6/` — **recommended offline model**; trained on insider-filtered normal behavior from ueba_dataset_6; same architecture as model 5 (dropout 0.2, linear latent activation, early stopping patience=10, 80/10/10 chronological split, calibration-aware training); learning rate 0.001; training loss ~22.93%, validation loss ~15.81%
 - `encoders/encoder_model_5/` — previous offline model; trained on ueba_dataset_5 (108 features); learning rate 0.001; training loss 26.78%, validation loss 16.90%
-- `encoders/encoder_model_4/` — older offline model; identical architecture to model 5 but learning rate 0.0005; trained on ueba_dataset_4
-- `isolation_forests/iforest_model_6a/` — **recommended offline IF**; trained on encoder_model_6a's normal-behavior embeddings; contamination="auto"; evaluation artifacts: confusion_matrix, precision_at_recall, user_detection_rate, alert_volume, time_to_first_alert, rank_order, score_distribution_shift
+- `isolation_forests/iforest_model_6/` — **recommended offline IF**; trained on encoder_model_6's normal-behavior embeddings; contamination="auto"; evaluation artifacts: confusion_matrix, precision_at_recall, user_detection_rate, alert_volume, time_to_first_alert, rank_order, score_distribution_shift
 - `isolation_forests/iforest_model_5/` — previous offline IF; trained on model 5's normal-behavior embeddings; contamination=0.001; AUROC 0.765, separation ratio 1.27 (mean insider score 0.481 vs normal 0.378)
-- `isolation_forests/iforest_model_4/` — older offline IF; trained on model 4's embeddings; contamination=0.001; AUROC 0.751, separation ratio 1.27
-- Numbered suffixes (2, 3) are older experimental variants
+- Numbered suffixes (2, 3, 4) are older experimental variants
 
 ### Risk Scoring
 
@@ -79,10 +83,11 @@ Raw CERT logs (logon/file/device/email/http CSVs)
 - **Parquet-first I/O**: dashboard loads `.parquet` when available (5-10x faster than CSV)
 - **Column downcast**: float64 → float32, int64 → int16/32 to reduce memory footprint
 - **Reusable scripts**: `scripts/` contains class definitions used by both notebooks and runtime (Autoencoder, UEBAIsolationForest, Preprocessing, visualization helpers)
+- **Layer A safepoint**: `save_nunique_frames(nunique_frames, safepoint_dir)` / `load_nunique_frames(safepoint_dir)` in `scripts/Preprocessing.py` persist the intermediate nunique identity frames to parquet so `build_layer_b()` can resume after a kernel restart without rerunning Layer A
 
 ### Behavioral Features
 
-v6 Layer A has 54 base features (up from 34 in v5); Layer B has 407 total columns (up from 108), expanded via per-user z-scores, multi-horizon rolling features, and peer-group z-scores.
+v6 Layer A has 54 base features (up from 34 in v5); Layer B has 414 total columns (up from 108), expanded via per-user z-scores, multi-horizon rolling features, peer-group z-scores, and user profile enrichment.
 
 **Layer A base channels:**
 - **Auth** (3): logon_count, logoff_count, off_hours_logon
@@ -99,6 +104,7 @@ v6 Layer A has 54 base features (up from 34 in v5); Layer B has 407 total column
 - **Multi-horizon rolling** (`<feature>_7d_sum`, `<feature>_30d_sum`, `<feature>_1d_over_30d_ratio`): surfaces accumulation patterns and single-day spikes relative to monthly baseline
 - **Long-horizon z-scores** (`<feature>_zscore_90d`): 90-day trailing window to catch slow drift that outruns the 30-day z-score
 - **Peer-group z-scores** (`<feature>_peer_zscore`): leave-one-out z-scores against LDAP role cohort; detects insiders whose own baseline has been corrupted
+- **User profile enrichment** (joined by `build_layer_b`): `employee_name`, `department`, `role`, `supervisor`, `functional_unit`, `is_active`, `role_sensitivity` (0–1 float32; computed by `compute_role_sensitivity()` — executives/finance/IT-admin: 0.8–1.0, standard employees: 0.3–0.5)
 
 ### Configuration Constants (in `scripts/Preprocessing.py`)
 
@@ -106,6 +112,7 @@ v6 Layer A has 54 base features (up from 34 in v5); Layer B has 407 total column
 - `INTERNAL_EMAIL_DOMAIN = "dtaa.com"` — organization domain for external email detection
 - Domain lists: `JOB_DOMAINS`, `CLOUD_STORAGE_DOMAINS`, `SUSPICIOUS_DOMAINS` for HTTP URL classification
 - `PEER_GROUP_KEY` (in `config.py`) — LDAP grouping key for peer z-scores; default `role`, swappable to `department` or `team`
+- `PEER_BASELINES_PATH` (in `config.py`) — path to `peer_baselines_{V}.parquet` (department × day × feature means); generated from training data; dashboard degrades gracefully when absent
 
 ### Dataset Versions
 
@@ -118,7 +125,7 @@ v6 Layer A has 54 base features (up from 34 in v5); Layer B has 407 total column
   - `ueba_dataset_5b.csv` — (user, day) level for model training
   - `ueba_dataset_5_train.csv/parquet` — first 90% chronologically (model training)
   - `ueba_dataset_5_test_stream.csv` — last 10% chronologically (live simulation / inference)
-- v6 (`processed_datasets/ueba_dataset_6/`): 54 Layer A / 407 Layer B features — **currently active version**; adds per-user off-hours envelopes, bounded 30d/90d z-scores, peer-group z-scores, sub-day intensity features, late-night counters, multi-horizon rolling features, and an insider-free calibration split
+- v6 (`processed_datasets/ueba_dataset_6/`): 54 Layer A / 414 Layer B features — **currently active version**; adds per-user off-hours envelopes, bounded 30d/90d z-scores, peer-group z-scores, sub-day intensity features, late-night counters, multi-horizon rolling features, user profile enrichment (role_sensitivity, is_active, etc.), and an insider-free calibration split
   - `ueba_dataset_6a.parquet` — (user, pc, day) level for drill-down (54 features)
   - `ueba_dataset_6b.parquet` — (user, day) model-ready matrix (407 features)
   - `ueba_dataset_6_train.parquet` — first ~80% chronologically (model training)
@@ -126,3 +133,4 @@ v6 Layer A has 54 base features (up from 34 in v5); Layer B has 407 total column
   - `ueba_dataset_6_calibration_eval.parquet` — middle ~10%, insiders retained (held-out evaluation)
   - `ueba_dataset_6_test_stream.parquet` — last ~10% chronologically (live simulation / inference)
   - `user_work_hours.parquet` — per-user `(start_hour, end_hour, schedule_complete)` table; must be reapplied at inference time
+  - `peer_baselines_6.parquet` — (department, day, \<feature\> means) table used by the Investigation tab for peer-comparison charts
