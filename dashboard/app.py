@@ -1019,11 +1019,13 @@ from config import (
     UEBA_PARQUET, UEBA_CSV,
     UEBA_A_PARQUET, UEBA_A_CSV,
     LIVE_OUTPUT, LIVE_PAUSE_FLAG, LIVE_SIM_SCRIPT,
+    PEER_BASELINES_PATH,
+    CALIB_ALERT_TABLE_PARQUET,
 )
 
 # Only load columns the dashboard actually uses
 UEBA_COLS = [
-    "user", "pc", "day",
+    "user", "pc", "day", "department",
     # Auth
     "logon_count", "logoff_count", "off_hours_logon",
     # File
@@ -1127,6 +1129,14 @@ def load_ueba_a():
     df["day"] = pd.to_datetime(df["day"], errors="coerce")
     return df
 
+@st.cache_data(show_spinner=False)
+def load_peer_baselines():
+    """Load peer baseline parquet. Returns None if file not yet generated."""
+    if not os.path.exists(PEER_BASELINES_PATH):
+        return None
+    df = pd.read_parquet(PEER_BASELINES_PATH)
+    df["day"] = pd.to_datetime(df["day"], errors="coerce")
+    return df
 
 @st.cache_resource(show_spinner="Loading dataset...")
 def load_data():
@@ -1142,7 +1152,7 @@ def load_data():
     _log.warning("[load_data] started")
 
     _BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    _ALERT_PATH = os.path.join(_BASE, "explainability", "alert_table", "alert_table_6.parquet")
+    _ALERT_PATH = os.path.join(_BASE, "explainability", "alert_table", "alert_table_6", "alert_table_6.parquet")
     _UEBA_PATH  = os.path.join(_BASE, "processed_datasets", "ueba_dataset_6", "ueba_dataset_6b.parquet")
 
     _HF_BASE = "https://huggingface.co/datasets/Melusi-S/DSK-UEBA-Dataset6/resolve/main"
@@ -1174,6 +1184,19 @@ def load_data():
     alert["day"] = pd.to_datetime(alert["day"], errors="coerce")
     _downcast(alert)
 
+    # Load calibration-period alert table if available; concat to close the train→test time gap
+    if os.path.exists(CALIB_ALERT_TABLE_PARQUET):
+        _log.warning("[load_data] loading calibration alert table — concatenating with train")
+        _calib_alert = _pq.read_table(CALIB_ALERT_TABLE_PARQUET).to_pandas()
+        _calib_alert["day"] = pd.to_datetime(_calib_alert["day"], errors="coerce")
+        _downcast(_calib_alert)
+        alert = pd.concat([alert, _calib_alert], ignore_index=True)
+        del _calib_alert
+        gc.collect()
+        _log.warning(f"[load_data] combined alert table: {len(alert):,} rows")
+    else:
+        _log.warning(f"[load_data] calibration alert table not found at {CALIB_ALERT_TABLE_PARQUET} — train period only")
+
     _log.warning("[load_data] loading ueba dataset (v6b)")
     ueba = _pq.read_table(_UEBA_PATH).to_pandas()
     ueba["day"] = pd.to_datetime(ueba["day"], errors="coerce")
@@ -1201,6 +1224,22 @@ def load_data():
         if _col in merged.columns:
             merged[_col] = merged[_col].astype(_risk_cat)
 
+    # Defense in depth: enforce the v6 baseline_complete gate at read time.
+    # Upstream Alert_Object_Builder already filters baseline_complete=False rows before
+    # risk banding, but re-applying here protects against alert_table regenerations that
+    # skipped the filter (cold-start users would otherwise surface as false CRITICAL).
+    if "baseline_complete" in merged.columns:
+        _ungated = ~merged["baseline_complete"].fillna(False).astype(bool)
+        for _band_col in ("ae_risk_band", "if_risk_band", "composite_risk_band"):
+            if _band_col in merged.columns:
+                _crit_mask = _ungated & (merged[_band_col] == "CRITICAL")
+                if _crit_mask.any():
+                    merged.loc[_crit_mask, _band_col] = "HIGH"
+                    _log.warning(
+                        f"[load_data] baseline_complete gate demoted "
+                        f"{int(_crit_mask.sum())} CRITICAL→HIGH in {_band_col}"
+                    )
+
     # ── Pre-compute per-user risk summary ──
     user_risk = (
         merged.groupby("user", observed=True)
@@ -1225,17 +1264,31 @@ def load_data():
     return merged, user_risk, _all_users, _ds_min, _ds_max
 
 
+_USER_PROFILES_PATH = os.path.join(os.path.dirname(__file__), "user_profiles.parquet")
+
+@st.cache_data(show_spinner=False)
+def load_user_profiles() -> pd.DataFrame:
+    """Load pre-built user profile table (department, role, supervisor, role_sensitivity)."""
+    if os.path.exists(_USER_PROFILES_PATH):
+        return pd.read_parquet(_USER_PROFILES_PATH)
+    return pd.DataFrame(columns=["user", "department", "role", "supervisor", "role_sensitivity"])
+
+
 import logging as _startup_log
 _slog = _startup_log.getLogger("ueba.startup")
 try:
     merged_df, user_risk, all_users, _DS_MIN, _DS_MAX = load_data()
     _slog.warning("[STARTUP] load_data() complete")
     ueba_a_df = load_ueba_a()
+    peer_baselines_df = load_peer_baselines()
+    user_profiles_df = load_user_profiles()
     _slog.warning("[STARTUP] load_ueba_a() complete — DATA_LOADED=True")
     DATA_LOADED = True
 except Exception as _load_err:
     import traceback as _tb
     ueba_a_df = None
+    peer_baselines_df = None
+    user_profiles_df = pd.DataFrame(columns=["user", "department", "role", "supervisor", "role_sensitivity", "employee_name"])
     DATA_LOADED = False
     _LOAD_ERROR = _tb.format_exc()
     _slog.warning(f"[STARTUP] load_data FAILED: {_LOAD_ERROR}")
@@ -1454,7 +1507,7 @@ _BASE_LABELS: dict[str, str] = {
     "unique_files_accessed":    "unique file access",
     "off_hours_files_accessed": "after-hours file access",
     "off_hours_logon":          "after-hours logons",
-    "off_hours_logon_count":    "after-hours logons",
+   
     "logon_count":              "logon frequency",
     "logoff_count":             "logoff activity",
     "external_emails":          "external email activity",
@@ -1463,7 +1516,7 @@ _BASE_LABELS: dict[str, str] = {
     "http_long_url":            "long-URL HTTP activity",
     "off_hours_http":           "after-hours HTTP activity",
     "attachments_sent":         "attachment-sending activity",
-    "attachements_sent":        "attachment-sending activity",
+    "attachements_sent":        "attachment-sending",
     "emails_sent":              "email volume",
     "unique_recipients":        "unique email recipients",
     "off_hours_emails":         "after-hours email activity",
@@ -2000,6 +2053,38 @@ def _pop_channel_avgs() -> dict[str, float]:
             result[channel] = float(merged_df[valid].mean().sum())
     return result
 
+def _peer_channel_avgs(department: str, day_min=None, day_max=None) -> dict[str, float]:
+    """Return per-channel peer averages for selected department and time window."""
+    if peer_baselines_df is None or department is None:
+        return {}
+
+    df = peer_baselines_df.copy()
+
+    # safer department match
+    dept_mask = (
+        df["department"].astype(str).str.upper()
+        == str(department).upper()
+    )
+    df = df[dept_mask]
+
+    # align to selected user's time window
+    if day_min is not None:
+        df = df[df["day"] >= pd.to_datetime(day_min)]
+
+    if day_max is not None:
+        df = df[df["day"] <= pd.to_datetime(day_max)]
+
+    if df.empty:
+        return {}
+
+    result = {}
+    for channel, feats in CHANNELS.items():
+        valid = [f for f in feats if f in df.columns]
+        if valid:
+            result[channel] = float(df[valid].mean().sum())
+
+    return result
+
 
 @st.cache_data(show_spinner=False)
 def _channel_time_series(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
@@ -2424,6 +2509,29 @@ if active_page == "Overview":
 
     st.markdown("")
 
+    # ── Disposition Breakdown Row ──
+    section_header("Alert Dispositions", "sh_alert_disp")
+    _all_disps = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
+    _day_strs = filtered_df["day"].apply(
+        lambda d: d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d).split("T")[0].split(" ")[0]
+    )
+    _statuses = [_all_disps.get((u, d), "NEW") for u, d in zip(filtered_df["user"], _day_strs)]
+    _status_counts = pd.Series(_statuses).value_counts()
+    _disp_total     = len(filtered_df)
+    _disp_new       = int(_status_counts.get("NEW", 0))
+    _disp_invest    = int(_status_counts.get("INVESTIGATING", 0))
+    _disp_resolved  = int(_status_counts.get("RESOLVED", 0))
+    _disp_dismissed = int(_status_counts.get("DISMISSED", 0))
+
+    _dc1, _dc2, _dc3, _dc4, _dc5 = st.columns(5)
+    _dc1.markdown(f"<div class='kpi-card' style='border-color:#666666'><h3>Total Alerts</h3><h1 style='color:#cccccc'>{_disp_total:,}</h1><p>User-day records</p></div>", unsafe_allow_html=True)
+    _dc2.markdown(f"<div class='kpi-card' style='border-color:#ff1744'><h3>New</h3><h1 style='color:#ff1744'>{_disp_new:,}</h1><p>Awaiting triage</p></div>", unsafe_allow_html=True)
+    _dc3.markdown(f"<div class='kpi-card' style='border-color:#d4a017'><h3>Investigating</h3><h1 style='color:#d4a017'>{_disp_invest:,}</h1><p>In progress</p></div>", unsafe_allow_html=True)
+    _dc4.markdown(f"<div class='kpi-card' style='border-color:#22c55e'><h3>Resolved</h3><h1 style='color:#22c55e'>{_disp_resolved:,}</h1><p>Closed — confirmed</p></div>", unsafe_allow_html=True)
+    _dc5.markdown(f"<div class='kpi-card' style='border-color:#555555'><h3>Dismissed</h3><h1 style='color:#888888'>{_disp_dismissed:,}</h1><p>Closed — false positive</p></div>", unsafe_allow_html=True)
+
+    st.markdown("")
+
     # ── Row 2: Risk Distribution + Alerts Over Time ──
     col_left, col_right = st.columns([1, 2])
 
@@ -2745,7 +2853,7 @@ def _render_investigation_content() -> None:
     )
 
     # ── Alert History ──
-    _ah_disps = st.session_state.get("alert_dispositions", {})
+    _ah_disps = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
 
     _FEAT_CHANNEL: dict[str, str] = {}
     for _ch, _ch_feats in CHANNELS.items():
@@ -3138,15 +3246,34 @@ def _render_investigation_content() -> None:
 
     with col_radar:
         section_header("Behavioral Profile (Avg Activity)", "sh_beh_profile")
-        # Compute average of each channel for this user vs population
+
+        # Compute per-channel averages: user vs dept peer group vs global population
         radar_categories = []
         user_vals = []
+        peer_vals = []
         pop_vals = []
+
+        user_dept = (
+            user_data["department"].iloc[0]
+            if "department" in user_data.columns and len(user_data) > 0
+            else None
+        )
+
+        day_min = user_data["day"].min() if "day" in user_data.columns else None
+        day_max = user_data["day"].max() if "day" in user_data.columns else None
+
+        peer_avgs = _peer_channel_avgs(
+            user_dept,
+            day_min=day_min,
+            day_max=day_max,
+        ) if user_dept else {}
+
         for channel, feats in CHANNELS.items():
             valid_feats = [f for f in feats if f in user_data.columns]
             if valid_feats:
                 radar_categories.append(channel)
                 user_vals.append(user_data[valid_feats].mean().sum())
+                peer_vals.append(peer_avgs.get(channel, 0.0))
                 pop_vals.append(_pop_channel_avgs().get(channel, 0.0))
 
         if radar_categories:
@@ -3155,18 +3282,39 @@ def _render_investigation_content() -> None:
                 r=user_vals, theta=radar_categories, fill="toself",
                 name=_user, line=dict(color="#e84545", width=2),
                 fillcolor="rgba(232,69,69,0.15)",
-            ))
+        ))
+
+        if any(v > 0 for v in peer_vals):
             fig_radar.add_trace(go.Scatterpolar(
-                r=pop_vals, theta=radar_categories, fill="toself",
-                name="Population Avg", line=dict(color="#3a86a8", width=1), opacity=0.6,
-                fillcolor="rgba(58,134,168,0.1)",
+                r=peer_vals,
+                theta=radar_categories,
+                fill="toself",
+                name=f"Dept Avg ({user_dept})",
+                line=dict(color="#d4a017", width=2),
+                fillcolor="rgba(212,160,23,0.12)",
             ))
-            fig_radar.update_layout(**PLOTLY_LAYOUT, height=380,
-                                    polar=dict(bgcolor="#0a0a0a",
-                                               radialaxis=dict(visible=True, color="#333333"),
-                                               angularaxis=dict(color="#444444")),
-                                    showlegend=True)
-            st.plotly_chart(fig_radar, use_container_width=True)
+
+        fig_radar.add_trace(go.Scatterpolar(
+            r=pop_vals,
+            theta=radar_categories,
+            fill="toself",
+            name="Population Avg",
+            line=dict(color="#3a86a8", width=1),
+            opacity=0.6,
+            fillcolor="rgba(58,134,168,0.1)",
+        ))
+
+        fig_radar.update_layout(
+            **PLOTLY_LAYOUT,
+            height=380,
+            polar=dict(
+                bgcolor="#0a0a0a",
+                radialaxis=dict(visible=True, color="#333333"),
+                angularaxis=dict(color="#444444"),
+            ),
+            showlegend=True,
+        )
+        st.plotly_chart(fig_radar, use_container_width=True)
 
     with col_heat:
         section_header("Daily Feature Activity", "sh_daily_feat")
@@ -4159,7 +4307,6 @@ if active_page not in ("Alerts", "Investigation") and st.session_state.live_mode
     if _proc_running and not st.session_state.live_paused:
         time.sleep(1)
         st.rerun()
-
 
 # ──────────────────────────────────────────────────────────────
 # Footer — Data & Feature Gaps Note

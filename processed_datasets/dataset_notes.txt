@@ -57,3 +57,29 @@
     * Working Hours: (9, 17)
     * Rolling Window Size: 5
 
+
+- UEBA Dataset v6 (ueba_dataset_6a.parquet, ueba_dataset_6b.parquet):
+    * Version 6 introduces the following additions:
+        - Per-user work hour construction (defaults to (9,17) if now schedule found)
+        - Bounded trailing z-scores instead of expanding-window z-scores (30-day and 90-day variants)
+        - Held-out calibration set for behavior thresholds
+        - Sub-day intensity features (e.g., hourly entropy, peak hour activity, longest active run)
+        - Multi-horizon rolling features (e.g., 7-day sum, 30-day sum)
+        - Peer-group z-scores
+        - User profile enrichment (e.g., role, department, sensitivity score)
+    * Version 5 chronological split for training and testing
+        - ~80% of the dataset is saved for model training
+        - ~10% of the dataset is saved for threshold calibration
+        - ~10% of the dataset is saved for inference (i.e., live simulation)
+    * Number of Features (a, b): 51, 412 
+    * Chunked loading for large CSV files (e.g., file.csv,email.csv, http.csv)
+    * Preprocessing pipeline produces 6 datasets:
+        - Dataset A: (user, pc, day) level dataset to be used for drill-down analysis
+        - Dataset B: (user, day) level dataset to be used for model training
+        - Training Set (ueba_dataset_6_train.parquet): The first chronological 80% of the Dataset B
+        - Testing Set (ueba_dataset_6_test_stream.parquet): The last chronological 10% of Dataset B
+        - Calibration Evaluation Set (ueba_dataset_6_calibration_eval.parquet): Contains insiders
+        - Clean Calibration Set (ueba_dataset_6_calibration.parquet): Contains no insider activity
+    * Working Hours: Dynamic assignment, defaults to (9, 17)
+    * Rolling Window Size: 5
+

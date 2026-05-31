@@ -57,4 +57,27 @@
         - Recall:
             * 80th pct: 0.547
             * 90th pct: 0.438
-            * 95th pct: 0.266     
+            * 95th pct: 0.266
+
+
+- Isolation Forest Model 6 (isolation_forests\iforest_model_6):
+    * This model was trained on Autoencoder Model 6's normal-behavior latent embeddings
+    * Hyperparameters:
+        - N-Estimators: 200
+        - Contamination: Auto
+            * Anomalies Flagged: 92,371 (8.59%)
+        - Random State: 42
+    * Operational Thresholds:
+        p80: 0.3932
+        p90: 0.4776
+        p95: 0.5540
+    * Evaluation Performance:
+        - Mean Insider Score: 0.3676
+        - Mean Normal SCore: 0.3872
+        - Eval Separation Ratio: 1.05
+        - AUROC: 0.5558
+        - AUPRC: 0.0005
+        - Recall:
+            * 80th pct: 0.370
+            * 90th pct: 0.109
+            * 95th pct: 0.087     

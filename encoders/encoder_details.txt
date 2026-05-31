@@ -76,3 +76,28 @@
     * Loss (Best Epoch):
         - Training Loss: 26.78%
         - Validation Loss: 16.90%
+
+
+- Autoencoder Model 6 (encoders\encoder_model_6):
+    * This model was trained on "ueba_dataset_6b"
+        - An 80/10/10 chronological split is applied to the UEBA dataset (train_df, calibration_df, test_df)
+            * Training Set:
+                - Insider rows were removed from `train_df` (i.e., train_normal, train_insider)
+                - A 85/15 chronological split is applied to `train_normal` to create training and validation sets (i.e., train_normal_fit, train_normal_val)
+            * Calibration Set:
+                - Two versions of this set are saved: calib_clean, and calib_eval
+                - The evaluation calibration set contains is used to evaluate the trained model's performance
+    * Model Architecture:
+        - Hidden Layers (per side): 3
+        - Dropout: Ratio = 0.2
+        - Latent Activation Function: Linear
+        - Early Stopping: Patience = 10
+    * Hyperparameters:
+        - Learning Rate: 0.001
+        - Latent Dimension: 16
+        - Hidden Dimensions: 256, 128, and 64
+        - Epochs: 100
+        - Batch Size: 256
+    * Loss (Best Epoch):
+        - Training Loss: 22.31%
+        - Validation Loss: 15.61%
