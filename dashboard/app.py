@@ -1023,6 +1023,7 @@ from config import (
     CALIB_ALERT_TABLE_PARQUET,
     MODEL_VERSION,
     HF_DATASET_REPO,
+    HF_DATASET_BASE_URL,
 )
 
 # Only load columns the dashboard actually uses
@@ -1158,35 +1159,22 @@ def load_data():
     _ALERT_PATH = ANALYST_TABLE_PARQUET
     _UEBA_PATH  = os.path.join(_BASE, "processed_datasets", f"ueba_dataset_{_MV}", f"ueba_dataset_{_MV}b.parquet")
 
+    _HF_BASE = HF_DATASET_BASE_URL
     _DOWNLOADS = [
-        (_ALERT_PATH, f"alert_table_{_MV}.parquet"),
-        (_UEBA_PATH,  f"ueba_dataset_{_MV}b.parquet"),
+        (_ALERT_PATH, f"{_HF_BASE}/alert_table_{_MV}.parquet"),
+        (_UEBA_PATH,  f"{_HF_BASE}/ueba_dataset_{_MV}b.parquet"),
     ]
 
-    def _fetch(local_path, repo_filename):
-        from huggingface_hub import hf_hub_download as _hf_dl
-        import shutil as _shutil
-        _hf_token = None
-        try:
-            _hf_token = st.secrets.get("huggingface", {}).get("token", None)
-        except Exception:
-            _hf_token = os.environ.get("HF_TOKEN", None)
+    def _fetch(local_path, url):
+        import urllib.request
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        _log.warning(f"[load_data] downloading {repo_filename} from HuggingFace…")
-        _cached = _hf_dl(
-            repo_id=HF_DATASET_REPO,
-            filename=repo_filename,
-            repo_type="dataset",
-            token=_hf_token,
-        )
-        _shutil.copy2(_cached, local_path)
+        _log.warning(f"[load_data] downloading {os.path.basename(local_path)} from HuggingFace…")
+        urllib.request.urlretrieve(url, local_path)
         _log.warning(f"[load_data] saved {local_path}")
 
     for _local, _url in _DOWNLOADS:
         if not os.path.exists(_local):
-            # Extract just the filename portion from the full URL for hf_hub_download
-            _repo_filename = _url.split("/resolve/main/", 1)[-1]
-            _fetch(_local, _repo_filename)
+            _fetch(_local, _url)
 
     def _downcast(df):
         for col in df.select_dtypes(include=["float64"]).columns:
