@@ -8,7 +8,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import json
-import math
 import os
 import subprocess
 import time
@@ -3902,8 +3901,6 @@ if active_page == "Alerts":
 
 #####################
 
-        filtered_df = _get_filtered_df()
-
         # ── Combined Triage Status & Severity Filter ──
         section_header("FILTER BY TRIAGE STATUS & SEVERITY", "sh_disp_sev_filter")
         # Stack filters vertically
@@ -3969,6 +3966,17 @@ if active_page == "Alerts":
         # Centralized severity mapping — extend here when new bands are added
         _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 
+        # Build triage disposition lookup from SQLite: {(user, day_str): status}
+        _triage_all = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
+
+        # Map radio label → disposition status value
+        _DISP_FILTER_MAP = {
+            "Show New Only":      "NEW",
+            "Show Investigating": "INVESTIGATING",
+            "Show Resolved":      "RESOLVED",
+            "Show Dismissed":     "DISMISSED",
+        }
+
         # Suppressed Alerts mode: show only suppressed alerts (top 10)
         if show_suppressed_alerts:
             alert_data = (
@@ -3995,6 +4003,19 @@ if active_page == "Alerts":
                     else True
                 )
             ].copy()
+
+            # Apply triage disposition filter (SQLite-backed, row-level lookup)
+            if _disp_filter in _DISP_FILTER_MAP:
+                _target = _DISP_FILTER_MAP[_disp_filter]
+                _day_strs = alert_data["day"].apply(
+                    lambda d: d.strftime("%Y-%m-%d") if hasattr(d, "strftime")
+                    else str(d).split("T")[0].split(" ")[0]
+                )
+                _row_statuses = pd.Series(
+                    [_triage_all.get((u, d), "NEW") for u, d in zip(alert_data["user"], _day_strs)],
+                    index=alert_data.index,
+                )
+                alert_data = alert_data[_row_statuses == _target]
 
         # Sort based on explicit outcome label (skip in suppressed mode, already sorted)
         if not show_suppressed_alerts:
@@ -4083,7 +4104,7 @@ if active_page == "Alerts":
             # ── Per-alert card rows ──
             _disp_lookup = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
             for i, row in enumerate(card_data.itertuples()):
-                risk = getattr(row, "composite_risk_band", "MEDIUM") if show_suppressed_alerts else getattr(row, "ae_risk_band", "LOW")
+                risk    = getattr(row, "composite_risk_band", "MEDIUM") if show_suppressed_alerts else getattr(row, "ae_risk_band", "LOW")
                 user    = getattr(row, "user",           "—")
                 day_val = getattr(row, "day",            None)
                 day_str = (day_val.strftime("%Y-%m-%d") if hasattr(day_val, "strftime")
@@ -4114,7 +4135,6 @@ if active_page == "Alerts":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                    # Add SUPPRESSED badge if applicable (when in suppressed view mode)
                     if status == "SUPPRESSED" and show_suppressed_alerts:
                         st.markdown(
                             f"<div style='padding-top:2px;'>"
