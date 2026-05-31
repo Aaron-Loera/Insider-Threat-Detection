@@ -1,7 +1,6 @@
 ﻿import sys
 sys.stderr.write("[APP] module-level execution started\n"); sys.stderr.flush()
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -641,21 +640,19 @@ def _make_auth_token(email: str) -> str:
 
 def _set_auth_cookie(email: str):
     token = _make_auth_token(email)
-    components.html(
+    st.html(
         f"""<script>
         document.cookie = "auth_email={email}; path=/; max-age=86400; SameSite=Strict";
         document.cookie = "auth_token={token}; path=/; max-age=86400; SameSite=Strict";
-        </script>""",
-        height=0,
+        </script>"""
     )
 
 def _clear_auth_cookie():
-    components.html(
+    st.html(
         """<script>
         document.cookie = "auth_email=; path=/; max-age=0";
         document.cookie = "auth_token=; path=/; max-age=0";
-        </script>""",
-        height=0,
+        </script>"""
     )
 
 
@@ -1004,7 +1001,7 @@ init_db()
 import datetime as _dt
 import logging as _auth_log
 _auth_log.getLogger("ueba.startup").warning(
-    f"[STARTUP] authenticated — reached data-load section at {_dt.datetime.utcnow().isoformat()}"
+    f"[STARTUP] authenticated — reached data-load section at {_dt.datetime.now(_dt.timezone.utc).isoformat()}"
 )
 
 # Resolve the project root so config.py (at the root) is importable.
@@ -1165,16 +1162,32 @@ def load_data():
         (_UEBA_PATH,  f"{_HF_BASE}/ueba_dataset_{_MV}b.parquet"),
     ]
 
-    def _fetch(local_path, url):
+    def _fetch(local_path, url, token=None):
         import urllib.request
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         _log.warning(f"[load_data] downloading {os.path.basename(local_path)} from HuggingFace…")
-        urllib.request.urlretrieve(url, local_path)
+        req = urllib.request.Request(url)
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        _tmp = local_path + ".part"
+        try:
+            with urllib.request.urlopen(req) as resp, open(_tmp, "wb") as fh:
+                while True:
+                    chunk = resp.read(1 << 20)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+            os.replace(_tmp, local_path)
+        except Exception:
+            if os.path.exists(_tmp):
+                os.remove(_tmp)
+            raise
         _log.warning(f"[load_data] saved {local_path}")
 
+    _hf_token_dl = st.secrets.get("huggingface", {}).get("token", None)
     for _local, _url in _DOWNLOADS:
         if not os.path.exists(_local):
-            _fetch(_local, _url)
+            _fetch(_local, _url, token=_hf_token_dl)
 
     def _downcast(df):
         for col in df.select_dtypes(include=["float64"]).columns:
@@ -2416,11 +2429,11 @@ def _filter_bar(key: str):
 st.markdown("<div class='project-title-badge'>Insider Threat Detection</div>", unsafe_allow_html=True)
 
 # ── Mobile sidebar toggle (injected once into parent document) ──
-components.html(
+st.html(
     """
     <script>
     (function(){
-        var p = window.parent.document;
+        var p = document;
         if (p.getElementById('mob-sidebar-btn')) return;
         var btn = p.createElement('button');
         btn.id = 'mob-sidebar-btn';
@@ -2434,9 +2447,9 @@ components.html(
         ].join(';');
         p.body.appendChild(btn);
         function show(){
-            btn.style.display = window.parent.innerWidth <= 768 ? 'flex' : 'none';
+            btn.style.display = window.innerWidth <= 768 ? 'flex' : 'none';
         }
-        window.parent.addEventListener('resize', show);
+        window.addEventListener('resize', show);
         show();
         btn.addEventListener('click', function(){
             var sidebar = p.querySelector('[data-testid="stSidebar"]');
@@ -2453,8 +2466,7 @@ components.html(
         });
     })();
     </script>
-    """,
-    height=0,
+    """
 )
 # ══════════════════════════════════════════════════════════════
 
@@ -2493,10 +2505,10 @@ if active_page == "Overview":
         "</div>",
         unsafe_allow_html=True,
     )
-    components.html(
+    st.html(
         "<script>"
         "(function(){"
-        "  var p = window.parent.document;"
+        "  var p = document;"
         "  function wire(){"
         "    var row = p.getElementById('kpi-row');"
         "    var lft = p.getElementById('kpi-arrow-left');"
@@ -2507,8 +2519,7 @@ if active_page == "Overview":
         "  }"
         "  wire();"
         "})();"
-        "</script>",
-        height=0,
+        "</script>"
     )
 
     st.markdown("")
@@ -2670,10 +2681,10 @@ if active_page == "Overview":
             "</div>",
             unsafe_allow_html=True,
         )
-        components.html(
+        st.html(
             "<script>"
             "(function(){"
-            "  var p = window.parent.document;"
+            "  var p = document;"
             "  function wire(){"
             "    var row = p.getElementById('cf-row');"
             "    var lft = p.getElementById('cf-arrow-left');"
@@ -2684,8 +2695,7 @@ if active_page == "Overview":
             "  }"
             "  wire();"
             "})();"
-            "</script>",
-            height=0,
+            "</script>"
         )
         st.markdown("<div style='margin-bottom:16px'></div>", unsafe_allow_html=True)
 
@@ -3500,11 +3510,11 @@ if active_page == "Alerts":
                         os.remove(LIVE_PAUSE_FLAG)
                     st.session_state.live_paused = False
                     st.rerun()
-    components.html(
+    st.html(
         "<script>"
         "(function(){"
         "  function styleSimBtns(){"
-        "    var btns=window.parent.document.querySelectorAll('[data-testid=\"stButton\"] button');"
+        "    var btns=document.querySelectorAll('[data-testid=\"stButton\"] button');"
         "    for(var i=0;i<btns.length;i++){"
         "      var txt=(btns[i].innerText||btns[i].textContent||'').trim();"
         "      if(txt.indexOf('LIVE SIMULATION')!==-1||txt==='⏸   PAUSE'||txt==='▶   RESUME'){"
@@ -3519,8 +3529,7 @@ if active_page == "Alerts":
         "  setTimeout(styleSimBtns,50);"
         "  setTimeout(styleSimBtns,300);"
         "})();"
-        "</script>",
-        height=0,
+        "</script>"
     )
     st.markdown(
         "<hr style='border:none;border-top:1px solid #111;margin:16px 0 0 0;'>",
