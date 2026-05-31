@@ -259,3 +259,12 @@ CALIB_ALERT_TABLE_PARQUET = os.path.join(
     BASE_DIR, "explainability", "alert_table",
     f"alert_table_{V}", f"alert_table_{V}_calib.parquet",
 )
+
+
+# HuggingFace Repository Config
+# All repo IDs derive from MODEL_VERSION — update the version, all paths follow.
+# Override any of these in paths.local.py for personal forks or staging repos.
+HF_ORG              = _local_or("HF_ORG",          "InsiderGuard-AI")
+HF_DATASET_REPO     = _local_or("HF_DATASET_REPO", f"{HF_ORG}/ueba-v{V}")
+HF_MODEL_REPO       = _local_or("HF_MODEL_REPO",   f"{HF_ORG}/ueba-models-v{V}")
+HF_DATASET_BASE_URL = f"https://huggingface.co/datasets/{HF_DATASET_REPO}/resolve/main"

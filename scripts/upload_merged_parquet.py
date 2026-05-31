@@ -1,4 +1,9 @@
-"""Upload merged_dataset_5.parquet to HuggingFace Hub."""
+"""DEPRECATED — superseded by scripts/upload_to_hf.py.
+
+This script uploaded the v5 pre-merged parquet to the old DSKittens/ueba-dashboard-dat
+repo.  All uploads now go through upload_to_hf.py, which targets InsiderGuard-AI/ueba-v{V}
+and handles both dataset and model artifacts in a single run.  Do not use this script.
+"""
 import os, sys
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

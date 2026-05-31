@@ -1021,6 +1021,9 @@ from config import (
     LIVE_OUTPUT, LIVE_PAUSE_FLAG, LIVE_SIM_SCRIPT,
     PEER_BASELINES_PATH,
     CALIB_ALERT_TABLE_PARQUET,
+    MODEL_VERSION,
+    HF_DATASET_REPO,
+    HF_DATASET_BASE_URL,
 )
 
 # Only load columns the dashboard actually uses
@@ -1060,7 +1063,7 @@ def _load_user_detail_df(user: str) -> "pd.DataFrame":
             The full 193 MB analyst parquet is NEVER loaded on cloud — each
             user file is independently tiny, making the download cost negligible.
     """
-    _HF_REPO = "DSKittens/ueba-dashboard-dat"
+    _HF_REPO = HF_DATASET_REPO
     _hf_token = st.secrets.get("huggingface", {}).get("token", None)
     _DETAIL_COLS = ["user", "day", "top_contributors", "explanation"]
     safe = str(user).replace("/", "_").replace("\\", "_")
@@ -1152,13 +1155,14 @@ def load_data():
     _log.warning("[load_data] started")
 
     _BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    _ALERT_PATH = os.path.join(_BASE, "explainability", "alert_table", "alert_table_6", "alert_table_6.parquet")
-    _UEBA_PATH  = os.path.join(_BASE, "processed_datasets", "ueba_dataset_6", "ueba_dataset_6b.parquet")
+    _MV = MODEL_VERSION
+    _ALERT_PATH = ANALYST_TABLE_PARQUET
+    _UEBA_PATH  = os.path.join(_BASE, "processed_datasets", f"ueba_dataset_{_MV}", f"ueba_dataset_{_MV}b.parquet")
 
-    _HF_BASE = "https://huggingface.co/datasets/Melusi-S/DSK-UEBA-Dataset6/resolve/main"
+    _HF_BASE = HF_DATASET_BASE_URL
     _DOWNLOADS = [
-        (_ALERT_PATH, f"{_HF_BASE}/alert_table_6.parquet"),
-        (_UEBA_PATH,  f"{_HF_BASE}/ueba_dataset_6b.parquet"),
+        (_ALERT_PATH, f"{_HF_BASE}/alert_table_{_MV}.parquet"),
+        (_UEBA_PATH,  f"{_HF_BASE}/ueba_dataset_{_MV}b.parquet"),
     ]
 
     def _fetch(local_path, url):
