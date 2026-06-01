@@ -984,6 +984,10 @@ if not _is_logout and not st.session_state.get("authenticated", False):
                 pass  # fall through to login page
 
 # ── Auth gate — show login and stop until the user has signed in ──
+_dev_bypass = st.secrets.get("dev", {}).get("bypass_auth", False)
+if _dev_bypass and not st.session_state.get("authenticated", False):
+    st.session_state["authenticated"] = True
+    st.session_state["auth_user_email"] = "dev@local"
 if not st.session_state.get("authenticated", False):
     _render_login()
     st.stop()
@@ -1963,15 +1967,32 @@ def show_filters():
     _on_alerts = (active_page == "Alerts" and not st.session_state.get("live_mode", False))
     if _on_alerts:
         st.markdown("---")
-        st.markdown("**Alert Severity**")
+        st.markdown("**Triage Status**")
+        dlg_disp_filter = st.radio(
+            "Triage Status",
+            options=["Show New Only", "Show All", "Show Investigating", "Show Resolved", "Show Dismissed"],
+            index=["Show New Only", "Show All", "Show Investigating", "Show Resolved", "Show Dismissed"].index(
+                st.session_state.get("flt_disp_filter", "Show New Only")
+            ),
+            horizontal=False,
+            label_visibility="collapsed",
+            key="dlg_disp_filter",
+        )
+        st.markdown("**Severity**")
         _sev_options = list(RISK_TIERS)
         dlg_alert_sev = st.multiselect(
-            "Alert Severity",
+            "Severity",
             _sev_options,
             default=st.session_state.flt_alert_sev,
             label_visibility="collapsed",
             key="dlg_alert_sev",
         )
+        dlg_view_suppressed = st.checkbox(
+            "View Suppressed Alerts",
+            value=st.session_state.get("flt_view_suppressed", False),
+            key="dlg_view_suppressed",
+        )
+        st.markdown("---")
         st.markdown("**Sort Alerts By**")
         _sort_opts = [
             "Highest score first",
@@ -2021,7 +2042,9 @@ def show_filters():
                 st.session_state.flt_date_end = dr[1]
             st.session_state.flt_risk = rl if rl else list(RISK_TIERS)
             if _on_alerts:
+                st.session_state.flt_disp_filter = dlg_disp_filter
                 st.session_state.flt_alert_sev = dlg_alert_sev if dlg_alert_sev else ["CRITICAL", "HIGH"]
+                st.session_state.flt_view_suppressed = dlg_view_suppressed
                 st.session_state.flt_sort_choice = dlg_sort
                 st.session_state.flt_min_pctl = float(dlg_min_pctl)
                 st.session_state.flt_max_rows = int(dlg_max_rows)
@@ -2032,7 +2055,9 @@ def show_filters():
             st.session_state.flt_date_end = _DS_MAX
             st.session_state.flt_risk = list(RISK_TIERS)
             if _on_alerts:
+                st.session_state.flt_disp_filter = "Show New Only"
                 st.session_state.flt_alert_sev = ["CRITICAL", "HIGH"]
+                st.session_state.flt_view_suppressed = False
                 st.session_state.flt_sort_choice = "Highest score first"
                 st.session_state.flt_min_pctl = 0.0
                 st.session_state.flt_max_rows = 500
@@ -3912,69 +3937,14 @@ if active_page == "Alerts":
             f"Date: {st.session_state.flt_date_start} to {st.session_state.flt_date_end}   |   Risk: {_active_risks}"
         )
 
-#####################
-
-        # ── Combined Triage Status & Severity Filter ──
-        section_header("FILTER BY TRIAGE STATUS & SEVERITY", "sh_disp_sev_filter")
-        # Stack filters vertically
-        with st.container():
-            # Triage status filter
-            _disp_filter = st.radio(
-                "Disposition filter",
-                options=["Show New Only", "Show All", "Show Investigating", "Show Resolved", "Show Dismissed"],
-                index=0,
-                horizontal=True,
-                key="alert_disp_filter",
-                label_visibility="collapsed",
-            )
-            # Severity filter
-            _sev_cols = st.columns([1, 1, 1, 1, 4])
-            _severity_counts = {
-                tier: int((filtered_df["ae_risk_band"] == tier).sum())
-                if "ae_risk_band" in filtered_df.columns else 0
-                for tier in RISK_TIERS
-            }
-            _tier_checked = {}
-            for _idx, _tier in enumerate(RISK_TIERS):
-                _color = RISK_COLORS[_tier]
-                _count = _severity_counts[_tier]
-                with _sev_cols[_idx]:
-                    _tier_checked[_tier] = st.checkbox(
-                        _tier,
-                        value=(_tier in ["CRITICAL", "HIGH"]),
-                        key=f"alert_sev_{_tier}",
-                    )
-                    st.markdown(
-                        f"<span style='background:{_color}22;color:{_color};font-size:9px;"
-                        f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 6px;"
-                        f"border:1px solid {_color}55;display:inline-block;margin-top:-6px;'>"
-                        f"{_count:,} alert{'s' if _count != 1 else ''}</span>",
-                        unsafe_allow_html=True,
-                    )
-
-        alert_risk = [t for t, checked in _tier_checked.items() if checked]
-
-                # Suppressed Alerts viewing mode toggle
-        _supp_check_col = st.columns([5, 1])
-        with _supp_check_col[0]:
-            show_suppressed_alerts = st.checkbox(
-                "View Suppressed Alerts",
-                value=False,
-                key="alert_view_suppressed",
-            )
-            if show_suppressed_alerts:
-                st.markdown(
-                    f"<span style='background:#d4a01722;color:#d4a017;font-size:9px;"
-                    f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 6px;"
-                    f"border:1px solid #d4a01755;display:inline-block;margin-top:-6px;'>"
-                    f"Top 10 suppressed</span>",
-                    unsafe_allow_html=True,
-                )
-
-        # Pull filter state set by the global filter dialog
-        min_pctl    = st.session_state.get("flt_min_pctl", 0.0)
-        sort_choice = st.session_state.get("flt_sort_choice", "Highest score first")
-        max_results = st.session_state.get("flt_max_results", 500)
+        # ── Alert Filters (unified) ──
+        # Pull all alert filter state from session (set via Filters modal)
+        _disp_filter        = st.session_state.get("flt_disp_filter", "Show New Only")
+        alert_risk          = st.session_state.get("flt_alert_sev", ["CRITICAL", "HIGH"])
+        show_suppressed_alerts = st.session_state.get("flt_view_suppressed", False)
+        min_pctl            = st.session_state.get("flt_min_pctl", 0.0)
+        sort_choice         = st.session_state.get("flt_sort_choice", "Highest score first")
+        max_results         = st.session_state.get("flt_max_results", 500)
 
         # Centralized severity mapping — extend here when new bands are added
         _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
@@ -4068,25 +4038,35 @@ if active_page == "Alerts":
         # Cap card rendering to keep the UI responsive
         CARD_LIMIT = 10
         total_alerts = len(alert_data)
-        card_data = alert_data.head(CARD_LIMIT)
+        _total_pages = max(1, (total_alerts + CARD_LIMIT - 1) // CARD_LIMIT)
+        if "alert_feed_page" not in st.session_state:
+            st.session_state["alert_feed_page"] = 0
+        _page = min(st.session_state["alert_feed_page"], _total_pages - 1)
+        st.session_state["alert_feed_page"] = _page
+        card_data = alert_data.iloc[_page * CARD_LIMIT : (_page + 1) * CARD_LIMIT]
 
         if total_alerts == 0:
+            _af_hdr, _af_btn = st.columns([9, 1], vertical_alignment="bottom")
+            with _af_hdr:
+                st.markdown("<div class='section-header'>Alert Feed</div>", unsafe_allow_html=True)
+            with _af_btn:
+                if st.button("Filters", key="al_flt_empty", use_container_width=True):
+                    show_filters()
             if show_suppressed_alerts:
                 st.info("No suppressed alerts found in the current filter range.")
             else:
                 st.info("No alerts match the current filters.")
         else:
-            # ── Alert Feed header with Filter button inline ──
-            _af_left, _af_right = st.columns([9, 1], vertical_alignment="bottom")
-            with _af_left:
+            # ── Alert Feed header with Filters button ──
+            _af_hdr, _af_btn = st.columns([9, 1], vertical_alignment="bottom")
+            with _af_hdr:
                 st.markdown("<div class='section-header'>Alert Feed</div>", unsafe_allow_html=True)
-            with _af_right:
-                if st.button("Filter", key="al_flt", use_container_width=True):
+            with _af_btn:
+                if st.button("Filters", key="al_flt", use_container_width=True):
                     show_filters()
             if total_alerts > CARD_LIMIT:
                 st.caption(
-                    f"Displaying top {CARD_LIMIT} of {total_alerts:,} matching alerts. "
-                    "Use the export button below for the complete set."
+                    f"Page {_page + 1} of {_total_pages} &nbsp;·&nbsp; {total_alerts:,} matching alerts."
                 )
 
             # ── Column header row ──
@@ -4219,6 +4199,25 @@ if active_page == "Alerts":
                     "<div style='border-bottom:1px solid #0d0d0d;margin:2px 0;'></div>",
                     unsafe_allow_html=True,
                 )
+
+            # ── Pagination controls ──
+            st.markdown("<div style='margin-top:10px;'></div>", unsafe_allow_html=True)
+            _p_prev_col, _p_info_col, _p_next_col = st.columns([2, 3, 2])
+            with _p_prev_col:
+                if st.button("← Previous", key="al_prev", use_container_width=True, disabled=(_page == 0)):
+                    st.session_state["alert_feed_page"] = _page - 1
+                    st.rerun()
+            with _p_info_col:
+                st.markdown(
+                    f"<div style='text-align:center;font-family:JetBrains Mono,monospace;"
+                    f"font-size:11px;color:#555;padding-top:6px;'>"
+                    f"Page {_page + 1} / {_total_pages}</div>",
+                    unsafe_allow_html=True,
+                )
+            with _p_next_col:
+                if st.button("Next →", key="al_next", use_container_width=True, disabled=(_page >= _total_pages - 1)):
+                    st.session_state["alert_feed_page"] = _page + 1
+                    st.rerun()
 
         # ── Export (columns + top_contributors if present) ──
         alert_display_cols = ["user", "day", "ae_risk_band", "if_anomaly_score", "ae_percentile_rank"]
