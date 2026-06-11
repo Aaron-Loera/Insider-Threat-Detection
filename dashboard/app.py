@@ -1157,14 +1157,21 @@ def load_data():
 
     _BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     _MV = MODEL_VERSION
-    _ALERT_PATH = ANALYST_TABLE_PARQUET
-    _UEBA_PATH  = os.path.join(_BASE, "processed_datasets", f"ueba_dataset_{_MV}", f"ueba_dataset_{_MV}b.parquet")
 
-    _HF_BASE = HF_DATASET_BASE_URL
-    _DOWNLOADS = [
-        (_ALERT_PATH, f"{_HF_BASE}/alert_table_{_MV}.parquet"),
-        (_UEBA_PATH,  f"{_HF_BASE}/ueba_dataset_{_MV}b.parquet"),
-    ]
+    # ── Serving layer ────────────────────────────────────────────────────────
+    # Load ONE pre-merged "dashboard" parquet that contains only the columns the
+    # UI actually renders (~76 cols), dictionary-encoded for low-cardinality
+    # strings and stored as float32. This replaces the previous runtime path of
+    # downloading the full 414-column v6b (432 MB) plus the alert table and
+    # merging them in-process, which peaked at several GB and was OOM-killed on
+    # Streamlit Community Cloud's 1 GB tier. The slim file peaks at ~0.65 GB.
+    # Rebuild it with scripts/build_dashboard_dataset.py whenever v6b / the alert
+    # table changes, then re-upload to the HF dataset repo.
+    _DASH_PATH = os.path.join(
+        _BASE, "processed_datasets", f"ueba_dataset_{_MV}",
+        f"ueba_dataset_{_MV}_dashboard.parquet",
+    )
+    _DASH_URL = f"{HF_DATASET_BASE_URL}/ueba_dataset_{_MV}_dashboard.parquet"
 
     def _fetch(local_path, url, token=None):
         import urllib.request
@@ -1188,10 +1195,9 @@ def load_data():
             raise
         _log.warning(f"[load_data] saved {local_path}")
 
-    _hf_token_dl = st.secrets.get("huggingface", {}).get("token", None)
-    for _local, _url in _DOWNLOADS:
-        if not os.path.exists(_local):
-            _fetch(_local, _url, token=_hf_token_dl)
+    if not os.path.exists(_DASH_PATH):
+        _hf_token_dl = st.secrets.get("huggingface", {}).get("token", None)
+        _fetch(_DASH_PATH, _DASH_URL, token=_hf_token_dl)
 
     def _downcast(df):
         for col in df.select_dtypes(include=["float64"]).columns:
@@ -1200,44 +1206,20 @@ def load_data():
             df[col] = df[col].astype("int32")
         return df
 
-    _log.warning("[load_data] loading alert table (v6)")
-    alert = _pq.read_table(_ALERT_PATH).to_pandas()
-    alert["day"] = pd.to_datetime(alert["day"], errors="coerce")
-    _downcast(alert)
-
-    # Load calibration-period alert table if available; concat to close the train→test time gap
-    if os.path.exists(CALIB_ALERT_TABLE_PARQUET):
-        _log.warning("[load_data] loading calibration alert table — concatenating with train")
-        _calib_alert = _pq.read_table(CALIB_ALERT_TABLE_PARQUET).to_pandas()
-        _calib_alert["day"] = pd.to_datetime(_calib_alert["day"], errors="coerce")
-        _downcast(_calib_alert)
-        alert = pd.concat([alert, _calib_alert], ignore_index=True)
-        del _calib_alert
-        gc.collect()
-        _log.warning(f"[load_data] combined alert table: {len(alert):,} rows")
-    else:
-        _log.warning(f"[load_data] calibration alert table not found at {CALIB_ALERT_TABLE_PARQUET} — train period only")
-
-    _log.warning("[load_data] loading ueba dataset (v6b)")
-    ueba = _pq.read_table(_UEBA_PATH).to_pandas()
-    ueba["day"] = pd.to_datetime(ueba["day"], errors="coerce")
-    _downcast(ueba)
-
-    # Only bring in columns from alert_table that aren't already in ueba_dataset_6b
-    # (avoids duplicating department, role, supervisor, role_sensitivity).
-    _alert_only = ["user", "day"] + [c for c in alert.columns if c not in ueba.columns]
-    _log.warning("[load_data] merging")
-    merged = ueba.merge(alert[_alert_only], on=["user", "day"], how="left")
-    del alert, ueba
+    # Memory-frugal Arrow→pandas conversion: split_blocks + self_destruct frees
+    # each Arrow column as soon as it is converted, roughly halving peak RSS.
+    _log.warning("[load_data] loading slim dashboard dataset")
+    _tbl = _pq.read_table(_DASH_PATH)
+    merged = _tbl.to_pandas(split_blocks=True, self_destruct=True)
+    del _tbl
     gc.collect()
-
-    _downcast(merged)
     merged["day"] = pd.to_datetime(merged["day"], errors="coerce")
+    _downcast(merged)  # no-op if file already float32; protective if rebuilt otherwise
     for _col in ("user", "ae_risk_band", "if_risk_band"):
         if _col in merged.columns:
             merged[_col] = merged[_col].astype("category")
     gc.collect()
-    _log.warning(f"[load_data] merged: {merged.shape}, {merged.memory_usage(deep=True).sum()/1e6:.1f} MB")
+    _log.warning(f"[load_data] loaded: {merged.shape}, {merged.memory_usage(deep=True).sum()/1e6:.1f} MB")
 
     # Cast risk bands to ordered categorical
     _risk_cat = pd.CategoricalDtype(categories=["LOW", "MEDIUM", "HIGH", "CRITICAL"], ordered=True)
