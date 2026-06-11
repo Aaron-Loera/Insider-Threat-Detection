@@ -1,7 +1,19 @@
-streamlit>=1.54.0
-pandas>=2.3.0
-numpy>=2.4.0
-plotly>=6.5.0
-pyarrow>=23.0.0
-pyrebase4>=4.6.0
-huggingface_hub>=0.23.0
+# ── Dashboard runtime dependencies — EXACT pins ──────────────────────────────
+# These are the versions Streamlit Community Cloud last resolved and which import
+# and run this app. Pinning them stops a future redeploy from silently pulling a
+# breaking major. The original outage was triggered when a redeploy (forced by
+# the HF-org migration commit) re-resolved these unpinned `>=` ranges up to
+# bleeding-edge majors (pandas 3.x, numpy 2.4, pyarrow 24, Python 3.14).
+#
+# All versions below ship wheels for BOTH Python 3.12 (recommended — set it in
+# the app's Advanced settings) and Python 3.14 (current Cloud default), so the
+# build is reproducible regardless of which Python the platform assigns.
+#
+# Update process: bump a pin here only deliberately, then redeploy.
+streamlit==1.58.0
+pandas==3.0.3
+numpy==2.4.6
+plotly==6.8.0
+pyarrow==24.0.0
+pyrebase4==4.9.0
+huggingface_hub==1.18.0
