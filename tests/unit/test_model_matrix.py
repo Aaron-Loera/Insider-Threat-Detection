@@ -1,10 +1,10 @@
-"""Tests for to_model_matrix (prepare_data.py)."""
+"""Tests for to_model_matrix (ueba.models.data_prep)."""
 
 import numpy as np
 import pytest
 
-import config
-from prepare_data import to_model_matrix
+from ueba import config
+from ueba.models.data_prep import to_model_matrix
 
 
 def test_drops_exactly_the_non_feature_cols(ueba_df):

@@ -1,9 +1,9 @@
-"""Tests for chronological_split (scripts/Preprocessing.py, re-exported by prepare_data)."""
+"""Tests for chronological_split (ueba.features.preprocessing)."""
 
 import pandas as pd
 import pytest
 
-from prepare_data import chronological_split
+from ueba.features.preprocessing import chronological_split
 
 
 def test_split_preserves_all_rows(ueba_df):

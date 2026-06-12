@@ -1,8 +1,8 @@
-"""Tests for get_insiders / build_insider_mask / prepare_ae_training_data (prepare_data.py)."""
+"""Tests for get_insiders / build_insider_mask / prepare_ae_training_data (ueba.models.data_prep)."""
 
 import pandas as pd
 
-from prepare_data import build_insider_mask, get_insiders, prepare_ae_training_data
+from ueba.models.data_prep import build_insider_mask, get_insiders, prepare_ae_training_data
 
 
 def test_get_insiders_filters_by_version(insiders_csv):

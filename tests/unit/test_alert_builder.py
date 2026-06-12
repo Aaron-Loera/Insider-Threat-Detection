@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from scripts.AlertObjectBuilder import AlertObjectBuilder
+from ueba.alerts.builder import AlertObjectBuilder
 
 
 @pytest.fixture
