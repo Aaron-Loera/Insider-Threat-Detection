@@ -66,7 +66,7 @@ _COLS = [
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _read_parquet_safe(path: str) -> "pd.DataFrame":
+def _read_parquet_safe(path: str) -> "pandas.DataFrame":  # noqa: F821 — pandas imported lazily
     """Read only the _COLS that actually exist in the parquet.
 
     The HF-hosted version may have been built before all behavioural columns
@@ -97,10 +97,13 @@ def _load_records() -> list[dict]:
     else:
         # Try HF hub cache first (dashboard's load_data() will already have downloaded it)
         try:
-            from huggingface_hub import hf_hub_download
             import streamlit as _st
+            from huggingface_hub import hf_hub_download
             _token = _st.secrets.get("huggingface", {}).get("token", None)
         except Exception:
+            # Expected when running outside Streamlit (no secrets.toml / no
+            # Streamlit runtime); fall back to the env var.
+            print("[live_replay] No Streamlit secrets available; using HF_TOKEN env var.", flush=True)
             _token = os.environ.get("HF_TOKEN", None)
 
         try:

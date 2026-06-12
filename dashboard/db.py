@@ -1,18 +1,18 @@
-import sqlite3
 import os
+import sqlite3
 from datetime import datetime, timezone
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "alert_state.db")
 
 
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+def _connect(db_path: str | None = None) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path or DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def init_db() -> None:
-    with _connect() as conn:
+def init_db(db_path: str | None = None) -> None:
+    with _connect(db_path) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS alert_dispositions (
                 user      TEXT    NOT NULL,
@@ -25,9 +25,9 @@ def init_db() -> None:
         """)
 
 
-def upsert_disposition(user: str, day: str, status: str, note: str = "") -> None:
+def upsert_disposition(user: str, day: str, status: str, note: str = "", db_path: str | None = None) -> None:
     ts = datetime.now(timezone.utc).isoformat()
-    with _connect() as conn:
+    with _connect(db_path) as conn:
         conn.execute("""
             INSERT INTO alert_dispositions (user, day, status, note, timestamp)
             VALUES (?, ?, ?, ?, ?)
@@ -38,16 +38,16 @@ def upsert_disposition(user: str, day: str, status: str, note: str = "") -> None
         """, (user, day, status, note, ts))
 
 
-def get_disposition(user: str, day: str) -> sqlite3.Row | None:
-    with _connect() as conn:
+def get_disposition(user: str, day: str, db_path: str | None = None) -> sqlite3.Row | None:
+    with _connect(db_path) as conn:
         return conn.execute(
             "SELECT * FROM alert_dispositions WHERE user = ? AND day = ?",
             (user, day),
         ).fetchone()
 
 
-def get_all_dispositions() -> list[sqlite3.Row]:
-    with _connect() as conn:
+def get_all_dispositions(db_path: str | None = None) -> list[sqlite3.Row]:
+    with _connect(db_path) as conn:
         return conn.execute(
             "SELECT * FROM alert_dispositions ORDER BY timestamp DESC"
         ).fetchall()

@@ -121,7 +121,7 @@ def main() -> None:
     try:
         import config
         mv = args.version or config.MODEL_VERSION
-    except Exception:
+    except ImportError:
         mv = args.version or "6"
 
     v6b = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{mv}", f"ueba_dataset_{mv}b.parquet")

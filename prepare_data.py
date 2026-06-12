@@ -1,12 +1,13 @@
 # Imports
-import os
-import config
-import joblib
+#
+# Heavy model dependencies (joblib, tensorflow, the IF wrapper) are imported
+# lazily inside get_scores(): every other function here is pure pandas/numpy,
+# and the unit suite must be able to import this module in a tensorflow-free
+# environment (CI).
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
-from tensorflow.keras.models import load_model
-from scripts.UEBAIsolationForest import UEBAIsolationForest
+
+import config
 from scripts.Preprocessing import chronological_split  # re-export for backward compatibility
 
 __all__ = ["chronological_split", "get_insiders", "build_insider_mask", "prepare_ae_training_data", "to_model_matrix", "get_scores"]
@@ -21,17 +22,17 @@ def get_insiders(path: str, version: str | float, return_all: bool=False) -> pd.
     """
     Loads the raw insiders table and returns the scenarios for a specific version. If specified, the
     full raw table across all CERT versions can be returned.
-    
+
     Args:
         path: The location of the insiders CSV file
         version: CERT version to extract
         return_all: If true, returns the full insider table along with the version-specific table
-        
+
     Returns:
         pd.DataFrame: A table describing the window of abnormal activity for each insider
     """
     df = pd.read_csv(path)
-    
+
     # Normalizing table
     df.columns = df.columns.str.strip()
     df["user"] = df["user"].str.strip().str.lower()
@@ -39,28 +40,28 @@ def get_insiders(path: str, version: str | float, return_all: bool=False) -> pd.
     df["end"] = pd.to_datetime(df["end"].str.strip())
     df["start_day"] = df["start"].dt.normalize()
     df["end_day"] = df["end"].dt.normalize()
-    
+
     if isinstance(version, float):
         version = str(version)
-    
+
     # Extracting only version-specific insiders
     insiders_df = df[df["dataset"].astype(str).str.strip() == version]
     insiders_df = insiders_df[["user", "start_day", "end_day", "scenario"]].reset_index(drop=True)
-    
+
     if return_all:
         return insiders_df, df
     else:
         return insiders_df
-    
+
 
 def build_insider_mask(df: pd.DataFrame, windows: pd.DataFrame) -> pd.Series:
     """
     Returns a boolean mask for any (user, day) pair that falls within a known threat window.
-    
+
     Args:
         df: The UEBA dataset intended for model training
         windows: DataFrame holding the insider windows
-        
+
     Returns:
         pd.Series: A boolean mask where `False=normal` and `True=insider`
     """
@@ -71,7 +72,7 @@ def build_insider_mask(df: pd.DataFrame, windows: pd.DataFrame) -> pd.Series:
             (df["day"] >= row["start_day"]) &
             (df["day"] <= row["end_day"])
         )
-    return mask    
+    return mask
 
 
 def prepare_ae_training_data(
@@ -131,13 +132,18 @@ def to_model_matrix(df: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
 def get_scores(newData_df: pd.DataFrame) -> pd.DataFrame:
     """
     Takes in a raw data and returns a DataFrame with a corresponding anomaly score.
-    
+
     Args:
         newData_df: The raw DataFrame
-        
+
     Returns:
         pd.DataFrame: DataFrame with corresponding anomaly score
     """
+    import joblib
+    from tensorflow.keras.models import load_model
+
+    from scripts.UEBAIsolationForest import UEBAIsolationForest
+
     # Use the parameter, work on a copy
     live_df = newData_df.copy()
 
@@ -151,11 +157,11 @@ def get_scores(newData_df: pd.DataFrame) -> pd.DataFrame:
     # Load pre-fitted scaler
     scaler = joblib.load(SCALER_PATH)
     live_scaled = scaler.transform(x_live)
-    
+
     # Load encoder and generate embeddings in batch
     encoder = load_model(ENCODER_PATH)
     embeddings = encoder.predict(live_scaled)
-    
+
     # Load IF and generate anomaly scores
     iforest = UEBAIsolationForest()
     iforest.load(IF_PATH)

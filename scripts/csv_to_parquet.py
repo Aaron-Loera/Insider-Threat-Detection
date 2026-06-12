@@ -12,7 +12,6 @@ The original CSV files are kept unchanged.
 """
 
 import os
-import sys
 
 import pandas as pd
 
@@ -22,7 +21,7 @@ CSV_FILES = [
     os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_5", "ueba_dataset_5a.csv"),
     os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_5", "ueba_dataset_5b.csv"),
     os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_5", "ueba_dataset_5_train.csv"),
-    os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_5", "ueba_dataset_5_test_stream.csv"),    
+    os.path.join(BASE_DIR, "processed_datasets", "ueba_dataset_5", "ueba_dataset_5_test_stream.csv"),
     os.path.join(BASE_DIR, "explainability", "alert_table", "alert_table_5.csv"),
 ]
 
@@ -37,7 +36,7 @@ def convert(csv_path: str) -> None:
 
     Args:
         csv_path: Absolute path to the source CSV file.
-        
+
     Returns:
         None:
     """

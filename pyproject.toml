@@ -1,0 +1,33 @@
+# Tooling configuration only (lint + tests).
+#
+# Deliberately NO [project] / [build-system] tables yet: Streamlit Cloud
+# installs from requirements.txt and must not see this repo as an installable
+# package until the src/ layout migration (Phase 4 of docs/CLEANUP_REPORT.md).
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = ["*.ipynb", "legacy"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501", # line length — long plotly/pandas chains are idiomatic here
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Streamlit apps execute top-to-bottom: auth gates and st.set_page_config must
+# run before heavy imports, so mid-file imports are intentional.
+"dashboard/app.py" = ["E402"]
+# CLI utilities that insert the repo root on sys.path before importing config.
+# The src/ package migration (CLEANUP_REPORT Phase 4) removes the need for this.
+"live_replay.py" = ["E402"]
+"scripts/build_dashboard_dataset.py" = ["E402"]
+"scripts/build_merged_parquet.py" = ["E402"]
+"scripts/upload_dashboard_dataset.py" = ["E402"]
+"scripts/upload_merged_parquet.py" = ["E402"]
+"scripts/upload_to_hf.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --tb=short"

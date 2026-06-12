@@ -21,12 +21,13 @@ sys.path.insert(0, BASE_DIR)
 
 import glob as _glob
 
-import config
-from config import HF_ORG as _HF_ORG
 import requests
+from huggingface_hub import HfApi, configure_http_backend
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from huggingface_hub import HfApi, configure_http_backend
+
+import config
+from config import HF_ORG as _HF_ORG
 
 # Manifest tuple shape: (local_abs_path, path_in_repo, required, dest)
 # dest is "dataset" or "model" — controls which HF repo receives the file.
@@ -152,7 +153,7 @@ def _print_manifest(
     ds_total = model_total = 0
 
     for dest, repo in sections:
-        entries = [(l, r, req) for l, r, req, d in manifest if d == dest]
+        entries = [(local, remote, req) for local, remote, req, d in manifest if d == dest]
         if not entries:
             continue
         if dest == _MODEL and skip_model_repo:

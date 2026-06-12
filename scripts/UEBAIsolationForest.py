@@ -1,14 +1,18 @@
 import os
+
 import joblib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+from scipy.stats import ks_2samp
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import (
-    roc_auc_score, average_precision_score, roc_curve,
-    precision_recall_curve, confusion_matrix,
+    average_precision_score,
+    confusion_matrix,
+    precision_recall_curve,
+    roc_auc_score,
+    roc_curve,
 )
-from scipy.stats import ks_2samp
 
 
 class UEBAIsolationForest:
@@ -719,7 +723,7 @@ class UEBAIsolationForest:
         insider_rows = user_peak[user_peak["is_insider"]]
 
         print(f"\nTotal users in test stream: {total_users}")
-        print(f"\nInsider users in ranking:")
+        print("\nInsider users in ranking:")
         print(f"\n{'Rank':>8}  {'User':>15}  {'Peak Score':>12}")
         print("-" * 40)
         for _, row in insider_rows.iterrows():
@@ -774,7 +778,7 @@ class UEBAIsolationForest:
         eval_scores = self.anomaly_score(latent_embeddings)
         ks_stat, ks_pval = ks_2samp(reference_score_dist, eval_scores)
 
-        print(f"\nKolmogorov-Smirnov Distribution Shift Test")
+        print("\nKolmogorov-Smirnov Distribution Shift Test")
         print(f"  KS Statistic : {ks_stat:.4f}")
         print(f"  p-value      : {ks_pval:.6f}")
         if ks_pval < 0.05:

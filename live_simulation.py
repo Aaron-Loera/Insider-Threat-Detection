@@ -17,8 +17,8 @@ import asyncio
 import json
 import math
 import os
-import sys
 import signal
+import sys
 import time
 
 import joblib
@@ -28,6 +28,7 @@ import websockets
 
 # Paths (loaded from config.py)
 import config
+
 BASE_DIR                    = config.BASE_DIR
 SCALER_PATH                 = config.LIVE_SCALER_PATH
 ENCODER_PATH                = config.LIVE_ENCODER_PATH
