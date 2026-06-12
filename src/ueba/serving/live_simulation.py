@@ -77,52 +77,108 @@ _stop_event: asyncio.Event | None = None
 # ─────────────────────────────────────────────────────────────────────────────
 
 class LiveScorer:
-    def __init__(self) -> None:
-        print("[live_simulation] Loading scaler …", flush=True)
-        self.scaler = joblib.load(SCALER_PATH)
+    def __init__(
+        self,
+        scaler=None,
+        encoder=None,
+        iforest=None,
+        ref_scores=None,
+        feature_cols: list[str] | None = None,
+        absolute_thresholds: dict | None = None,
+        user_work_hours="auto",
+    ) -> None:
+        """Load (or accept injected) scoring components.
+
+        Every component defaults to loading the configured artifact; tests
+        inject lightweight stubs so the scoring path runs without tensorflow
+        or model files. `user_work_hours="auto"` loads the per-user schedule
+        table when present (used only to WARN about cold-start users whose
+        off-hours features were built with the population fallback — it does
+        not alter scores); pass None to disable.
+        """
+        if scaler is not None:
+            self.scaler = scaler
+        else:
+            print("[live_simulation] Loading scaler …", flush=True)
+            self.scaler = joblib.load(SCALER_PATH)
 
         # Authoritative train/serve column contract: the ordered feature columns
         # persisted at training time. Falls back to dropping config.NON_FEATURE_COLS
         # (numeric selection) when the artifact is absent.
-        self.feature_cols: list[str] | None = None
-        if os.path.exists(FEATURE_COLS_PATH):
-            with open(FEATURE_COLS_PATH) as _f:
-                self.feature_cols = json.load(_f)
-            print(f"[live_simulation] Loaded {len(self.feature_cols)} feature columns from feature_cols.json", flush=True)
+        self.feature_cols: list[str] | None = feature_cols
+        if self.feature_cols is None:
+            if os.path.exists(FEATURE_COLS_PATH):
+                with open(FEATURE_COLS_PATH) as _f:
+                    self.feature_cols = json.load(_f)
+                print(f"[live_simulation] Loaded {len(self.feature_cols)} feature columns from feature_cols.json", flush=True)
+            else:
+                print("[live_simulation] feature_cols.json not found — selecting numeric features via config.NON_FEATURE_COLS.", flush=True)
+
+        if encoder is not None:
+            self.encoder = encoder
         else:
-            print("[live_simulation] feature_cols.json not found — selecting numeric features via config.NON_FEATURE_COLS.", flush=True)
+            print("[live_simulation] Loading encoder …", flush=True)
+            from tensorflow.keras.models import load_model  # deferred → faster cold import
+            self.encoder = load_model(ENCODER_PATH, compile=False)
 
-        print("[live_simulation] Loading encoder …", flush=True)
-        from tensorflow.keras.models import load_model  # deferred → faster cold import
-        self.encoder = load_model(ENCODER_PATH, compile=False)
+        if iforest is not None:
+            self.iforest = iforest
+        else:
+            print("[live_simulation] Loading isolation forest …", flush=True)
+            from ueba.models.isolation_forest import UEBAIsolationForest
+            self.iforest = UEBAIsolationForest()
+            self.iforest.load(IF_PATH)
 
-        print("[live_simulation] Loading isolation forest …", flush=True)
-        from ueba.models.isolation_forest import UEBAIsolationForest
-        self._iforest_cls = None  # kept for symmetry; using loaded instance
-        self.iforest = UEBAIsolationForest()
-        self.iforest.load(IF_PATH)
-
-        # Load reference score distribution for percentile ranking (sorted once
-        # at load so per-row ranking is a binary search via risk_bands).
+        # Reference score distribution for percentile ranking (sorted once at
+        # load so per-row ranking is a binary search via risk_bands).
         # Prefer the clean calibration baseline; fall back to full training scores.
-        print("[live_simulation] Loading reference score distribution …", flush=True)
-        _ref_path = IF_BASELINE_PATH if os.path.exists(IF_BASELINE_PATH) else IF_SCORES_PATH
-        self.ref_scores: np.ndarray = np.sort(np.load(_ref_path))
-        _ref_label = "clean calibration baseline" if _ref_path == IF_BASELINE_PATH else "training distribution"
+        if ref_scores is not None:
+            self.ref_scores: np.ndarray = np.sort(np.asarray(ref_scores))
+        else:
+            print("[live_simulation] Loading reference score distribution …", flush=True)
+            _ref_path = IF_BASELINE_PATH if os.path.exists(IF_BASELINE_PATH) else IF_SCORES_PATH
+            self.ref_scores = np.sort(np.load(_ref_path))
+            _ref_label = "clean calibration baseline" if _ref_path == IF_BASELINE_PATH else "training distribution"
+            print(
+                f"[live_simulation] Ready. Reference distribution ({_ref_label}): {len(self.ref_scores):,} rows.",
+                flush=True,
+            )
+
+        # Calibrated absolute IF thresholds if available; fall back to percentile cutoffs.
+        self._if_absolute_thresholds: dict | None = absolute_thresholds
+        if self._if_absolute_thresholds is None:
+            if os.path.exists(CALIBRATION_THRESHOLD_PATH):
+                with open(CALIBRATION_THRESHOLD_PATH) as _f:
+                    _cal = json.load(_f)
+                self._if_absolute_thresholds = _cal.get("if")
+                print("[live_simulation] Loaded calibrated absolute IF thresholds.", flush=True)
+            else:
+                print("[live_simulation] calibration_thresholds.json not found — using fallback percentile thresholds.", flush=True)
+
+        # Per-user work-hour envelopes: detect cold-start users at inference so
+        # the population-fallback condition is logged instead of silent
+        # (CLEANUP_REPORT gap 2). Scores are unaffected — daily aggregates are
+        # already featurized; this is the observability half of the fix.
+        self._scheduled_users: set | None = None
+        self._warned_users: set = set()
+        if isinstance(user_work_hours, str) and user_work_hours == "auto":
+            from ueba.features.work_hours import load_user_work_hours
+            _uwh = load_user_work_hours()
+            if _uwh is not None:
+                self._scheduled_users = set(_uwh[_uwh["schedule_complete"]]["user"])
+                print(f"[live_simulation] Loaded work-hour envelopes for {len(self._scheduled_users):,} users.", flush=True)
+        elif user_work_hours is not None:
+            self._scheduled_users = set(user_work_hours[user_work_hours["schedule_complete"]]["user"])
+
+    def _warn_if_cold_start(self, user: str | None) -> None:
+        if user is None or self._scheduled_users is None or user in self._scheduled_users or user in self._warned_users:
+            return
+        self._warned_users.add(user)
         print(
-            f"[live_simulation] Ready. Reference distribution ({_ref_label}): {len(self.ref_scores):,} rows.",
+            f"[live_simulation] WARNING: user '{user}' has no derived work-hour envelope — "
+            "their off-hours features use the population fallback (9-17).",
             flush=True,
         )
-
-        # Load calibrated absolute IF thresholds if available; fall back to percentile cutoffs.
-        self._if_absolute_thresholds: dict | None = None
-        if os.path.exists(CALIBRATION_THRESHOLD_PATH):
-            with open(CALIBRATION_THRESHOLD_PATH) as _f:
-                _cal = json.load(_f)
-            self._if_absolute_thresholds = _cal.get("if")
-            print("[live_simulation] Loaded calibrated absolute IF thresholds.", flush=True)
-        else:
-            print("[live_simulation] calibration_thresholds.json not found — using fallback percentile thresholds.", flush=True)
 
     def score_row(self, row_df: pd.DataFrame) -> dict:
         """Score one row and return a dict with all required fields."""
@@ -137,6 +193,8 @@ class LiveScorer:
             if ts_col in row_df.columns:
                 meta["cert_timestamp"] = str(row_df[ts_col].iloc[0])
                 break
+
+        self._warn_if_cold_start(meta.get("user"))
 
         # Feature matrix — select exactly the columns the scaler/encoder were fit on.
         # Prefer the persisted feature_cols.json contract (reindex enforces both

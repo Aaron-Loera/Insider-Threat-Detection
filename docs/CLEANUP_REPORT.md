@@ -236,6 +236,17 @@ Each phase is an independently mergeable branch/PR, ordered low-risk → high-ri
   at `CALIBRATION_THRESHOLD_PATH` on the dev machine, so the live scorer silently runs on
   fallback percentile thresholds and a fresh Alert_Object_Builder run would fail at the
   threshold-loading cell. The manifest must surface exactly this condition.
+  *Phase 5 outcome:* the first `pipeline status` audit additionally surfaced a missing
+  `feature_cols.json` (the train/serve column contract — the live scorer had been silently
+  on its fallback column selection, correct only by column-order coincidence) and a latent
+  format conflict where Isolation_Forest.ipynb and Alert_Object_Builder.ipynb wrote
+  incompatible schemas to the same thresholds path. Both artifacts were regenerated
+  (`calibrate --thresholds-only` + schema-derived contract), the thresholds file now has a
+  single producer (the `calibrate` stage), and `alert_table_6_test.parquet` (126,931
+  alerts) plus `cases_6_test.parquet` exist for the first time. Restoring the thresholds
+  switched live banding from the degraded percentile fallback back to the designed
+  calibrated alert budget (verified: scores/percentiles byte-identical, bands more
+  conservative).
 - Evaluation metrics written as JSON beside the PNGs [gap 6].
 - `apply_off_hours_flags()` + injectable `LiveScorer` dependencies [gap 2]; default flags
   keep today's output byte-identical.
