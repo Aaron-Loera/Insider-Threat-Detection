@@ -19,9 +19,17 @@ Scratch.ipynb
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+.coverage
 
 # Directories
 reports/
+
+# Archived v1-v5 artifacts (relocated during repo cleanup; see docs/CLEANUP_REPORT.md)
+legacy/
 
 # Local path overrides (each contributor maintains their own copy)
 paths.local.py

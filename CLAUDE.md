@@ -12,7 +12,7 @@ streamlit run dashboard/app.py
 **Run live scoring/simulation:**
 ```bash
 python live_simulation.py
-python live_simulation.py --interval 0.5 --input processed_datasets/test_stream.csv --output processed_datasets/live_results.jsonl --port 8765
+python live_simulation.py --interval 0.5 --input processed_datasets/ueba_dataset_6/ueba_dataset_6_test_stream.parquet --output processed_datasets/live_results.jsonl --port 8765
 ```
 
 **Install dependencies:**
@@ -29,8 +29,8 @@ This is a UEBA (User and Entity Behavior Analytics) insider threat detection sys
 ### Two Runtime Components
 
 **1. `dashboard/app.py`** — Streamlit web UI for security analysts
-- Loads two pre-computed datasets at startup (cached via `@st.cache_data`): `explainability/alert_table/alert_table_6.parquet` and `processed_datasets/ueba_dataset_6/ueba_dataset_6_train.parquet`
-- Merges them on `(user, day)` keys
+- Loads a pre-merged slim serving dataset at startup (cached): `ueba_dataset_6_dashboard.parquet`, read locally when present or downloaded from the Hugging Face dataset repo (`HF_DATASET_REPO` in `config.py`)
+- The serving dataset is built offline by `scripts/build_dashboard_dataset.py` (merges the alert table with training features on `(user, day)`, projects columns, downcasts dtypes) and published with `scripts/upload_dashboard_dataset.py`
 - Re-enforces the `baseline_complete` gate at load time: CRITICAL bands are demoted to HIGH for any user with fewer than 14 days of history, guarding against alert tables regenerated without the filter
 - Four tabs: Overview (KPIs + charts), Investigation (per-user deep dive), Alerts (filterable feed), Channels (feature analysis)
 - Global sidebar filters (date range, risk level, user search) drive all views
@@ -42,16 +42,17 @@ This is a UEBA (User and Entity Behavior Analytics) insider threat detection sys
 
 **2. `live_simulation.py`** — Real-time scoring engine
 - `LiveScorer` class loads encoder model, StandardScaler, and Isolation Forest once at startup
-- Streams `test_stream.csv` row-by-row through the ML pipeline: scale → embed (16-dim latent) → IF score → percentile rank → risk level
+- Streams the v6 test_stream parquet row-by-row through the ML pipeline: scale → embed (16-dim latent) → IF score → percentile rank → risk level
 - Outputs scored records to `processed_datasets/live_results.jsonl` (one JSON object per line)
 - Broadcasts each scored record via WebSocket (default port 8765) for real-time dashboard updates
+- **Security note:** the WebSocket server is unauthenticated by design and binds to `localhost` only (`live_simulation.py`, `websockets.serve(..., "localhost", port)`). It must not be exposed beyond the local machine without adding authentication.
 - Tracks `_score_ms` per record for latency diagnostics
 
 ### ML Pipeline (Offline, in Jupyter notebooks)
 
 ```
 Raw CERT logs (logon/file/device/email/http CSVs)
-  → CERT_Preprocessing.ipynb     # Feature engineering → ueba_dataset_5/ (train/test split, 108 features)
+  → CERT_Preprocessing.ipynb     # Feature engineering → ueba_dataset_6/ (train/calibration/test_stream splits, 54 Layer A → 414 Layer B features)
   → Autoencoder.ipynb            # Train autoencoder on insider-filtered normal data, extract 16-dim embeddings + scaler
   → Isolation_Forest.ipynb       # Train IF on normal-behavior embeddings, compute anomaly scores
   → Alert_Object_Builder.ipynb   # Inner-join scores + features → alert_table_6.parquet, cases_6.parquet; asserts row counts align to surface pipeline drift early
