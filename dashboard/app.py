@@ -1,20 +1,22 @@
 ﻿import sys
-sys.stderr.write("[APP] module-level execution started\n"); sys.stderr.flush()
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+
+sys.stderr.write("[APP] module-level execution started\n")
+sys.stderr.flush()
+import ast as _ast
+import hashlib
+import hmac
+import html as _html_mod
 import json
 import os
 import subprocess
 import time
-import ast as _ast
-import hmac
-import hashlib
-import html as _html_mod
-from db import init_db, upsert_disposition, get_disposition, get_all_dispositions
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+from db import get_all_dispositions, init_db, upsert_disposition
 
 ALERT_STATUS_OPTIONS = ["NEW", "INVESTIGATING", "RESOLVED", "DISMISSED"]
 
@@ -404,7 +406,7 @@ st.markdown("""
         letter-spacing: 2px;
         font-family: 'JetBrains Mono', monospace;
     }
-            
+
     /* ── Investigation card labels (Alert Summary, Raw Alert Record, etc.) ── */
     .inv-card-label {
         font-family: 'JetBrains Mono', monospace;
@@ -1004,6 +1006,7 @@ init_db()
 # ──────────────────────────────────────────────────────────────
 import datetime as _dt
 import logging as _auth_log
+
 _auth_log.getLogger("ueba.startup").warning(
     f"[STARTUP] authenticated — reached data-load section at {_dt.datetime.now(_dt.timezone.utc).isoformat()}"
 )
@@ -1016,15 +1019,16 @@ if BASE_DIR not in sys.path:
 # All path configuration is centralized in config.py.  Per-contributor
 # overrides live in paths.local.py (gitignored). See paths.local.example.py.
 from config import (
-    ANALYST_TABLE_PARQUET, ANALYST_TABLE_CSV,
-    UEBA_PARQUET, UEBA_CSV,
-    UEBA_A_PARQUET, UEBA_A_CSV,
-    LIVE_OUTPUT, LIVE_PAUSE_FLAG, LIVE_SIM_SCRIPT,
-    PEER_BASELINES_PATH,
-    CALIB_ALERT_TABLE_PARQUET,
-    MODEL_VERSION,
-    HF_DATASET_REPO,
+    ANALYST_TABLE_PARQUET,
     HF_DATASET_BASE_URL,
+    HF_DATASET_REPO,
+    LIVE_OUTPUT,
+    LIVE_PAUSE_FLAG,
+    LIVE_SIM_SCRIPT,
+    MODEL_VERSION,
+    PEER_BASELINES_PATH,
+    UEBA_A_CSV,
+    UEBA_A_PARQUET,
 )
 
 # Only load columns the dashboard actually uses
@@ -1151,6 +1155,7 @@ def load_data():
     """
     import gc
     import logging as _logging
+
     import pyarrow.parquet as _pq
     _log = _logging.getLogger("ueba.load_data")
     _log.warning("[load_data] started")
@@ -1278,6 +1283,7 @@ def load_user_profiles() -> pd.DataFrame:
 
 
 import logging as _startup_log
+
 _slog = _startup_log.getLogger("ueba.startup")
 try:
     merged_df, user_risk, all_users, _DS_MIN, _DS_MAX = load_data()
@@ -1404,7 +1410,6 @@ RISK_COLORS = {"CRITICAL": "#bb44f0", "HIGH": "#e84545", "MEDIUM": "#d4a017", "L
 # Alert context helpers
 # ──────────────────────────────────────────────────────────────
 
-import ast as _ast
 
 _FEATURE_LABELS: dict[str, str] = {
     # ── Authentication ──
@@ -1447,7 +1452,6 @@ _FEATURE_LABELS: dict[str, str] = {
     "http_long_url_count":                      "long-URL HTTP activity",
     "unique_domains_visited":                   "unique websites visited",
     # ── HTTP cross-channel flags ──
-    "jobsite_usb_activity_flag":                "job-site browsing combined with USB activity",
     "suspicious_upload_flag":                   "suspicious web upload activity",
     "cloud_upload_flag":                        "cloud storage upload activity",
     # ── Known z-score variants ──
@@ -1510,7 +1514,7 @@ _BASE_LABELS: dict[str, str] = {
     "unique_files_accessed":    "unique file access",
     "off_hours_files_accessed": "after-hours file access",
     "off_hours_logon":          "after-hours logons",
-   
+
     "logon_count":              "logon frequency",
     "logoff_count":             "logoff activity",
     "external_emails":          "external email activity",
@@ -1527,8 +1531,6 @@ _BASE_LABELS: dict[str, str] = {
     "usb_remove_count":         "USB device removals",
     "off_hours_usb_usage":      "after-hours USB usage",
     "http_requests":            "HTTP requests",
-    "http_long_url":            "long-URL HTTP activity",
-    "off_hours_http":           "after-hours HTTP activity",
     "http_total_requests":          "web requests",
     "http_visit_count":             "web page visits",
     "http_download_count":          "web downloads",
@@ -1751,10 +1753,16 @@ def _cached_live_rows():
                     if json.loads(line.strip()).get("_eos"):
                         stream_done = True
                         break
-                except Exception:
-                    pass
-    except Exception:
-        pass
+                except (json.JSONDecodeError, AttributeError):
+                    # Partial line still being written, or a non-object record.
+                    continue
+    except Exception as _e:
+        # Deliberate swallow: the simulator writes this file concurrently, so a
+        # mid-write read can fail in several ways (truncation, partial UTF-8
+        # sequence). Surface on the next refresh instead of crashing the
+        # dashboard — but log it, so failures are no longer invisible.
+        import logging as _logging
+        _logging.getLogger("ueba.live").warning("live results read failed: %s", _e)
     return rows, stream_done
 
 
@@ -3007,7 +3015,6 @@ def _render_investigation_content() -> None:
 
     # ── User KPI Row ──
     u1, u2, u3, u4, u5, u6 = st.columns(6)
-    u_max_score = user_data["if_anomaly_score"].max()
     u_max_pctl = user_data["ae_percentile_rank"].max()
     u_crit_days = (user_data["ae_risk_band"] == "CRITICAL").sum()
     u_high_days = (user_data["ae_risk_band"] == "HIGH").sum()
@@ -3016,13 +3023,13 @@ def _render_investigation_content() -> None:
 
     # Determine overall user risk label
     if u_max_pctl >= 95:
-        u_risk_label, u_risk_color = "CRITICAL", "#ff1744"
+        u_risk_label = "CRITICAL"
     elif u_max_pctl >= 90:
-        u_risk_label, u_risk_color = "HIGH", "#ff6b6b"
+        u_risk_label = "HIGH"
     elif u_max_pctl >= 80:
-        u_risk_label, u_risk_color = "MEDIUM", "#feca57"
+        u_risk_label = "MEDIUM"
     else:
-        u_risk_label, u_risk_color = "LOW", "#48dbfb"
+        u_risk_label = "LOW"
 
     u1.metric("Overall Risk", u_risk_label)
     u2.metric("Peak Percentile", f"{u_max_pctl:.1f}")
@@ -3545,7 +3552,7 @@ if active_page == "Alerts":
 
     # ── LIVE mode ─────────────────────────────────────────────
     if st.session_state.live_mode:
-        
+
         # Check whether the subprocess is still running
         proc = st.session_state.live_proc
         proc_running = proc is not None and proc.poll() is None
@@ -4014,7 +4021,7 @@ if active_page == "Alerts":
             else:  # User Z–A
                 alert_data = alert_data.sort_values("user", ascending=False)
             alert_data = alert_data.head(int(max_results))
-                    
+
                     #########################
 
         # Cap card rendering to keep the UI responsive
@@ -4112,11 +4119,11 @@ if active_page == "Alerts":
                     )
                     if status == "SUPPRESSED" and show_suppressed_alerts:
                         st.markdown(
-                            f"<div style='padding-top:2px;'>"
-                            f"<span style='background:#9a8b7722;color:#9a8b77;font-size:9px;"
-                            f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:2px 6px;"
-                            f"border:1px solid #9a8b7755;display:inline-block;'>SUPPRESSED</span>"
-                            f"</div>",
+                            "<div style='padding-top:2px;'>"
+                            "<span style='background:#9a8b7722;color:#9a8b77;font-size:9px;"
+                            "font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:2px 6px;"
+                            "border:1px solid #9a8b7755;display:inline-block;'>SUPPRESSED</span>"
+                            "</div>",
                             unsafe_allow_html=True,
                         )
 

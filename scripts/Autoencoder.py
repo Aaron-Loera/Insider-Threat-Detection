@@ -1,28 +1,30 @@
 import os
 import re
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-import matplotlib.pyplot as plt
+from sklearn.metrics import average_precision_score, precision_recall_curve, roc_auc_score, roc_curve
 from tensorflow.keras import layers, models
-from tensorflow.keras.callbacks import EarlyStopping, CSVLogger
-from sklearn.metrics import roc_auc_score, average_precision_score, roc_curve, precision_recall_curve
+from tensorflow.keras.callbacks import CSVLogger, EarlyStopping
+
 
 class Autoencoder:
     """
     Autoencoder for learning latent representation of UEBA behavioral features.
     """
-    
+
     def __init__(self, input_dim: int, latent_dim: int=16, hidden_dims: tuple | int=64, learning_rate: float=1e-3) -> None:
         """
         Initializes the autoencoder architecture.
-        
+
         Args:
             input_dim: The number of input features
             latent_dim: The size of latent embeddings
             hidden_dims: The size of hidden layers. If a tuple is provided each integer is treated as its own hidden layer
             learning_rate: Optimizer learning rate
-            
+
         Returns:
             None:
         """
@@ -30,18 +32,18 @@ class Autoencoder:
         self.latent_dim = latent_dim
         self.hidden_dims = hidden_dims
         self.learning_rate = learning_rate
-        
+
         self.autoencoder, self.encoder = self._build_model()
-        
-    
+
+
     def _build_model(self) -> tuple:
         """
         Builds the autoencoder and encoder models. The autoencoder serves as the model to train, whereas the encoder
         will be utilized for extracting behavioral embeddings.
-        
+
         Args:
             None:
-        
+
         Returns:
             tuple: A two-element tuple containing the autoencoder and encoder models
         """
@@ -51,41 +53,41 @@ class Autoencoder:
         if isinstance(self.hidden_dims, int):
             x = layers.Dense(self.hidden_dims, activation="relu")(inputs)
             x = layers.Dropout(0.2)(x)
-            
+
         elif isinstance(self.hidden_dims, tuple):
             x = layers.Dense(self.hidden_dims[0], activation="relu")(inputs)
             x = layers.Dropout(0.2)(x)
             for i in range(1, len(self.hidden_dims)):
                 x = layers.Dense(self.hidden_dims[i], activation="relu")(x)
                 x = layers.Dropout(0.2)(x)
-        
+
         # Latent space
         latent = layers.Dense(self.latent_dim, activation="linear", name="latent_space")(x)
-        
+
         # Decoder construction
         if isinstance(self.hidden_dims, int):
             x = layers.Dense(self.hidden_dims, activation="relu")(latent)
-            
+
         elif isinstance(self.hidden_dims, tuple):
             x = layers.Dense(self.hidden_dims[-1], activation="relu")(latent)
             for i in range(len(self.hidden_dims)-2, -1, -1):
                 x = layers.Dense(self.hidden_dims[i], activation="relu")(x)
-                
+
         outputs = layers.Dense(self.input_dim, activation="linear")(x)
-        
+
         # Defining the autoencoder and encoder
         autoencoder = models.Model(inputs, outputs, name="ueba_autoencoder")
         encoder = models.Model(inputs, latent, name="ueba_encoder")
-        
+
         # Compiling the autoencoder
         autoencoder.compile(
             optimizer=tf.keras.optimizers.Adam(self.learning_rate),
             loss="mse"
         )
-        
+
         return (autoencoder, encoder)
-    
-    
+
+
     def train(self, x_train: np.ndarray, save_path: str, epochs: int=100, batch_size: int=256, x_val: np.ndarray=None):
         """
         Trains the autoencoder with early stopping.
@@ -131,21 +133,21 @@ class Autoencoder:
         )
 
         return history
-        
-    
+
+
     def encode(self, feature_matrix: np.ndarray) -> np.ndarray:
         """
         Generates latent embeddings for UEBA data.
-        
+
         Args:
             feature_matrix: The scaled UEBA feature matrix
-            
+
         Returns:
             np.ndarray: The generated latent embeddings
         """
         return self.encoder.predict(feature_matrix)
-    
-    
+
+
     def load(self, load_path: str) -> None:
         """
         Loads previously trained autoencoder and encoder models.
@@ -436,4 +438,4 @@ def plot_loss(history, save_path) -> None:
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(os.path.join(save_path, "training_history.png"), dpi=150)
-    plt.show()    
+    plt.show()

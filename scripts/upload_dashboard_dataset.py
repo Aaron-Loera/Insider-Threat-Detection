@@ -23,9 +23,9 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
 import requests
+from huggingface_hub import HfApi, configure_http_backend
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from huggingface_hub import HfApi, configure_http_backend
 
 
 def _configure_retry_session() -> None:

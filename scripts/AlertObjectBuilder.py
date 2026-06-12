@@ -1,5 +1,6 @@
-import os
 import json
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -371,7 +372,7 @@ class AlertObjectBuilder:
     def aggregate_alerts(self, alert_df: pd.DataFrame, window_days: int=7, min_risk: str="HIGH") -> pd.DataFrame:
         """
         Groups daily alerts into multi-day cases per user.
-        
+
         Consecutive anomalous days within `window_days` of each other are merged into a single case, reducing alert
         fatigue and surfacing persistent threat patterns. Only rows at or above `min_risk` are considered
         when computing case boundaries.

@@ -16,7 +16,6 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
 import pandas as pd
-import pyarrow as pa
 import pyarrow.parquet as pq
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
@@ -94,7 +93,9 @@ def main():
         on=["user", "day"],
         how="left",
     )
-    import gc; gc.collect()
+    import gc
+
+    gc.collect()
     print(f"  merged: {merged.shape}, {merged.memory_usage(deep=True).sum()/1e6:.1f} MB")
 
     print(f"Writing → {OUT_PATH}")
