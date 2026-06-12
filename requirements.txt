@@ -17,3 +17,9 @@ plotly==6.8.0
 pyarrow==24.0.0
 pyrebase4==4.9.0
 huggingface_hub==1.18.0
+
+# Editable install of the ueba package (src/ueba) so the dashboard imports the
+# shared config/risk modules. Its dependency ranges admit every pin above. If
+# this line ever fails on a redeploy, the root config.py shim falls back to
+# importing straight from src/ — the app stays up either way.
+-e .

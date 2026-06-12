@@ -29,7 +29,9 @@ jobs:
           python-version: "3.12"
       # Deliberately minimal: the unit suite uses synthetic fixtures and stub
       # models, so tensorflow (and the real datasets) are never needed in CI.
-      - run: pip install pytest pandas numpy
+      # The editable install exercises the same pyproject path Streamlit Cloud
+      # resolves via the "-e ." line in requirements.txt.
+      - run: pip install -e .[dev]
       - run: pytest
 
   notebooks:

@@ -12,11 +12,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-# Make repo-root modules (config, prepare_data, scripts/, dashboard/)
-# importable regardless of where pytest is invoked from.
+# Make the ueba package (src/) and the repo-root back-compat modules
+# (config, prepare_data, scripts/, dashboard/) importable regardless of
+# where pytest is invoked from and whether the package is pip-installed.
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
+for _p in (REPO_ROOT, os.path.join(REPO_ROOT, "src")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 N_USERS = 10
 N_DAYS = 30

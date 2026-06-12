@@ -10,7 +10,7 @@ gap 1).
 import numpy as np
 import pytest
 
-from scripts import risk_bands
+from ueba import risk as risk_bands
 
 # ── Percentile banding ────────────────────────────────────────────────────────
 

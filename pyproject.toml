@@ -1,8 +1,46 @@
-# Tooling configuration only (lint + tests).
-#
-# Deliberately NO [project] / [build-system] tables yet: Streamlit Cloud
-# installs from requirements.txt and must not see this repo as an installable
-# package until the src/ layout migration (Phase 4 of docs/CLEANUP_REPORT.md).
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ueba"
+version = "0.1.0"
+description = "UEBA insider-threat detection: feature pipeline, models, alerting, live scoring, and dashboard support"
+requires-python = ">=3.12"
+# Ranges deliberately admit the exact pins in requirements.txt (the hand-pinned
+# Streamlit Cloud lockfile): pandas 3.0.3, numpy 2.4.6, pyarrow 24.0.0.
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "pyarrow>=15",
+]
+
+[project.optional-dependencies]
+# Training / scoring stack (notebooks, live_simulation, evaluation)
+ml = [
+    "tensorflow>=2.16",
+    "scikit-learn>=1.4",
+    "joblib>=1.3",
+    "scipy>=1.12",
+    "websockets>=12",
+    "matplotlib>=3.8",
+    "umap-learn>=0.5",
+]
+# Local dashboard development (Streamlit Cloud uses the pinned requirements.txt)
+dashboard = [
+    "streamlit>=1.40",
+    "plotly>=5.20",
+    "pyrebase4>=4.8",
+    "huggingface_hub>=0.23",
+]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "nbformat>=5.9",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.ruff]
 target-version = "py312"
@@ -19,15 +57,10 @@ ignore = [
 # Streamlit apps execute top-to-bottom: auth gates and st.set_page_config must
 # run before heavy imports, so mid-file imports are intentional.
 "dashboard/app.py" = ["E402"]
-# CLI utilities that insert the repo root on sys.path before importing config.
-# The src/ package migration (CLEANUP_REPORT Phase 4) removes the need for this.
-"live_simulation.py" = ["E402"]
-"live_replay.py" = ["E402"]
-"scripts/build_dashboard_dataset.py" = ["E402"]
+# Superseded v5-era CLI utilities (removed in CLEANUP_REPORT Phase 6); they
+# still insert the repo root on sys.path before importing config.
 "scripts/build_merged_parquet.py" = ["E402"]
-"scripts/upload_dashboard_dataset.py" = ["E402"]
 "scripts/upload_merged_parquet.py" = ["E402"]
-"scripts/upload_to_hf.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
