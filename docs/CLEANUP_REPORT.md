@@ -163,15 +163,15 @@ remain valid with zero changes, and the Streamlit Cloud deployment contract
 
 Each phase is an independently mergeable branch/PR, ordered low-risk → high-risk.
 
-| Phase | Branch | Goal | Risk |
-|---|---|---|---|
-| 1 | `chore/cleanup-report` | This report + zero-risk git hygiene | None |
-| 2 | `chore/ci-and-tests` | Ruff + pytest + GitHub Actions on the current layout | Low |
-| 3 | `fix/risk-band-unification` | One canonical risk-band module [gap 1] | Med-low |
-| 4 | `refactor/src-package` | `pyproject.toml` + `src/ueba/` move with back-compat shims | **Highest** |
-| 5 | `feat/pipeline-cli` | `python -m ueba.pipeline <stage>` + manifest + gaps 2/3/6 | Medium |
-| 6 | `chore/legacy-artifacts` | Move v1–v5 artifacts to `legacy/`; README/CLAUDE.md rewrite | Medium |
-| 7 | *(deferred)* | Dashboard decomposition [gap 7] | High — own PR series |
+| Phase | Branch | Goal | Risk | Status |
+|---|---|---|---|---|
+| 1 | `chore/cleanup-report` | This report + zero-risk git hygiene | None | ✅ merged |
+| 2 | `chore/ci-and-tests` | Ruff + pytest + GitHub Actions on the current layout | Low | ✅ merged |
+| 3 | `fix/risk-band-unification` | One canonical risk-band module [gap 1] | Med-low | ✅ merged |
+| 4 | `refactor/src-package` | `pyproject.toml` + `src/ueba/` move with back-compat shims | **Highest** | ✅ merged (Cloud gate passed) |
+| 5 | `feat/pipeline-cli` | `python -m ueba.pipeline <stage>` + manifest + gaps 2/3/6 | Medium | ✅ merged |
+| 6 | `chore/legacy-artifacts` | Move v1–v5 artifacts to `legacy/`; README/CLAUDE.md rewrite | Medium | ✅ executed 2026-06-12 |
+| 7 | *(deferred)* | Dashboard decomposition [gap 7] | High — own PR series | ⏳ open follow-up |
 
 ### Phase 1 — report + hygiene *(this PR)*
 - Add this report.

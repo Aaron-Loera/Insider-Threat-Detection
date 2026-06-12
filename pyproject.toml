@@ -64,10 +64,6 @@ ignore = [
 # Streamlit apps execute top-to-bottom: auth gates and st.set_page_config must
 # run before heavy imports, so mid-file imports are intentional.
 "dashboard/app.py" = ["E402"]
-# Superseded v5-era CLI utilities (removed in CLEANUP_REPORT Phase 6); they
-# still insert the repo root on sys.path before importing config.
-"scripts/build_merged_parquet.py" = ["E402"]
-"scripts/upload_merged_parquet.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

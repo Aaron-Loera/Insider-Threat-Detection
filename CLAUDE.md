@@ -61,30 +61,36 @@ This is a UEBA (User and Entity Behavior Analytics) insider threat detection sys
 - **Security note:** the WebSocket server is unauthenticated by design and binds to `localhost` only (`live_simulation.py`, `websockets.serve(..., "localhost", port)`). It must not be exposed beyond the local machine without adding authentication.
 - Tracks `_score_ms` per record for latency diagnostics
 
-### ML Pipeline (Offline, in Jupyter notebooks)
+### ML Pipeline (Offline)
+
+The production path is the headless CLI (`python -m ueba.pipeline <stage>`, see `docs/PIPELINE.md`):
 
 ```
 Raw CERT logs (logon/file/device/email/http CSVs)
-  → CERT_Preprocessing.ipynb     # Feature engineering → ueba_dataset_6/ (train/calibration/test_stream splits, 54 Layer A → 414 Layer B features)
-  → Autoencoder.ipynb            # Train autoencoder on insider-filtered normal data, extract 16-dim embeddings + scaler
-  → Isolation_Forest.ipynb       # Train IF on normal-behavior embeddings, compute anomaly scores
-  → Alert_Object_Builder.ipynb   # Inner-join scores + features → alert_table_6.parquet, cases_6.parquet; asserts row counts align to surface pipeline drift early
+  → preprocess      # ueba_dataset_6/ (train/calibration/test_stream splits, 54 Layer A → 414 Layer B features, work-hour envelopes, peer baselines)
+  → train-ae        # autoencoder on insider-filtered normal data → 16-dim embeddings + scaler + feature_cols.json contract + clean AE baseline
+  → train-if        # IF on normal-behavior embeddings → anomaly scores + clean IF baseline; metrics_if.json
+  → explain         # reconstruction-error tables (--split train | test_stream)
+  → calibrate       # band-keyed calibration_thresholds.json from the insider-free baseline (sole producer)
+  → build-alerts    # alert_table_6[_calib|_test].parquet + cases (--split main | calib | test); inner-join asserts surface pipeline drift early
+  → build-dashboard # slim serving parquet
 ```
 
-`prepare_data.py` provides shared utilities for the notebooks: `chronological_split` (90/10 train/test), `get_insiders`, `build_insider_mask`, and `get_scores`.
+Every stage validates inputs through a fail-fast manifest (`ueba.pipeline.manifest`) — a missing artifact names its producing stage. `python -m ueba.pipeline status` audits the artifact tree. The five training notebooks (CERT_Preprocessing, Autoencoder, Isolation_Forest, Reconstruction_Error_Explainer, Alert_Object_Builder) remain as narrative documentation of the same flow.
+
+`ueba.models.data_prep` (shimmed at root as `prepare_data.py`) provides shared utilities: `chronological_split`, `get_insiders`, `build_insider_mask`, `to_model_matrix`, and `get_scores`.
 
 ### Model Artifacts
 
-- `encoders/encoder_model_6/` — **recommended offline model**; trained on insider-filtered normal behavior from ueba_dataset_6; same architecture as model 5 (dropout 0.2, linear latent activation, early stopping patience=10, 80/10/10 chronological split, calibration-aware training); learning rate 0.001; training loss ~22.93%, validation loss ~15.81%
-- `encoders/encoder_model_5/` — previous offline model; trained on ueba_dataset_5 (108 features); learning rate 0.001; training loss 26.78%, validation loss 16.90%
-- `isolation_forests/iforest_model_6/` — **recommended offline IF**; trained on encoder_model_6's normal-behavior embeddings; contamination="auto"; evaluation artifacts: confusion_matrix, precision_at_recall, user_detection_rate, alert_volume, time_to_first_alert, rank_order, score_distribution_shift
-- `isolation_forests/iforest_model_5/` — previous offline IF; trained on model 5's normal-behavior embeddings; contamination=0.001; AUROC 0.765, separation ratio 1.27 (mean insider score 0.481 vs normal 0.378)
-- Numbered suffixes (2, 3, 4) are older experimental variants
+- `encoders/encoder_model_6/` — **active model**; trained on insider-filtered normal behavior from ueba_dataset_6 (dropout 0.2, linear latent activation, early stopping patience=10, 80/10/10 chronological split, calibration-aware training); learning rate 0.001; training loss ~22.93%, validation loss ~15.81%. Also holds `feature_scaler.pkl`, `feature_cols.json` (train/serve column contract), `ae_baseline_clean.npy`, `calibration_thresholds.json`, and `metrics_ae.json`
+- `isolation_forests/iforest_model_6/` — **active IF**; trained on encoder_model_6's normal-behavior embeddings; contamination="auto"; evaluation artifacts as PNGs + machine-readable `metrics_if.json` (confusion_matrix, precision_at_recall, user_detection_rate, alert_volume, time_to_first_alert, rank_order, score_distribution_shift)
+- Generations v1–v5 (encoders, isolation forests, datasets, alert/reconstruction tables) are archived under gitignored `legacy/`, mirroring their original directory structure; version-history notes live in `encoders/encoder_details.txt`, `isolation_forests/iforest_details.txt`, and `processed_datasets/dataset_notes.txt`
 
 ### Risk Scoring
 
-- Anomaly score → percentile rank against `anomaly_scores.npy` (calibration distribution — v6 uses an insider-free held-out calibration slice, not the training distribution)
-- Four risk bands (assigned by `AlertObjectBuilder.assign_risk_band`):
+- **`ueba.risk` is the single source of truth** for band assignment and percentile ranking — used identically by the offline `AlertObjectBuilder` and the live scorer (scalar + vectorized forms; a percentile equal to a threshold belongs to the higher band)
+- Anomaly score → percentile rank against the clean calibration baseline (insider-free held-out slice, not the training distribution); when `calibration_thresholds.json` exists (produced by `ueba.pipeline calibrate`), banding uses calibrated **absolute** thresholds targeting a clean-day alert budget (~5% LOW / 1% MEDIUM / 0.5% HIGH ceilings) instead of percentile cutoffs
+- Four risk bands (percentile fallback semantics):
   - CRITICAL: ≥ 95th percentile → `#ff1744` (bright red)
   - HIGH: ≥ 90th percentile → `#e84545` (red)
   - MEDIUM: ≥ 80th percentile → `#d4a017` (gold)
@@ -96,8 +102,8 @@ Raw CERT logs (logon/file/device/email/http CSVs)
 
 - **Parquet-first I/O**: dashboard loads `.parquet` when available (5-10x faster than CSV)
 - **Column downcast**: float64 → float32, int64 → int16/32 to reduce memory footprint
-- **Reusable scripts**: `scripts/` contains class definitions used by both notebooks and runtime (Autoencoder, UEBAIsolationForest, Preprocessing, visualization helpers)
-- **Layer A safepoint**: `save_nunique_frames(nunique_frames, safepoint_dir)` / `load_nunique_frames(safepoint_dir)` in `scripts/Preprocessing.py` persist the intermediate nunique identity frames to parquet so `build_layer_b()` can resume after a kernel restart without rerunning Layer A
+- **Installable package**: all shared logic lives in `src/ueba/` (`pip install -e .`); the root modules (`config.py`, `prepare_data.py`, `live_simulation.py`) and everything under `scripts/` are back-compat shims that re-export from `ueba.*` with a source-tree fallback — the dashboard and notebooks work whether or not the package is installed
+- **Layer A safepoint**: `save_nunique_frames(nunique_frames, safepoint_dir)` / `load_nunique_frames(safepoint_dir)` in `ueba.features.preprocessing` persist the intermediate nunique identity frames to parquet so `build_layer_b()` can resume after a kernel restart without rerunning Layer A
 
 ### Behavioral Features
 
@@ -120,15 +126,17 @@ v6 Layer A has 54 base features (up from 34 in v5); Layer B has 414 total column
 - **Peer-group z-scores** (`<feature>_peer_zscore`): leave-one-out z-scores against LDAP role cohort; detects insiders whose own baseline has been corrupted
 - **User profile enrichment** (joined by `build_layer_b`): `employee_name`, `department`, `role`, `supervisor`, `functional_unit`, `is_active`, `role_sensitivity` (0–1 float32; computed by `compute_role_sensitivity()` — executives/finance/IT-admin: 0.8–1.0, standard employees: 0.3–0.5)
 
-### Configuration Constants (in `scripts/Preprocessing.py`)
+### Configuration Constants (in `src/ueba/constants.py`)
 
-- `WORK_HOURS = (9, 17)` — population fallback for off-hours flags; v6 derives per-user envelopes from logon history (10th/90th percentile), persisted to `user_work_hours.parquet`
+- `WORK_HOURS = (9, 17)` — population fallback for off-hours flags; v6 derives per-user envelopes from logon history (10th/90th percentile), persisted to `user_work_hours.parquet` and reapplied at inference via `ueba.features.work_hours` (the live scorer warns once per cold-start user)
 - `INTERNAL_EMAIL_DOMAIN = "dtaa.com"` — organization domain for external email detection
 - Domain lists: `JOB_DOMAINS`, `CLOUD_STORAGE_DOMAINS`, `SUSPICIOUS_DOMAINS` for HTTP URL classification
 - `PEER_GROUP_KEY` (in `config.py`) — LDAP grouping key for peer z-scores; default `role`, swappable to `department` or `team`
 - `PEER_BASELINES_PATH` (in `config.py`) — path to `peer_baselines_{V}.parquet` (department × day × feature means); generated from training data; dashboard degrades gracefully when absent
 
 ### Dataset Versions
+
+Versions v1–v5 are archived under gitignored `legacy/` (e.g. `legacy/processed_datasets/ueba_dataset_5/`); only v6 remains in the active tree.
 
 - v1 (`ueba_dataset.csv`): 54 features
 - v2 (`ueba_dataset_2.csv`): 78 features, adds PC-related signals

@@ -1,121 +1,114 @@
 # Insider Threat Detection System
 
-## Overview
+A UEBA (User and Entity Behavior Analytics) insider-threat detection platform built on the
+CERT r6.2 synthetic dataset. An autoencoder learns compressed representations of daily user
+behavior, an Isolation Forest scores those representations for anomalies, and a calibrated
+alerting layer turns scores into SOC-ready, risk-banded alerts served through a Streamlit
+dashboard — with a reproducible headless pipeline, CI, and tests behind it.
 
-The Insider Threat Detection System is a web-based cybersecurity platform designed to identify anomalous user behavior within enterprise environments. It leverages User and Entity Behavioral Analytics (UEBA) techniques combined with machine learning models to detect potential insider threats in near real-time.
-
-This system is built as part of a capstone project and focuses on providing interpretable, actionable insights for security analysts through a streamlined dashboard interface.
-
----
-
-## Key Capabilities
-
-* Real-time detection of anomalous user behavior
-* AI-driven analysis using Autoencoder and Isolation Forest models
-* Structured alert generation with risk prioritization
-* Interactive dashboard for monitoring and investigation
-* Explainable insights with drill-down analysis
-* Simulated live data streaming for realistic testing
+Built as a capstone project; production-*shaped* by design (see
+[docs/CLEANUP_REPORT.md](docs/CLEANUP_REPORT.md) for what that means against a replayed
+research dataset).
 
 ---
 
-## System Architecture
+## Quickstart
 
-The platform is composed of the following core modules:
+```bash
+# Dashboard runtime only (the exact pins Streamlit Cloud deploys)
+pip install -r requirements.txt
 
-1. **Data Ingestion Module**
+# Training + pipeline + tests/lint (editable package with extras)
+pip install -e .[ml,dev]
+```
 
-   * Loads historical data and simulates real-time log streaming
+```bash
+# Run the analyst dashboard
+streamlit run dashboard/app.py
 
-2. **Feature Engineering Module**
+# Replay the held-out test stream through the live scorer (JSONL + WebSocket)
+python live_simulation.py --interval 0.5
 
-   * Transforms raw logs into normalized behavioral feature vectors
+# Audit / run the ML pipeline (requires the local CERT data tree)
+python -m ueba.pipeline status
+python -m ueba.pipeline all
 
-3. **Autoencoder Module**
-
-   * Learns compressed representations of user behavior
-
-4. **Isolation Forest Module**
-
-   * Detects anomalies based on learned behavior patterns
-
-5. **Alert Generation Engine**
-
-   * Produces prioritized alerts based on anomaly scores
-
-6. **Explainability Module**
-
-   * Provides detailed insights into why anomalies are flagged
-
-7. **Streamlit Dashboard**
-
-   * Visual interface for monitoring alerts and conducting investigations
+# Tests and lint
+pytest
+ruff check .
+```
 
 ---
 
-## How It Works
+## Repository layout
 
-1. The system ingests structured log data from the CERT dataset
-2. Behavioral features are extracted and normalized
-3. The Autoencoder compresses data into latent embeddings
-4. The Isolation Forest evaluates embeddings for anomalies
-5. Alerts are generated when suspicious behavior is detected
-6. Analysts can investigate alerts through the dashboard with detailed explanations
-
----
-
-## Technology Stack
-
-* **Programming Language:** Python 3.x
-* **Frontend:** Streamlit
-* **Machine Learning:** TensorFlow/Keras (Autoencoder), Scikit-learn (Isolation Forest)
-* **Data Processing:** NumPy, Pandas
-
----
-
-## Operating Environment
-
-* Runs as a web-based application (local or hosted)
-* Minimum 8GB RAM recommended
-* Works on standard development machines
-* Simulated streaming environment (no live enterprise integration)
+```
+├── src/ueba/                 # installable package (pip install -e .)
+│   ├── config.py             #   central path/version registry (paths.local.py overrides)
+│   ├── constants.py          #   feature-engineering constants (work hours, domain lists)
+│   ├── risk.py               #   single source of truth for risk bands + percentiles
+│   ├── features/             #   CERT preprocessing, Layer A/B engineering, work hours
+│   ├── models/               #   autoencoder, isolation forest, data preparation
+│   ├── alerts/               #   alert object builder, reconstruction-error explainer
+│   ├── serving/              #   live scoring, dashboard dataset build/upload
+│   ├── pipeline/             #   headless stage CLI + fail-fast artifact manifest
+│   └── viz/                  #   analysis/visualization helpers
+├── dashboard/                # Streamlit app (Cloud entrypoint) + SQLite triage store
+├── tests/                    # pytest suite — synthetic fixtures, no real data needed
+├── docs/                     # PIPELINE.md (stage contracts), CLEANUP_REPORT.md (roadmap)
+├── *.ipynb                   # training notebooks — narrative documentation; the
+│                             #   pipeline is the production path
+├── scripts/, config.py, ...  # back-compat shims re-exporting from ueba.*
+├── processed_datasets/       # v6 datasets + splits (gitignored, built by the pipeline)
+├── encoders/, isolation_forests/, explainability/   # v6 model + alert artifacts
+└── legacy/                   # archived v1–v5 artifact generations (gitignored)
+```
 
 ---
 
-## Key Features
+## How it works
 
-* Real-time anomaly scoring
-* Risk-based alert prioritization
-* Interactive visualizations
-* Drill-down analysis to feature-level contributions
-* Continuous streaming simulation
+```
+raw CERT logs (logon/file/device/email/http)
+  → preprocess      54 Layer A channels → 414 Layer B features per (user, day):
+  │                 per-user z-scores, multi-horizon rolling, peer-group z-scores,
+  │                 sub-day intensity, per-user work-hour envelopes
+  → train-ae        autoencoder on insider-filtered normal behavior → 16-dim embeddings
+  → train-if        isolation forest on normal-behavior embeddings → anomaly scores
+  → calibrate       absolute risk thresholds from an insider-free calibration slice
+  → build-alerts    risk-banded alerts (LOW/MEDIUM/HIGH/CRITICAL) + multi-day cases
+  → dashboard       overview KPIs, per-user investigation, alert triage, channel analysis
+```
+
+Risk bands come from one shared module (`ueba.risk`) used identically by the offline
+alert builder and the live scorer. Users with fewer than 14 days of history are never
+promoted to CRITICAL (cold-start gate). Every pipeline stage validates its input
+artifacts through a fail-fast manifest — a missing artifact names the stage that
+produces it. See [docs/PIPELINE.md](docs/PIPELINE.md).
+
+---
+
+## Setup notes
+
+- **CERT data:** preprocessing needs the raw CERT r6.2 CSVs locally. Copy
+  `paths.local.example.py` to `paths.local.py` and set `CERT_PATH`. All other paths
+  derive from `MODEL_VERSION` and need no configuration.
+- **Streamlit Cloud:** the dashboard deploys from `requirements.txt` (hand-pinned
+  lockfile — edit deliberately) + `runtime.txt`, loading a slim pre-merged serving
+  dataset from the Hugging Face Hub. Build it with
+  `python -m ueba.pipeline build-dashboard` and publish with
+  `python -m ueba.serving.upload_dashboard_dataset`.
+- **WebSocket:** the live simulator broadcasts on `ws://localhost:8765`,
+  unauthenticated by design and bound to localhost only.
 
 ---
 
 ## Limitations
 
-* Uses simulated data (CERT dataset)
-* No integration with production SIEM systems
-* No automated incident response
-* Designed for academic and demonstration purposes
-
----
-
-## Security & Compliance Considerations
-
-* Processes data locally (no external transmission)
-* Alerts are probabilistic and require analyst review
-* Designed with audit logging and traceability in mind
-* Would require compliance adjustments for real-world deployment
-
----
-
-## Future Enhancements
-
-* Integration with enterprise SIEM platforms
-* Real-time production data ingestion
-* Advanced model tuning and additional ML techniques
-* Automated response mechanisms
+- CERT synthetic dataset replayed offline — no live SIEM/streaming integration
+- Alerts are probabilistic and require analyst review
+- No automated incident response
+- Built for academic and demonstration purposes
 
 ---
 
@@ -132,9 +125,8 @@ The platform is composed of the following core modules:
 
 ## License
 
-This project is developed for academic purposes. Use of third-party libraries must comply with their respective licenses.
-
----
+This project is developed for academic purposes. Use of third-party libraries must
+comply with their respective licenses.
 
 ## Acknowledgments
 
