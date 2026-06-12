@@ -43,10 +43,11 @@ DEFAULT_INPUT               = config.LIVE_DEFAULT_INPUT
 DEFAULT_OUTPUT              = config.LIVE_OUTPUT
 PAUSE_FLAG                  = config.LIVE_PAUSE_FLAG
 
-# Fallback percentile thresholds (used only when calibration_thresholds.json is absent)
-_FALLBACK_CRITICAL = 95.0
-_FALLBACK_HIGH     = 90.0
-_FALLBACK_MEDIUM   = 80.0
+# Risk banding and percentile ranking are delegated to scripts/risk_bands.py —
+# the single source of truth shared with the offline AlertObjectBuilder.
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+from scripts import risk_bands
 
 # Behavioral feature columns to pass through to the JSONL output so that the
 # Investigation page can render the radar chart, heatmap, cross-channel flags,
@@ -111,11 +112,12 @@ class LiveScorer:
         self.iforest = UEBAIsolationForest()
         self.iforest.load(IF_PATH)
 
-        # Load reference score distribution for percentile ranking.
+        # Load reference score distribution for percentile ranking (sorted once
+        # at load so per-row ranking is a binary search via risk_bands).
         # Prefer the clean calibration baseline; fall back to full training scores.
         print("[live_simulation] Loading reference score distribution …", flush=True)
         _ref_path = IF_BASELINE_PATH if os.path.exists(IF_BASELINE_PATH) else IF_SCORES_PATH
-        self.ref_scores: np.ndarray = np.load(_ref_path)
+        self.ref_scores: np.ndarray = np.sort(np.load(_ref_path))
         _ref_label = "clean calibration baseline" if _ref_path == IF_BASELINE_PATH else "training distribution"
         print(
             f"[live_simulation] Ready. Reference distribution ({_ref_label}): {len(self.ref_scores):,} rows.",
@@ -164,22 +166,13 @@ class LiveScorer:
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
         # Global percentile (fraction of reference scores strictly below this score)
-        percentile = float(np.mean(self.ref_scores < raw_score) * 100)
+        percentile = risk_bands.percentile_rank(raw_score, self.ref_scores)
 
         # Risk band: use calibrated absolute thresholds when available, else percentile cutoffs
         if self._if_absolute_thresholds is not None:
-            if_risk_band = "CRITICAL"
-            for label, thresh in self._if_absolute_thresholds.items():
-                if raw_score <= thresh:
-                    if_risk_band = label
-                    break
+            if_risk_band = risk_bands.assign_band_from_score(raw_score, self._if_absolute_thresholds)
         else:
-            if_risk_band = (
-                "CRITICAL" if percentile >= _FALLBACK_CRITICAL else
-                "HIGH"     if percentile >= _FALLBACK_HIGH     else
-                "MEDIUM"   if percentile >= _FALLBACK_MEDIUM   else
-                "LOW"
-            )
+            if_risk_band = risk_bands.assign_band_from_percentile(percentile)
 
         payload = {
             **meta,

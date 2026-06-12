@@ -21,6 +21,7 @@ ignore = [
 "dashboard/app.py" = ["E402"]
 # CLI utilities that insert the repo root on sys.path before importing config.
 # The src/ package migration (CLEANUP_REPORT Phase 4) removes the need for this.
+"live_simulation.py" = ["E402"]
 "live_replay.py" = ["E402"]
 "scripts/build_dashboard_dataset.py" = ["E402"]
 "scripts/build_merged_parquet.py" = ["E402"]

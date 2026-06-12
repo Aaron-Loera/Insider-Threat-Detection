@@ -232,6 +232,10 @@ Each phase is an independently mergeable branch/PR, ordered low-risk → high-ri
   `record()` writes artifact metadata (size, hash prefix, git commit, stage, version) to
   `pipeline_manifest.json`; `status` re-validates everything. The Gap-3 silent skip becomes
   a hard error (`--allow-missing` escape hatch).
+  *Motivating example found during Phase 3:* `calibration_thresholds.json` does not exist
+  at `CALIBRATION_THRESHOLD_PATH` on the dev machine, so the live scorer silently runs on
+  fallback percentile thresholds and a fresh Alert_Object_Builder run would fail at the
+  threshold-loading cell. The manifest must surface exactly this condition.
 - Evaluation metrics written as JSON beside the PNGs [gap 6].
 - `apply_off_hours_flags()` + injectable `LiveScorer` dependencies [gap 2]; default flags
   keep today's output byte-identical.
