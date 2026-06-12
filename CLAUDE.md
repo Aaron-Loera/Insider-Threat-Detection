@@ -15,12 +15,25 @@ python live_simulation.py
 python live_simulation.py --interval 0.5 --input processed_datasets/ueba_dataset_6/ueba_dataset_6_test_stream.parquet --output processed_datasets/live_results.jsonl --port 8765
 ```
 
-**Install dependencies:**
+**Run the ML pipeline (headless):**
 ```bash
-pip install -r requirements.txt
+python -m ueba.pipeline status          # audit the artifact tree
+python -m ueba.pipeline all             # full run (needs local CERT data)
+python -m ueba.pipeline <stage>         # preprocess | train-ae | train-if | explain | calibrate | build-alerts | build-dashboard
+```
+See `docs/PIPELINE.md` for stage contracts. The training notebooks remain as documentation; the pipeline is the production path.
+
+**Run tests / lint:**
+```bash
+pytest
+ruff check .
 ```
 
-Note: `requirements.txt` only lists dashboard dependencies. ML pipeline notebooks also require `tensorflow`, `scikit-learn`, `joblib`, `websockets`, and `scipy`.
+**Install dependencies:**
+```bash
+pip install -r requirements.txt    # dashboard runtime (Streamlit Cloud lockfile)
+pip install -e .[ml,dev]           # training + pipeline + test/lint stack
+```
 
 ## Architecture
 

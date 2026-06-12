@@ -251,6 +251,48 @@ class ReconstructionErrorExplainer:
         return pd.DataFrame(columns)
 
 
+def assign_channel(feature: str) -> str:
+    """Assign a feature to its behavioral channel group by name pattern.
+
+    (Promoted from Reconstruction_Error_Explainer.ipynb so the pipeline's
+    explain stage and the notebook share one grouping definition.)
+    """
+    f = feature
+    if f.startswith(("logon_", "logoff_", "off_hours_logon")):
+        return "logon"
+    if f.startswith(("file_", "unique_files_", "off_hours_files_")):
+        return "file"
+    if (
+        f.startswith(("emails_", "external_emails_", "attachments_", "off_hours_emails_", "unique_recipients_"))
+        or f == "external_comm_activity_flag"
+    ):
+        return "email"
+    if (
+        f.startswith(("usb_", "off_hours_usb_"))
+        or f in {"usb_file_activity_flag", "jobsite_usb_activity_flag"}
+    ):
+        return "device"
+    if (
+        f.startswith(("http_", "off_hours_http_", "unique_domains_"))
+        or f in {"cloud_upload_flag", "suspicious_upload_flag"}
+    ):
+        return "http"
+    if f.startswith(("pc_", "non_primary_pc_", "pcs_used_count", "primary_pc_", "distinct_pcs_", "new_pc_")):
+        return "pc"
+    return "other"
+
+
+def build_feature_groups(feature_names: list[str]) -> dict[str, list[str]]:
+    """Group feature names by behavioral channel; every feature lands in
+    exactly one group (v6 Layer B derivatives follow their base channel)."""
+    feature_groups: dict[str, list[str]] = {}
+    for feat in feature_names:
+        feature_groups.setdefault(assign_channel(feat), []).append(feat)
+    unassigned = set(feature_names) - {f for g in feature_groups.values() for f in g}
+    assert not unassigned, f"Unassigned features: {unassigned}"
+    return feature_groups
+
+
 def save_table(df: pd.DataFrame, save_path: str) -> None:
     """
     Saves the DataFrame table as a Parquet file to the specified path.

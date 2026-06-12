@@ -1,0 +1,61 @@
+{
+  "model_version": "6",
+  "artifacts": {
+    "encoders\\encoder_model_6\\ae_baseline_clean.npy": {
+      "stage": "calibrate",
+      "bytes": 541552,
+      "sha1_head": "0967affcf1fc",
+      "git_commit": "4745aaa",
+      "model_version": "6",
+      "recorded_at": "2026-06-12T04:52:45+00:00"
+    },
+    "isolation_forests\\iforest_model_6\\if_baseline_clean.npy": {
+      "stage": "calibrate",
+      "bytes": 1082976,
+      "sha1_head": "79b681607358",
+      "git_commit": "4745aaa",
+      "model_version": "6",
+      "recorded_at": "2026-06-12T04:52:45+00:00"
+    },
+    "encoders\\encoder_model_6\\calibration_thresholds.json": {
+      "stage": "calibrate",
+      "bytes": 279,
+      "sha1_head": "2ba9c722be72",
+      "git_commit": "4745aaa",
+      "model_version": "6",
+      "recorded_at": "2026-06-12T04:52:45+00:00"
+    },
+    "explainability\\reconstruction_error\\reconstruction_error_table_6_test.parquet": {
+      "stage": "explain",
+      "bytes": 320840698,
+      "sha1_head": "93a0c85b720f",
+      "git_commit": "4745aaa",
+      "model_version": "6",
+      "recorded_at": "2026-06-12T04:53:40+00:00"
+    },
+    "explainability\\alert_table\\alert_table_6\\alert_table_6_test.parquet": {
+      "stage": "build-alerts",
+      "bytes": 19755825,
+      "sha1_head": "dd0e724a5a76",
+      "git_commit": "4745aaa",
+      "model_version": "6",
+      "recorded_at": "2026-06-12T04:54:44+00:00"
+    },
+    "explainability\\alert_table\\alert_table_6\\cases_6_test.parquet": {
+      "stage": "build-alerts",
+      "bytes": 141650,
+      "sha1_head": "f008a9de44ad",
+      "git_commit": "4745aaa",
+      "model_version": "6",
+      "recorded_at": "2026-06-12T04:54:44+00:00"
+    },
+    "isolation_forests\\iforest_model_6\\test_anomaly_scores.npy": {
+      "stage": "build-alerts",
+      "bytes": 1015576,
+      "sha1_head": "e26a96144dc3",
+      "git_commit": "4745aaa",
+      "model_version": "6",
+      "recorded_at": "2026-06-12T04:54:44+00:00"
+    }
+  }
+}

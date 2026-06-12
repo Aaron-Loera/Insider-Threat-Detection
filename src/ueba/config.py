@@ -78,8 +78,14 @@ INSIDERS_PATH = _local_or("INSIDERS_PATH", _insiders_default)
 
 
 # Active Model Version
-MODEL_VERSION = _local_or("MODEL_VERSION", "6")
-LIVE_MODEL_VERSION = _local_or("LIVE_MODEL_VERSION", "6")
+# Precedence: UEBA_MODEL_VERSION env var (set by `python -m ueba.pipeline --version N`
+# before this module is imported) > paths.local.py override > default.
+MODEL_VERSION = os.environ.get("UEBA_MODEL_VERSION") or _local_or("MODEL_VERSION", "6")
+LIVE_MODEL_VERSION = os.environ.get("UEBA_LIVE_MODEL_VERSION") or _local_or("LIVE_MODEL_VERSION", "6")
+
+# CERT dataset release the insiders ground-truth table is filtered to
+# (the answers/insiders.csv "dataset" column).
+CERT_VERSION = _local_or("CERT_VERSION", "6.2")
 
 # Peer-group column used by apply_peer_group_enhancements (see scripts/Preprocessing.py).
 # Swappable to "department" or "team" once role granularity is evaluated.
@@ -288,6 +294,28 @@ CALIB_ALERT_TABLE_PARQUET = os.path.join(
     BASE_DIR, "explainability", "alert_table",
     f"alert_table_{V}", f"alert_table_{V}_calib.parquet",
 )
+
+# ── Pipeline artifact paths (python -m ueba.pipeline) ─────────────────────────
+DATASET_DIR = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{V}")
+SAFEPOINT_DIR = os.path.join(DATASET_DIR, "safepoint")
+UEBA_A_PATH = os.path.join(DATASET_DIR, f"ueba_dataset_{V}a.parquet")
+UEBA_B_PATH = os.path.join(DATASET_DIR, f"ueba_dataset_{V}b.parquet")
+TEST_STREAM_PATH = os.path.join(DATASET_DIR, f"ueba_dataset_{V}_test_stream.parquet")
+USER_WORK_HOURS_PATH = os.path.join(DATASET_DIR, "user_work_hours.parquet")
+DASHBOARD_PARQUET = os.path.join(DATASET_DIR, f"ueba_dataset_{V}_dashboard.parquet")
+PIPELINE_MANIFEST_PATH = os.path.join(DATASET_DIR, "pipeline_manifest.json")
+
+ALERT_TABLE_DIR = os.path.join(BASE_DIR, "explainability", "alert_table", f"alert_table_{V}")
+CASES_PARQUET = os.path.join(ALERT_TABLE_DIR, f"cases_{V}.parquet")
+TEST_ALERT_TABLE_PARQUET = os.path.join(ALERT_TABLE_DIR, f"alert_table_{V}_test.parquet")
+TEST_CASES_PARQUET = os.path.join(ALERT_TABLE_DIR, f"cases_{V}_test.parquet")
+CALIB_CASES_PARQUET = os.path.join(ALERT_TABLE_DIR, f"cases_{V}_calib.parquet")
+
+RECON_TEST_TABLE_PATH = os.path.join(
+    BASE_DIR, "explainability", "reconstruction_error",
+    f"reconstruction_error_table_{V}_test.parquet",
+)
+TEST_IF_SCORES_PATH = os.path.join(BASE_DIR, "isolation_forests", f"iforest_model_{V}", "test_anomaly_scores.npy")
 
 
 # HuggingFace Repository Config
