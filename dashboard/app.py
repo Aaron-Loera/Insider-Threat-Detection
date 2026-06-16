@@ -10,7 +10,9 @@ import json
 import os
 import subprocess
 import time
+from pathlib import Path
 
+from PIL import Image
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -33,9 +35,12 @@ except ImportError:
 # Page Config & Custom CSS
 # ──────────────────────────────────────────────────────────────
 
+icon_path = Path(__file__).parent / "assets" / "dsk_kitten.png"
+page_icon = Image.open(icon_path) if icon_path.exists() else "■"
+
 st.set_page_config(
-    page_title="UEBA — Insider Threat Detection",
-    page_icon="■",
+    page_title="InsiderGuard AI — Insider Threat Detection",
+    page_icon=page_icon,
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -799,12 +804,13 @@ def _render_login():
     }
     .login-logo-dsk {
         font-family: 'JetBrains Mono', monospace;
-        font-size: 28px;
+        font-size: 18px;
         font-weight: 700;
-        letter-spacing: 6px;
+        letter-spacing: 2px;
         color: #ffffff;
         display: block;
         line-height: 1;
+        white-space: nowrap;
     }
     .login-logo-sub {
         font-family: 'JetBrains Mono', monospace;
@@ -846,7 +852,7 @@ def _render_login():
             padding: 24px 18px 22px 18px !important;
         }
         .login-logo-row svg { width: 36px; height: 36px; }
-        .login-logo-dsk { font-size: 22px; letter-spacing: 3px; }
+        .login-logo-dsk { font-size: 15px; letter-spacing: 1px; }
         .login-logo-sub { font-size: 7px; letter-spacing: 1.5px; }
         .login-heading  { font-size: 8px; letter-spacing: 2px; margin-bottom: 14px; }
         .login-divider  { margin: 16px 0 18px 0; }
@@ -877,8 +883,8 @@ def _render_login():
         "<line x1='62' y1='58' x2='80' y2='60' stroke='#000' stroke-width='1.5'/>"
         "</svg>"
         "<div>"
-        "<span class='login-logo-dsk'>DSK</span>"
-        "<span class='login-logo-sub'>Data Structure Kittens</span>"
+        "<span class='login-logo-dsk'>InsiderGuard AI</span>"
+        "<span class='login-logo-sub'>Made By: Data Structure Kittens</span>"
         "</div>"
         "</div>"
         "<hr class='login-divider'>"
@@ -1797,7 +1803,7 @@ if st.session_state.get("_nav_request"):
     st.session_state.nav_page = st.session_state.pop("_nav_request")
 
 with st.sidebar:
-    # ── DSK Team Logo ──
+    # ── InsiderGuard AI Logo ──
     st.markdown(
         "<div class='sidebar-branding'>"
         "<svg width='44' height='44' viewBox='0 0 100 100' fill='none' xmlns='http://www.w3.org/2000/svg' style='flex-shrink:0;'>"
@@ -1811,9 +1817,9 @@ with st.sidebar:
         "<line x1='62' y1='52' x2='80' y2='55' stroke='#000' stroke-width='1.5'/>"
         "<line x1='62' y1='58' x2='80' y2='60' stroke='#000' stroke-width='1.5'/>"
         "</svg>"
-        "<div style='line-height:1;'>"
-        "<div style='font-family:JetBrains Mono,monospace; font-size:18px; letter-spacing:4px; "
-        "color:#ffffff; font-weight:700;'>DSK</div>"
+        "<div style='line-height:1; white-space:nowrap;'>"
+        "<div style='font-family:JetBrains Mono,monospace; font-size:13px; letter-spacing:1.5px; "
+        "color:#ffffff; font-weight:700;'>InsiderGuard AI</div>"
         "<div style='font-family:JetBrains Mono,monospace; font-size:9px; letter-spacing:1.5px; "
         "color:#555555; text-transform:uppercase; margin-top:3px;'>Data Structure Kittens</div>"
         "</div>"
