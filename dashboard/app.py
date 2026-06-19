@@ -1620,22 +1620,35 @@ def _get_live_user_data(user: str) -> pd.DataFrame:
     df = df.dropna(subset=["day"])
     if df.empty:
         return pd.DataFrame()
-    for _col in ("if_anomaly_score", "if_percentile_rank"):
+    for _col in ("if_anomaly_score", "if_percentile_rank", "ae_percentile_rank", "composite_score"):
         if _col in df.columns:
             df[_col] = pd.to_numeric(df[_col], errors="coerce")
-    # Keep one row per day: worst-of-day (highest percentile rank)
+
+    # Keep one row per day: worst-of-day by composite_score (preferred) or if_percentile_rank
+    _sort_col = "composite_score" if "composite_score" in df.columns else "if_percentile_rank"
     df = (
-        df.sort_values("if_percentile_rank", ascending=False)
+        df.sort_values(_sort_col, ascending=False, na_position="last")
         .drop_duplicates(subset=["day"])
         .copy()
     )
-    # Map to column names the Investigation page expects
-    df["ae_risk_band"] = (
-        df["if_risk_band"].astype(str).str.upper()
-        if "if_risk_band" in df.columns
-        else "LOW"
-    )
-    df["ae_percentile_rank"] = df.get("if_percentile_rank", np.nan)
+
+    # Map to column names the Investigation page expects.
+    # Prefer values already present in the new full-pipeline JSONL payload;
+    # fall back to IF-only fields for payloads from older runs.
+    if "ae_risk_band" not in df.columns or df["ae_risk_band"].isna().all():
+        df["ae_risk_band"] = (
+            df["if_risk_band"].astype(str).str.upper()
+            if "if_risk_band" in df.columns
+            else "LOW"
+        )
+    else:
+        df["ae_risk_band"] = df["ae_risk_band"].astype(str).str.upper()
+
+    if "ae_percentile_rank" not in df.columns or df["ae_percentile_rank"].isna().all():
+        df["ae_percentile_rank"] = pd.to_numeric(
+            df.get("if_percentile_rank", pd.Series(dtype=float)), errors="coerce"
+        )
+
     df["_live_row"] = True
     return df.reset_index(drop=True)
 
@@ -1732,6 +1745,46 @@ if "live_page" not in st.session_state:
 if st.session_state.get("_nav_request"):
     st.session_state.nav_page = st.session_state.pop("_nav_request")
 
+
+@st.fragment(run_every=2)
+def _render_sidebar_live_status() -> None:
+    """Auto-refreshing live-simulation status badge in the sidebar.
+
+    Runs every 2 s independently so the ● RUNNING / row-count counter updates
+    without a full page rerun while the user browses any tab.
+    """
+    _live_rows_received = 0
+    _stream_done = False
+    _live_session_active = bool(st.session_state.live_mode or st.session_state.live_paused)
+    if _live_session_active:
+        _live_rows_received, _stream_done = _cached_live_file_stats()
+
+    _proc = st.session_state.live_proc
+    _proc_running = _proc is not None and _proc.poll() is None
+    if not _live_session_active:
+        _status_color = "#666"
+        _status_label = "IDLE"
+    elif st.session_state.live_paused:
+        _status_color = "#f5a623"
+        _status_label = "PAUSED"
+    elif _proc_running:
+        _status_color = "#3c9"
+        _status_label = "RUNNING"
+    else:
+        _status_color = "#e84545"
+        _status_label = "COMPLETE" if _stream_done else "STOPPED"
+
+    st.markdown(
+        f"<div style='margin:12px 0 6px 0;'>"
+        f"<span style='font-family:JetBrains Mono,monospace; font-size:11px; "
+        f"color:{_status_color}; letter-spacing:1.5px;'>● {_status_label}</span>"
+        f"<span style='font-family:JetBrains Mono,monospace; font-size:10px; "
+        f"color:#555; margin-left:10px;'>{_live_rows_received:,} rows received</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
 with st.sidebar:
     # ── DSK Team Logo ──
     st.markdown(
@@ -1769,37 +1822,8 @@ with st.sidebar:
 
     st.markdown("<div style='border-top:1px solid #1a1a1a; margin:8px 0 0 0;'></div>", unsafe_allow_html=True)
 
-    # ── Global live status (visible on every page) ──
-    _live_rows_received = 0
-    _stream_done = False
-    _live_session_active = bool(st.session_state.live_mode or st.session_state.live_paused)
-    if _live_session_active:
-        _live_rows_received, _stream_done = _cached_live_file_stats()
-
-    _proc = st.session_state.live_proc
-    _proc_running = _proc is not None and _proc.poll() is None
-    if not _live_session_active:
-        _status_color = "#666"
-        _status_label = "IDLE"
-    elif st.session_state.live_paused:
-        _status_color = "#f5a623"
-        _status_label = "PAUSED"
-    elif _proc_running:
-        _status_color = "#3c9"
-        _status_label = "RUNNING"
-    else:
-        _status_color = "#e84545"
-        _status_label = "COMPLETE" if _stream_done else "STOPPED"
-
-    st.markdown(
-        f"<div style='margin:12px 0 6px 0;'>"
-        f"<span style='font-family:JetBrains Mono,monospace; font-size:11px; "
-        f"color:{_status_color}; letter-spacing:1.5px;'>● {_status_label}</span>"
-        f"<span style='font-family:JetBrains Mono,monospace; font-size:10px; "
-        f"color:#555; margin-left:10px;'>{_live_rows_received:,} rows received</span>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
+    # ── Global live status (auto-refreshes every 2 s via fragment) ──
+    _render_sidebar_live_status()
 
     st.markdown("<div style='border-top:1px solid #1a1a1a; margin:16px 0;'></div>", unsafe_allow_html=True)
 
@@ -2367,6 +2391,325 @@ components.html(
     """,
     height=0,
 )
+# ── Live-update fragments ─────────────────────────────────────
+# Defined here (before page conditionals) so every page block can call them.
+
+
+@st.fragment(run_every=5)
+def _render_overview_live_badge() -> None:
+    """Show a concise live-data counter at the top of the Overview page.
+
+    Auto-reruns every 5 s via the fragment scheduler so the counter updates
+    without a full page refresh.
+    """
+    if not os.path.exists(LIVE_OUTPUT):
+        return
+    try:
+        if os.path.getsize(LIVE_OUTPUT) == 0:
+            return
+    except OSError:
+        return
+    rows, done = _cached_live_rows()
+    if not rows:
+        return
+    n = len(rows)
+    done_str = " (complete)" if done else ""
+    st.info(
+        f"Live simulation active — **{n:,}** records received{done_str}. "
+        "Charts below reflect historical data; open the **Alerts** tab for the live feed."
+    )
+
+
+@st.fragment(run_every=2)
+def _render_live_alerts_data() -> None:
+    """Render the live-alerts feed, filter checkboxes, and charts.
+
+    Runs as an independent fragment (auto-reruns every 2 s) so the Alerts page
+    updates without a full-page refresh — scroll position and sidebar state are
+    preserved between ticks.
+    """
+    if not st.session_state.get("live_mode", False):
+        return
+
+    proc = st.session_state.live_proc
+    proc_running = proc is not None and proc.poll() is None
+    stream_done = False
+
+    live_rows, stream_done = _cached_live_rows()
+
+    # Detect crash: process exited before producing any output
+    if not live_rows and not proc_running and proc is not None:
+        _exit_code = proc.poll()
+        if _exit_code is not None and _exit_code != 0:
+            st.error(
+                f"Live simulation process exited with code {_exit_code} before producing "
+                "any output. Check the terminal for error details (e.g. missing model files "
+                "or a feature-count mismatch). Click **⏹ STOP LIVE SIMULATION** to reset."
+            )
+
+    if live_rows:
+        live_df = pd.DataFrame(live_rows)
+        live_df = live_df.drop(columns=[c for c in ("day", "_score_ms") if c in live_df.columns])
+
+        # Sort most-recent first
+        if "cert_timestamp" in live_df.columns:
+            live_df["_sort_ts"] = pd.to_datetime(live_df["cert_timestamp"], errors="coerce")
+            _sort_cols = ["_sort_ts"]
+            _sort_dirs = [False]
+            if "event_index" in live_df.columns:
+                _sort_cols.append("event_index")
+                _sort_dirs.append(False)
+            elif "if_percentile_rank" in live_df.columns:
+                _sort_cols.append("if_percentile_rank")
+                _sort_dirs.append(False)
+            live_df = live_df.sort_values(by=_sort_cols, ascending=_sort_dirs, kind="stable")
+            live_df = live_df.drop(columns=[c for c in ("_sort_ts", "event_index") if c in live_df.columns])
+        else:
+            live_df = live_df.iloc[::-1]
+            live_df = live_df.drop(columns=[c for c in ("event_index",) if c in live_df.columns])
+        live_df = live_df.reset_index(drop=True)
+
+        # ── Normalise scoring columns ──────────────────────────────────────
+        # Composite score: prefer composite_score (new full-pipeline field)
+        # over if_percentile_rank (old IF-only fallback).
+        if "composite_score" in live_df.columns:
+            live_df["ui_composite_score"] = pd.to_numeric(live_df["composite_score"], errors="coerce")
+        elif "if_percentile_rank" in live_df.columns:
+            live_df["ui_composite_score"] = pd.to_numeric(live_df["if_percentile_rank"], errors="coerce")
+        else:
+            live_df["ui_composite_score"] = np.nan
+
+        # Risk band: prefer composite_risk_band (most accurate),
+        # then ae_risk_band, then if_risk_band, then risk_level.
+        if "composite_risk_band" in live_df.columns:
+            live_df["ui_risk_band"] = live_df["composite_risk_band"].astype(str).str.upper()
+        elif "ae_risk_band" in live_df.columns:
+            live_df["ui_risk_band"] = live_df["ae_risk_band"].astype(str).str.upper()
+        elif "if_risk_band" in live_df.columns:
+            live_df["ui_risk_band"] = live_df["if_risk_band"].astype(str).str.upper()
+        elif "risk_level" in live_df.columns:
+            live_df["ui_risk_band"] = live_df["risk_level"].astype(str).str.upper()
+        else:
+            live_df["ui_risk_band"] = "LOW"
+        # Clamp to known tiers
+        live_df["ui_risk_band"] = live_df["ui_risk_band"].where(
+            live_df["ui_risk_band"].isin(RISK_TIERS), "LOW"
+        )
+
+        # AE percentile (used by investigation tab)
+        if "ae_percentile_rank" in live_df.columns:
+            live_df["ui_percentile"] = pd.to_numeric(live_df["ae_percentile_rank"], errors="coerce")
+        elif "if_percentile_rank" in live_df.columns:
+            live_df["ui_percentile"] = pd.to_numeric(live_df["if_percentile_rank"], errors="coerce")
+        else:
+            live_df["ui_percentile"] = np.nan
+
+        # Raw IF anomaly score (used by histogram)
+        if "if_anomaly_score" in live_df.columns:
+            live_df["ui_anomaly_score"] = pd.to_numeric(live_df["if_anomaly_score"], errors="coerce")
+        elif "anomaly_score" in live_df.columns:
+            live_df["ui_anomaly_score"] = pd.to_numeric(live_df["anomaly_score"], errors="coerce")
+        else:
+            live_df["ui_anomaly_score"] = np.nan
+
+        _live_risk_counts = {
+            tier: int((live_df["ui_risk_band"] == tier).sum()) for tier in RISK_TIERS
+        }
+
+        section_header("Filter by severity", "sh_live_sev")
+        _live_sev_cols = st.columns([1, 1, 1, 1, 4])
+        _live_tier_checked = {}
+        for _idx, _tier in enumerate(RISK_TIERS):
+            _color = RISK_COLORS[_tier]
+            _count = _live_risk_counts[_tier]
+            with _live_sev_cols[_idx]:
+                _live_tier_checked[_tier] = st.checkbox(
+                    _tier,
+                    value=True,
+                    key=f"live_alert_sev_{_tier}",
+                )
+                st.markdown(
+                    f"<span style='background:{_color}22;color:{_color};font-size:9px;"
+                    f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 6px;"
+                    f"border:1px solid {_color}55;display:inline-block;margin-top:-6px;'>"
+                    f"{_count:,} alert{'s' if _count != 1 else ''}</span>",
+                    unsafe_allow_html=True,
+                )
+
+        live_alert_risk = [t for t, checked in _live_tier_checked.items() if checked]
+        live_alert_data = live_df[live_df["ui_risk_band"].isin(live_alert_risk)].copy()
+        live_alert_data = live_alert_data.reset_index(drop=True)
+        live_total_alerts = len(live_alert_data)
+
+        if live_total_alerts == 0:
+            st.info("No live alerts match the current severity filter.")
+        else:
+            st.caption(f"Showing {live_total_alerts:,} matching alert{'s' if live_total_alerts != 1 else ''}.")
+
+            _ROW_HEIGHT = 56
+            _SCROLL_HEIGHT = _ROW_HEIGHT * 10 + 40
+
+            _html_parts = [
+                "<div style='max-height:{h}px;overflow-y:auto;border:1px solid #1a1a1a;"
+                "border-radius:4px;'>".format(h=_SCROLL_HEIGHT),
+                "<div style='display:grid;grid-template-columns:72px 1fr 100px 90px;"
+                "gap:8px;padding:6px 8px;border-bottom:1px solid #1a1a1a;"
+                "position:sticky;top:0;background:#0a0a0a;z-index:1;'>",
+                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+                "text-transform:uppercase;letter-spacing:1.5px;'>Risk</span>",
+                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+                "text-transform:uppercase;letter-spacing:1.5px;'>User / Investigation hint</span>",
+                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+                "text-transform:uppercase;letter-spacing:1.5px;'>Day</span>",
+                "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
+                "text-transform:uppercase;letter-spacing:1.5px;'>Score</span>",
+                "</div>",
+            ]
+
+            for _r in live_alert_data.itertuples():
+                _risk = str(getattr(_r, "ui_risk_band", "LOW")).upper()
+                if _risk not in RISK_COLORS:
+                    _risk = "LOW"
+                _rc = RISK_COLORS.get(_risk, "#666666")
+
+                _user = getattr(_r, "user", "--")
+                if isinstance(_user, float) and pd.isna(_user):
+                    _user = "--"
+
+                _cert_ts = getattr(_r, "cert_timestamp", None)
+                if _cert_ts:
+                    _ts_p = pd.to_datetime(_cert_ts, errors="coerce")
+                    _day_s = _ts_p.strftime("%Y-%m-%d") if pd.notna(_ts_p) else str(_cert_ts)
+                else:
+                    _day_s = "--"
+
+                _cs = getattr(_r, "ui_composite_score", np.nan)
+                _sc_d = f"{float(_cs):.1f}" if pd.notna(_cs) else "--"
+
+                # Use top_contributors and explanation from live payload directly
+                _top_raw = getattr(_r, "top_contributors", None)
+                _summary = build_alert_summary(_top_raw)
+                if _summary == "No contributor detail available for this alert.":
+                    _expl = str(getattr(_r, "explanation", "") or "").strip()
+                    if _expl:
+                        _summary = _expl
+
+                _user_safe = _html_mod.escape(str(_user))
+                _summary_safe = _html_mod.escape(str(_summary))
+                _day_safe = _html_mod.escape(str(_day_s))
+
+                _html_parts.append(
+                    f"<div style='display:grid;grid-template-columns:72px 1fr 100px 90px;"
+                    f"gap:8px;padding:8px 8px;border-bottom:1px solid #0d0d0d;align-items:start;'>"
+                    f"<div style='padding-top:2px;'>"
+                    f"<span style='background:{_rc}22;color:{_rc};font-size:10px;"
+                    f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:2px 6px;"
+                    f"border:1px solid {_rc}55;display:inline-block;'>{_risk}</span></div>"
+                    f"<div>"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:13px;"
+                    f"color:#e0e0e0;font-weight:600;'>{_user_safe}</span>"
+                    f"<br><span style='font-family:Inter,sans-serif;font-size:12px;"
+                    f"color:#666;line-height:1.5;'>{_summary_safe}</span></div>"
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                    f"color:#888;padding-top:4px;white-space:nowrap;'>{_day_safe}</div>"
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;"
+                    f"color:#999;padding-top:4px;text-align:center;white-space:nowrap;'>{_sc_d}</div>"
+                    f"</div>"
+                )
+
+            _html_parts.append("</div>")
+            st.markdown("".join(_html_parts), unsafe_allow_html=True)
+
+            _live_users = live_alert_data["user"].dropna().unique().tolist()
+            if _live_users:
+                _inv_cols = st.columns([3, 1])
+                with _inv_cols[0]:
+                    _sel_user = st.selectbox(
+                        "Select a user to investigate",
+                        options=_live_users,
+                        key="live_inv_select",
+                        label_visibility="collapsed",
+                        placeholder="Select a user to investigate…",
+                    )
+                with _inv_cols[1]:
+                    if st.button("Investigate →", key="live_inv_btn", use_container_width=True):
+                        st.session_state["inv_user_select"] = _sel_user
+                        st.session_state["_nav_request"] = "Investigation"
+                        st.rerun()
+
+        if live_total_alerts > 0:
+            st.download_button(
+                "EXPORT LIVE ALERTS",
+                data=live_alert_data.to_csv(index=False).encode("utf-8"),
+                file_name="live_alerts.csv",
+                mime="text/csv",
+            )
+
+        st.markdown("<div style='margin-top:14px;'></div>", unsafe_allow_html=True)
+
+        live_chart_df = live_df.copy()
+        col_live_left, col_live_right = st.columns(2)
+
+        with col_live_left:
+            section_header("Risk Distribution", "sh_live_risk_dist")
+            if "ui_risk_band" in live_chart_df.columns and not live_chart_df.empty:
+                _risk_counts = (
+                    live_chart_df["ui_risk_band"]
+                    .fillna("LOW")
+                    .value_counts()
+                    .rename_axis("Risk Level")
+                    .reset_index(name="Count")
+                )
+                fig_live_donut = px.pie(
+                    _risk_counts,
+                    values="Count",
+                    names="Risk Level",
+                    color="Risk Level",
+                    color_discrete_map=RISK_COLORS,
+                    hole=0.6,
+                )
+                fig_live_donut.update_layout(
+                    **PLOTLY_LAYOUT,
+                    showlegend=True,
+                    height=340,
+                    legend=dict(font=dict(size=10, family="JetBrains Mono")),
+                )
+                fig_live_donut.update_traces(
+                    textinfo="label+percent",
+                    textfont_size=11,
+                    textfont_family="JetBrains Mono",
+                )
+                st.plotly_chart(fig_live_donut, use_container_width=True)
+            else:
+                st.info("Risk band data is not available in live alerts yet.")
+
+        with col_live_right:
+            section_header("Anomaly Score Distribution", "sh_live_score_dist")
+            if "ui_anomaly_score" in live_chart_df.columns and "ui_risk_band" in live_chart_df.columns:
+                fig_live_hist = px.histogram(
+                    live_chart_df,
+                    x="ui_anomaly_score",
+                    nbins=50,
+                    color="ui_risk_band",
+                    color_discrete_map=RISK_COLORS,
+                    labels={"ui_anomaly_score": "Anomaly Score", "ui_risk_band": "Risk Level"},
+                )
+                fig_live_hist.update_layout(**PLOTLY_LAYOUT, height=340, barmode="overlay")
+                fig_live_hist.update_traces(opacity=0.75)
+                st.plotly_chart(fig_live_hist, use_container_width=True)
+            else:
+                st.info("Anomaly-score or risk-band fields are not available in live alerts yet.")
+    else:
+        st.info("Waiting for first scored row… (models are loading)")
+
+    # Natural end-of-stream: flip state and trigger one full rerun to reset controls
+    if stream_done and st.session_state.live_mode:
+        st.session_state.live_proc = None
+        st.session_state.live_mode = False
+        st.session_state.live_paused = False
+        st.rerun()
+
+
 # ══════════════════════════════════════════════════════════════
 
 if active_page == "Overview":
@@ -2378,6 +2721,7 @@ if active_page == "Overview":
         unsafe_allow_html=True,
     )
     _filter_bar("ov_flt")
+    _render_overview_live_badge()
 
     _kpis = _ov_kpis(*_ov_args())
     total_users        = _kpis["total_users"]
@@ -3130,7 +3474,35 @@ def _render_investigation_content() -> None:
                 mode="markers", name=risk,
                 marker=dict(size=8, color=color, symbol="square", line=dict(width=1, color="#000")),
             ))
-    fig_timeline.update_layout(**PLOTLY_LAYOUT, height=320, xaxis_title="Date", yaxis_title="Anomaly Score")
+    # When live rows are present, zoom the x-axis to a 90-day window before the
+    # first live record so the historical-to-live gap doesn't create a blank year
+    # of empty chart space.  Users can still pan/zoom to see the full history.
+    # Build the xaxis dict by merging PLOTLY_LAYOUT's base xaxis style with any
+    # live-data range override — avoids duplicate keyword arg errors when both
+    # specify 'xaxis'.
+    _tl_xaxis = dict(PLOTLY_LAYOUT.get("xaxis", {}))
+    _live_mask = user_data.get("_live_row", pd.Series(False, index=user_data.index)).fillna(False).astype(bool)
+    if _live_mask.any():
+        _hist_mask = ~_live_mask
+        _last_live_day = user_data.loc[_live_mask, "day"].max()
+        # Anchor the range start at the last *historical* record so both
+        # historical and live points are always in view.  If there is no
+        # historical data for this user, fall back to 90 days before live.
+        if _hist_mask.any():
+            _last_hist_day = user_data.loc[_hist_mask, "day"].max()
+            _range_start = _last_hist_day - pd.Timedelta(days=30)
+        else:
+            _range_start = user_data.loc[_live_mask, "day"].min() - pd.Timedelta(days=7)
+        _tl_xaxis["range"] = [
+            str(_range_start.date()),
+            str((_last_live_day + pd.Timedelta(days=7)).date()),
+        ]
+    _tl_layout = {k: v for k, v in PLOTLY_LAYOUT.items() if k != "xaxis"}
+    fig_timeline.update_layout(
+        **_tl_layout, height=320,
+        xaxis_title="Date", yaxis_title="Anomaly Score",
+        xaxis=_tl_xaxis,
+    )
     st.plotly_chart(fig_timeline, use_container_width=True)
 
     # ── Behavioral Radar Chart + Activity Heatmap ──
@@ -3330,12 +3702,19 @@ if active_page == "Alerts":
                 # Remove pause flag so the process isn't blocked on next start
                 if os.path.exists(LIVE_PAUSE_FLAG):
                     os.remove(LIVE_PAUSE_FLAG)
+                # Clear the results file so the next run starts fresh
+                if os.path.exists(LIVE_OUTPUT):
+                    os.remove(LIVE_OUTPUT)
+                _cached_live_file_stats.clear()
+                _cached_live_rows.clear()
+                _get_live_user_data.clear()
                 st.session_state.live_proc = None
                 st.session_state.live_mode = False
                 st.session_state.live_paused = False
                 st.session_state.live_page = 0
                 st.rerun()
     with ctrl_pause:
+        if st.session_state.live_mode:  # only show when simulation is active
             if not st.session_state.live_paused:
                 if st.button("⏸   PAUSE", key="pause_live", use_container_width=True):
                     with open(LIVE_PAUSE_FLAG, "w", encoding="utf-8") as _pf:
@@ -3376,311 +3755,11 @@ if active_page == "Alerts":
     )
 
     # ── LIVE mode ─────────────────────────────────────────────
+    # The fragment handles its own internal guard (returns early when live_mode
+    # is False) and auto-reruns every 2 s without a full-page refresh.
     if st.session_state.live_mode:
-        
-        # Check whether the subprocess is still running
-        proc = st.session_state.live_proc
-        proc_running = proc is not None and proc.poll() is None
-        stream_done  = False
+        _render_live_alerts_data()
 
-        # Read all scored rows emitted so far (cached to avoid re-reading 500 MB+ per rerun)
-        live_rows, stream_done = _cached_live_rows()
-
-        # Detect crash: process has exited (non-None poll) before writing any rows
-        if not live_rows and not proc_running and proc is not None:
-            _exit_code = proc.poll()
-            if _exit_code is not None and _exit_code != 0:
-                st.error(
-                    f"Live simulation process exited with code {_exit_code} before producing "
-                    "any output. Check the terminal for error details (e.g. missing model files "
-                    "or a feature-count mismatch). Click **⏹ STOP LIVE SIMULATION** to reset."
-                )
-
-        if live_rows:
-            live_df = pd.DataFrame(live_rows)
-            # Keep only the columns users care about; drop duplicate/diagnostic fields.
-            live_df = live_df.drop(columns=[c for c in ("day", "_score_ms") if c in live_df.columns])
-
-            # Most-recent rows first using original CERT timestamp when available.
-            if "cert_timestamp" in live_df.columns:
-                live_df["_sort_ts"] = pd.to_datetime(live_df["cert_timestamp"], errors="coerce")
-                _sort_cols = ["_sort_ts"]
-                _sort_dirs = [False]
-                if "event_index" in live_df.columns:
-                    # Tie-break equal timestamps by latest arrival first.
-                    _sort_cols.append("event_index")
-                    _sort_dirs.append(False)
-                elif "if_percentile_rank" in live_df.columns:
-                    _sort_cols.append("if_percentile_rank")
-                    _sort_dirs.append(False)
-                live_df = live_df.sort_values(by=_sort_cols, ascending=_sort_dirs, kind="stable")
-                live_df = live_df.drop(columns=[c for c in ("_sort_ts", "event_index") if c in live_df.columns])
-            else:
-                # Fallback for older payloads that do not include source timestamps.
-                live_df = live_df.iloc[::-1]
-                live_df = live_df.drop(columns=[c for c in ("event_index",) if c in live_df.columns])
-
-            # Keep all rows to allow infinite scrolling expansion
-            live_df = live_df.reset_index(drop=True)
-
-            # Normalize live payload fields so this table matches the static Alerts layout.
-            # NOTE: column names must NOT start with "_" — itertuples() silently
-            # drops underscore-prefixed attributes from namedtuples, which caused
-            # every row to fall back to the default "LOW" / NaN.
-            if "ae_risk_band" in live_df.columns:
-                live_df["ui_risk_band"] = live_df["ae_risk_band"].astype(str).str.upper()
-            elif "if_risk_band" in live_df.columns:
-                live_df["ui_risk_band"] = live_df["if_risk_band"].astype(str).str.upper()
-            elif "risk_level" in live_df.columns:
-                live_df["ui_risk_band"] = live_df["risk_level"].astype(str).str.upper()
-            else:
-                live_df["ui_risk_band"] = "LOW"
-
-            if "ae_percentile_rank" in live_df.columns:
-                live_df["ui_percentile"] = pd.to_numeric(live_df["ae_percentile_rank"], errors="coerce")
-            elif "if_percentile_rank" in live_df.columns:
-                live_df["ui_percentile"] = pd.to_numeric(live_df["if_percentile_rank"], errors="coerce")
-            else:
-                live_df["ui_percentile"] = np.nan
-
-            if "if_anomaly_score" in live_df.columns:
-                live_df["ui_anomaly_score"] = pd.to_numeric(live_df["if_anomaly_score"], errors="coerce")
-            elif "anomaly_score" in live_df.columns:
-                live_df["ui_anomaly_score"] = pd.to_numeric(live_df["anomaly_score"], errors="coerce")
-            else:
-                live_df["ui_anomaly_score"] = np.nan
-
-            # Normalize composite_score: in live mode, use IF percentile as composite (w1=0, w2=1)
-            # since autoencoder isn't part of live pipeline
-            if "if_percentile_rank" in live_df.columns:
-                live_df["ui_composite_score"] = pd.to_numeric(live_df["if_percentile_rank"], errors="coerce")
-            elif "composite_score" in live_df.columns:
-                live_df["ui_composite_score"] = pd.to_numeric(live_df["composite_score"], errors="coerce")
-            else:
-                live_df["ui_composite_score"] = np.nan
-
-            # Assign risk bands from numeric composite score
-            def assign_live_risk_band(score):
-                if pd.isna(score):
-                    return "LOW"
-                score = float(score)
-                if score >= 95:
-                    return "CRITICAL"
-                elif score >= 90:
-                    return "HIGH"
-                elif score >= 80:
-                    return "MEDIUM"
-                return "LOW"
-
-            live_df["ui_risk_band"] = live_df["ui_composite_score"].apply(assign_live_risk_band)
-            _live_risk_counts = {
-                tier: int((live_df["ui_risk_band"] == tier).sum()) for tier in RISK_TIERS
-            }
-
-            section_header("Filter by severity", "sh_live_sev")
-            _live_sev_cols = st.columns([1, 1, 1, 1, 4])
-            _live_tier_checked = {}
-            for _idx, _tier in enumerate(RISK_TIERS):
-                _color = RISK_COLORS[_tier]
-                _count = _live_risk_counts[_tier]
-                with _live_sev_cols[_idx]:
-                    _live_tier_checked[_tier] = st.checkbox(
-                        _tier,
-                        value=True,
-                        key=f"live_alert_sev_{_tier}",
-                    )
-                    st.markdown(
-                        f"<span style='background:{_color}22;color:{_color};font-size:9px;"
-                        f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:1px 6px;"
-                        f"border:1px solid {_color}55;display:inline-block;margin-top:-6px;'>"
-                        f"{_count:,} alert{'s' if _count != 1 else ''}</span>",
-                        unsafe_allow_html=True,
-                    )
-
-            live_alert_risk = [t for t, checked in _live_tier_checked.items() if checked]
-            live_alert_data = live_df[live_df["ui_risk_band"].isin(live_alert_risk)].copy()
-
-            # Keep the most-recent-first order from live_df (simulates real-time arrival).
-            live_alert_data = live_alert_data.reset_index(drop=True)
-
-            live_total_alerts = len(live_alert_data)
-
-            if live_total_alerts == 0:
-                st.info("No live alerts match the current severity filter.")
-            else:
-                st.caption(f"Showing {live_total_alerts:,} matching alert{'s' if live_total_alerts != 1 else ''}.")
-
-                # Build the entire table as a single HTML block inside a scrollable container.
-                # Height is sized for ~10 visible rows (~56px each) plus header.
-                _ROW_HEIGHT = 56
-                _SCROLL_HEIGHT = _ROW_HEIGHT * 10 + 40  # 10 rows + header
-
-                _html_parts = [
-                    "<div style='max-height:{h}px;overflow-y:auto;border:1px solid #1a1a1a;"
-                    "border-radius:4px;'>".format(h=_SCROLL_HEIGHT),
-                    # ── sticky header ──
-                    "<div style='display:grid;grid-template-columns:72px 1fr 100px 90px;"
-                    "gap:8px;padding:6px 8px;border-bottom:1px solid #1a1a1a;"
-                    "position:sticky;top:0;background:#0a0a0a;z-index:1;'>",
-                    "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                    "text-transform:uppercase;letter-spacing:1.5px;'>Risk</span>",
-                    "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                    "text-transform:uppercase;letter-spacing:1.5px;'>User / Investigation hint</span>",
-                    "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                    "text-transform:uppercase;letter-spacing:1.5px;'>Day</span>",
-                    "<span style='font-family:JetBrains Mono,monospace;font-size:9px;color:#444;"
-                    "text-transform:uppercase;letter-spacing:1.5px;'>Score</span>",
-                    "</div>",
-                ]
-
-                for _r in live_alert_data.itertuples():
-                    _risk = str(getattr(_r, "ui_risk_band", "LOW")).upper()
-                    if _risk not in RISK_COLORS:
-                        _risk = "LOW"
-                    _rc = RISK_COLORS.get(_risk, "#666666")
-
-                    _user = getattr(_r, "user", "--")
-                    if isinstance(_user, float) and pd.isna(_user):
-                        _user = "--"
-
-                    _cert_ts = getattr(_r, "cert_timestamp", None)
-                    if _cert_ts:
-                        _ts_p = pd.to_datetime(_cert_ts, errors="coerce")
-                        _day_s = _ts_p.strftime("%Y-%m-%d") if pd.notna(_ts_p) else str(_cert_ts)
-                    else:
-                        _day_s = "--"
-
-                    _cs = getattr(_r, "ui_composite_score", np.nan)
-                    _sc_d = f"{float(_cs):.1f}" if pd.notna(_cs) else "--"
-
-                    _top_raw = _get_alert_detail(str(_user), _ts_p, "top_contributors")
-                    _summary = build_alert_summary(_top_raw)
-                    if _summary == "No contributor detail available for this alert.":
-                        _expl = _get_alert_detail(str(_user), _ts_p, "explanation") or ""
-                        if isinstance(_expl, str) and _expl.strip():
-                            _summary = _expl.strip()
-                    # Escape HTML in user-derived strings
-                    _user_safe = _html_mod.escape(str(_user))
-                    _summary_safe = _html_mod.escape(str(_summary))
-                    _day_safe = _html_mod.escape(str(_day_s))
-
-                    _html_parts.append(
-                        f"<div style='display:grid;grid-template-columns:72px 1fr 100px 90px;"
-                        f"gap:8px;padding:8px 8px;border-bottom:1px solid #0d0d0d;align-items:start;'>"
-                        f"<div style='padding-top:2px;'>"
-                        f"<span style='background:{_rc}22;color:{_rc};font-size:10px;"
-                        f"font-family:JetBrains Mono,monospace;letter-spacing:1px;padding:2px 6px;"
-                        f"border:1px solid {_rc}55;display:inline-block;'>{_risk}</span></div>"
-                        f"<div>"
-                        f"<span style='font-family:JetBrains Mono,monospace;font-size:13px;"
-                        f"color:#e0e0e0;font-weight:600;'>{_user_safe}</span>"
-                        f"<br><span style='font-family:Inter,sans-serif;font-size:12px;"
-                        f"color:#666;line-height:1.5;'>{_summary_safe}</span></div>"
-                        f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;"
-                        f"color:#888;padding-top:4px;white-space:nowrap;'>{_day_safe}</div>"
-                        f"<div style='font-family:JetBrains Mono,monospace;font-size:11px;"
-                        f"color:#999;padding-top:4px;text-align:center;white-space:nowrap;'>{_sc_d}</div>"
-                        f"</div>"
-                    )
-
-                _html_parts.append("</div>")  # close scrollable container
-                st.markdown("".join(_html_parts), unsafe_allow_html=True)
-
-                # ── Investigate action (outside the scrollable table) ──
-                _live_users = live_alert_data["user"].dropna().unique().tolist()
-                if _live_users:
-                    _inv_cols = st.columns([3, 1])
-                    with _inv_cols[0]:
-                        _sel_user = st.selectbox(
-                            "Select a user to investigate",
-                            options=_live_users,
-                            key="live_inv_select",
-                            label_visibility="collapsed",
-                            placeholder="Select a user to investigate…",
-                        )
-                    with _inv_cols[1]:
-                        if st.button("Investigate →", key="live_inv_btn", use_container_width=True):
-                            st.session_state["inv_user_select"] = _sel_user
-                            st.session_state["_nav_request"] = "Investigation"
-                            st.rerun()
-
-            if live_total_alerts > 0:
-                st.download_button(
-                    "EXPORT LIVE ALERTS",
-                    data=live_alert_data.to_csv(index=False).encode("utf-8"),
-                    file_name="live_alerts.csv",
-                    mime="text/csv",
-                )
-
-            st.markdown("<div style='margin-top:14px;'></div>", unsafe_allow_html=True)
-
-            # ── Live charts (based solely on current live alerts table data) ──
-            live_chart_df = live_df.copy()
-
-            col_live_left, col_live_right = st.columns(2)
-
-            with col_live_left:
-                section_header("Risk Distribution", "sh_live_risk_dist")
-                if "ui_risk_band" in live_chart_df.columns and not live_chart_df.empty:
-                    _risk_counts = (
-                        live_chart_df["ui_risk_band"]
-                        .fillna("LOW")
-                        .value_counts()
-                        .rename_axis("Risk Level")
-                        .reset_index(name="Count")
-                    )
-                    fig_live_donut = px.pie(
-                        _risk_counts,
-                        values="Count",
-                        names="Risk Level",
-                        color="Risk Level",
-                        color_discrete_map=RISK_COLORS,
-                        hole=0.6,
-                    )
-                    fig_live_donut.update_layout(
-                        **PLOTLY_LAYOUT,
-                        showlegend=True,
-                        height=340,
-                        legend=dict(font=dict(size=10, family="JetBrains Mono")),
-                    )
-                    fig_live_donut.update_traces(
-                        textinfo="label+percent",
-                        textfont_size=11,
-                        textfont_family="JetBrains Mono",
-                    )
-                    st.plotly_chart(fig_live_donut, use_container_width=True)
-                else:
-                    st.info("Risk band data is not available in live alerts yet.")
-
-            with col_live_right:
-                section_header("Anomaly Score Distribution", "sh_live_score_dist")
-                if "ui_anomaly_score" in live_chart_df.columns and "ui_risk_band" in live_chart_df.columns:
-                    fig_live_hist = px.histogram(
-                        live_chart_df,
-                        x="ui_anomaly_score",
-                        nbins=50,
-                        color="ui_risk_band",
-                        color_discrete_map=RISK_COLORS,
-                        labels={"ui_anomaly_score": "Anomaly Score", "ui_risk_band": "Risk Level"},
-                    )
-                    fig_live_hist.update_layout(**PLOTLY_LAYOUT, height=340, barmode="overlay")
-                    fig_live_hist.update_traces(opacity=0.75)
-                    st.plotly_chart(fig_live_hist, use_container_width=True)
-                else:
-                    st.info("Anomaly-score or risk-band fields are not available in live alerts yet.")
-        else:
-            st.info("Waiting for first scored row… (models are loading)")
-
-        # Auto-refresh while the process is running and not paused
-        if proc_running and not st.session_state.live_paused:
-            time.sleep(1)
-            st.rerun()
-        elif stream_done and st.session_state.live_mode:
-            # Natural end-of-stream: auto-stop
-            st.session_state.live_proc = None
-            st.session_state.live_mode = False
-            st.session_state.live_paused = False
-            st.success("Simulation complete — all test rows processed.")
 
     # ── STATIC mode ───────────────────────────────────────────
     else:
@@ -4149,16 +4228,11 @@ if active_page == "Channels":
         st.plotly_chart(fig_corr, use_container_width=True)
 
 
-# Keep live row counter and status fresh while browsing non-Alerts pages.
-# Investigation is excluded: its @st.fragment(run_every="2s") handles its own
-# refresh cycle independently.  A full st.rerun() here would reset the fragment
-# timer every second, preventing it from ever firing on its own schedule.
-if active_page not in ("Alerts", "Investigation") and st.session_state.live_mode:
-    _proc = st.session_state.live_proc
-    _proc_running = _proc is not None and _proc.poll() is None
-    if _proc_running and not st.session_state.live_paused:
-        time.sleep(1)
-        st.rerun()
+# All live-update cycles are now handled by @st.fragment decorators:
+#   • Alerts tab  → _render_live_alerts_data()   (run_every=2)
+#   • Investigation→ _render_investigation_content() (run_every="2s")
+#   • Overview    → _render_overview_live_badge()  (run_every=5)
+# No full-page rerun polling needed here.
 
 
 # ──────────────────────────────────────────────────────────────

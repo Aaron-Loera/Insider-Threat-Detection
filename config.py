@@ -137,6 +137,13 @@ LIVE_AE_PATH = _local_or(
     "LIVE_AE_PATH",
     os.path.join(BASE_DIR, "encoders", f"encoder_model_{LV}", "autoencoder_model.keras"),
 )
+LIVE_RECON_TABLE_PATH = _local_or(
+    "LIVE_RECON_TABLE_PATH",
+    os.path.join(
+        BASE_DIR, "explainability", "reconstruction_error",
+        f"reconstruction_error_table_{LV}.parquet",
+    ),
+)
 _live_input_parquet = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{LV}", f"ueba_dataset_{LV}_test_stream.parquet")
 _live_input_csv     = os.path.join(BASE_DIR, "processed_datasets", f"ueba_dataset_{LV}", f"ueba_dataset_{LV}_test_stream.csv")
 LIVE_DEFAULT_INPUT = _local_or(
