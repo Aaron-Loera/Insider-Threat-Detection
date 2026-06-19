@@ -42,8 +42,8 @@ This is a UEBA (User and Entity Behavior Analytics) insider threat detection sys
 ### Two Runtime Components
 
 **1. `dashboard/app.py`** — Streamlit web UI for security analysts
-- Loads a pre-merged slim serving dataset at startup (cached): `ueba_dataset_6_dashboard.parquet`, read locally when present or downloaded from the Hugging Face dataset repo (`HF_DATASET_REPO` in `config.py`)
-- The serving dataset is built offline by `scripts/build_dashboard_dataset.py` (merges the alert table with training features on `(user, day)`, projects columns, downcasts dtypes) and published with `scripts/upload_dashboard_dataset.py`
+- Loads a pre-merged slim serving dataset at startup (cached): `ueba_dataset_6_dashboard.parquet`, read locally when present or downloaded from the Hugging Face dataset repo (`HF_DATASET_REPO` in `config.py`) via `ueba.serving.hf_io.get_dataset_file` — the same local-cache-first helper backs the Investigation tab's per-user explanation fallback (`details/{user}.parquet`) and `live_replay.py`'s cloud fallback (`alert_table_6.parquet`)
+- The serving dataset is built offline by `scripts/build_dashboard_dataset.py` (merges the alert table with training features on `(user, day)`, projects columns, downcasts dtypes) and published — along with the rest of the version's manifest (dataset splits, alert table, model ensemble) — by `scripts/upload_to_hf.py`
 - Re-enforces the `baseline_complete` gate at load time: CRITICAL bands are demoted to HIGH for any user with fewer than 14 days of history, guarding against alert tables regenerated without the filter
 - Four tabs: Overview (KPIs + charts), Investigation (per-user deep dive), Alerts (filterable feed), Channels (feature analysis)
 - Global sidebar filters (date range, risk level, user search) drive all views
