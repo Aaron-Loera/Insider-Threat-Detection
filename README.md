@@ -96,8 +96,8 @@ produces it. See [docs/PIPELINE.md](docs/PIPELINE.md).
 - **Streamlit Cloud:** the dashboard deploys from `requirements.txt` (hand-pinned
   lockfile — edit deliberately) + `runtime.txt`, loading a slim pre-merged serving
   dataset from the Hugging Face Hub. Build it with
-  `python -m ueba.pipeline build-dashboard` and publish with
-  `python -m ueba.serving.upload_dashboard_dataset`.
+  `python -m ueba.pipeline build-dashboard` and publish it (along with the rest
+  of the version's artifacts) with `python -m ueba.serving.upload_to_hf`.
 - **WebSocket:** the live simulator broadcasts on `ws://localhost:8765`,
   unauthenticated by design and bound to localhost only.
 
