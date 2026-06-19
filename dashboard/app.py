@@ -25,11 +25,14 @@ ALERT_STATUS_OPTIONS = ["NEW", "INVESTIGATING", "RESOLVED", "DISMISSED"]
 def _on_status_change(user, day, key):
     upsert_disposition(user, day, st.session_state[key])
 
-try:
-    import pyrebase
-    _PYREBASE_AVAILABLE = True
-except ImportError:
-    _PYREBASE_AVAILABLE = False
+
+def _secrets_section(name: str) -> dict:
+    """Return a Streamlit secrets section, or an empty dict when secrets are absent."""
+    try:
+        section = st.secrets.get(name, {})
+    except st.errors.StreamlitSecretNotFoundError:
+        return {}
+    return dict(section) if section else {}
 
 # ──────────────────────────────────────────────────────────────
 # Page Config & Custom CSS
@@ -642,7 +645,10 @@ st.markdown("""
 # ──────────────────────────────────────────────────────────────
 
 def _make_auth_token(email: str) -> str:
-    secret = st.secrets["firebase"]["apiKey"].encode()
+    firebase_cfg = _secrets_section("firebase")
+    secret = firebase_cfg.get("apiKey", "").encode()
+    if not secret:
+        return ""
     return hmac.new(secret, email.lower().encode(), hashlib.sha256).hexdigest()
 
 def _set_auth_cookie(email: str):
@@ -663,23 +669,42 @@ def _clear_auth_cookie():
     )
 
 
-def _get_firebase_auth():
-    """Return a Pyrebase Auth object initialised from st.secrets."""
-    if not _PYREBASE_AVAILABLE:
-        st.error(
-            "**Missing dependency:** `pyrebase4` is required for authentication. "
-            "Run `pip install pyrebase4` then restart the app."
-        )
-        st.stop()
-    firebase_cfg = st.secrets.get("firebase", None)
-    if firebase_cfg is None:
+def _firebase_sign_in_with_password(email: str, password: str) -> dict:
+    """Authenticate with Firebase Email/Password using the Identity Toolkit REST API."""
+    firebase_cfg = _secrets_section("firebase")
+    api_key = firebase_cfg.get("apiKey", "")
+    if not api_key:
         st.error(
             "**Firebase config missing.** Add a `[firebase]` section to "
             "`.streamlit/secrets.toml`. See the dashboard README for setup instructions."
         )
         st.stop()
-    app = pyrebase.initialize_app(dict(firebase_cfg))
-    return app.auth()
+
+    import urllib.error
+    import urllib.request
+
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
+    payload = json.dumps(
+        {"email": email, "password": password, "returnSecureToken": True}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(raw).get("error", {}).get("message", raw)
+        except json.JSONDecodeError:
+            detail = raw
+        raise RuntimeError(detail) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"NETWORK_ERROR: {exc.reason}") from exc
 
 
 def _render_login():
@@ -925,8 +950,7 @@ def _render_login():
             st.rerun()
         else:
             try:
-                auth = _get_firebase_auth()
-                user = auth.sign_in_with_email_and_password(email, password)
+                user = _firebase_sign_in_with_password(email, password)
                 st.session_state["authenticated"] = True
                 st.session_state["auth_user_email"] = user.get("email", email)
                 st.session_state["auth_id_token"] = user.get("idToken", "")
@@ -967,7 +991,8 @@ if not _is_logout and not st.session_state.get("authenticated", False):
     _cookies = st.context.cookies
     _c_email = _cookies.get("auth_email", "")
     _c_token = _cookies.get("auth_token", "")
-    if _c_email and _c_token and hmac.compare_digest(_c_token, _make_auth_token(_c_email)):
+    _expected_token = _make_auth_token(_c_email) if _c_email else ""
+    if _c_email and _c_token and _expected_token and hmac.compare_digest(_c_token, _expected_token):
         st.session_state["authenticated"] = True
         st.session_state["auth_user_email"] = _c_email
 
@@ -976,13 +1001,12 @@ if not _is_logout and not st.session_state.get("authenticated", False):
 # Requires [guest] section in .streamlit/secrets.toml with email + password.
 if not _is_logout and not st.session_state.get("authenticated", False):
     if st.query_params.get("guest", "").lower() == "true":
-        _guest_cfg = st.secrets.get("guest", {})
+        _guest_cfg = _secrets_section("guest")
         _g_email    = _guest_cfg.get("email", "")
         _g_password = _guest_cfg.get("password", "")
         if _g_email and _g_password:
             try:
-                _g_auth = _get_firebase_auth()
-                _g_user = _g_auth.sign_in_with_email_and_password(_g_email, _g_password)
+                _g_user = _firebase_sign_in_with_password(_g_email, _g_password)
                 st.session_state["authenticated"] = True
                 st.session_state["auth_user_email"] = "Guest"
                 st.session_state["auth_id_token"]   = _g_user.get("idToken", "")
@@ -992,7 +1016,7 @@ if not _is_logout and not st.session_state.get("authenticated", False):
                 pass  # fall through to login page
 
 # ── Auth gate — show login and stop until the user has signed in ──
-_dev_bypass = st.secrets.get("dev", {}).get("bypass_auth", False)
+_dev_bypass = _secrets_section("dev").get("bypass_auth", False)
 if _dev_bypass and not st.session_state.get("authenticated", False):
     st.session_state["authenticated"] = True
     st.session_state["auth_user_email"] = "dev@local"
@@ -1075,7 +1099,7 @@ def _load_user_detail_df(user: str) -> "pd.DataFrame":
             user file is independently tiny, making the download cost negligible.
     """
     _HF_REPO = HF_DATASET_REPO
-    _hf_token = st.secrets.get("huggingface", {}).get("token", None)
+    _hf_token = _secrets_section("huggingface").get("token", None)
     _DETAIL_COLS = ["user", "day", "top_contributors", "explanation"]
     safe = str(user).replace("/", "_").replace("\\", "_")
 
@@ -1207,7 +1231,7 @@ def load_data():
         _log.warning(f"[load_data] saved {local_path}")
 
     if not os.path.exists(_DASH_PATH):
-        _hf_token_dl = st.secrets.get("huggingface", {}).get("token", None)
+        _hf_token_dl = _secrets_section("huggingface").get("token", None)
         _fetch(_DASH_PATH, _DASH_URL, token=_hf_token_dl)
 
     def _downcast(df):
@@ -1929,8 +1953,6 @@ if "flt_date_end" not in st.session_state:
     st.session_state.flt_date_end = _DS_MAX
 if "flt_risk" not in st.session_state:
     st.session_state.flt_risk = list(RISK_TIERS)
-if "flt_alert_sev" not in st.session_state:
-    st.session_state.flt_alert_sev = ["CRITICAL", "HIGH"]
 if "flt_min_pctl" not in st.session_state:
     st.session_state.flt_min_pctl = 0.0
 if "flt_max_rows" not in st.session_state:
@@ -1973,15 +1995,6 @@ def show_filters():
             horizontal=False,
             label_visibility="collapsed",
             key="dlg_disp_filter",
-        )
-        st.markdown("**Severity**")
-        _sev_options = list(RISK_TIERS)
-        dlg_alert_sev = st.multiselect(
-            "Severity",
-            _sev_options,
-            default=st.session_state.flt_alert_sev,
-            label_visibility="collapsed",
-            key="dlg_alert_sev",
         )
         dlg_view_suppressed = st.checkbox(
             "View Suppressed Alerts",
@@ -2039,7 +2052,6 @@ def show_filters():
             st.session_state.flt_risk = rl if rl else list(RISK_TIERS)
             if _on_alerts:
                 st.session_state.flt_disp_filter = dlg_disp_filter
-                st.session_state.flt_alert_sev = dlg_alert_sev if dlg_alert_sev else ["CRITICAL", "HIGH"]
                 st.session_state.flt_view_suppressed = dlg_view_suppressed
                 st.session_state.flt_sort_choice = dlg_sort
                 st.session_state.flt_min_pctl = float(dlg_min_pctl)
@@ -2052,7 +2064,6 @@ def show_filters():
             st.session_state.flt_risk = list(RISK_TIERS)
             if _on_alerts:
                 st.session_state.flt_disp_filter = "Show New Only"
-                st.session_state.flt_alert_sev = ["CRITICAL", "HIGH"]
                 st.session_state.flt_view_suppressed = False
                 st.session_state.flt_sort_choice = "Highest score first"
                 st.session_state.flt_min_pctl = 0.0
@@ -2238,39 +2249,6 @@ def _al_top_users(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
     )
 
 
-@st.cache_data(show_spinner=False)
-def _al_alert_data(
-    date_start, date_end, risk_levels: tuple,
-    alert_risk: tuple, min_pctl: float, max_results: int, sort_choice: str,
-) -> pd.DataFrame:
-    """Filtered + sorted alert feed for the Alerts tab."""
-    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
-    _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
-    data = fdf[
-        (fdf["ae_risk_band"].isin(alert_risk)) &
-        (fdf["ae_percentile_rank"] >= min_pctl)
-    ].copy()
-    if sort_choice == "Highest score first":
-        data = data.sort_values("ae_percentile_rank", ascending=False)
-    elif sort_choice == "Lowest score first":
-        data = data.sort_values("ae_percentile_rank", ascending=True)
-    elif sort_choice in ("Highest severity first", "Lowest severity first"):
-        _asc = sort_choice == "Lowest severity first"
-        data["_risk_sort_key"] = data["ae_risk_band"].astype(str).map(_RISK_ORDER).fillna(-1)
-        data = data.sort_values(
-            ["_risk_sort_key", "ae_percentile_rank"], ascending=[_asc, False]
-        ).drop(columns=["_risk_sort_key"])
-    elif sort_choice == "Most recent first":
-        data = data.sort_values("day", ascending=False)
-    elif sort_choice == "Oldest first":
-        data = data.sort_values("day", ascending=True)
-    elif sort_choice == "User A–Z":
-        data = data.sort_values("user", ascending=True)
-    else:
-        data = data.sort_values("user", ascending=False)
-    return data.head(int(max_results))
-
-
 # ── Cached Channels aggregations ──────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False)
@@ -2447,6 +2425,38 @@ def _filter_bar(key: str):
         f"Risk: {active_risks}"
     )
 
+
+def _render_card_carousel(cards: list[str], state_key: str, visible_count: int = 4) -> None:
+    """Render KPI cards with native previous/next controls."""
+    if not cards:
+        return
+
+    visible_count = max(1, min(visible_count, len(cards)))
+    max_start = max(len(cards) - visible_count, 0)
+    if state_key not in st.session_state:
+        st.session_state[state_key] = 0
+    start = min(max(int(st.session_state[state_key]), 0), max_start)
+
+    left_col, card_col, right_col = st.columns([0.45, 8, 0.45], vertical_alignment="center")
+    with left_col:
+        prev_clicked = st.button("←", key=f"{state_key}_prev", use_container_width=True, disabled=(start == 0))
+    with right_col:
+        next_clicked = st.button("→", key=f"{state_key}_next", use_container_width=True, disabled=(start == max_start))
+
+    if prev_clicked:
+        start = max(0, start - visible_count)
+    if next_clicked:
+        start = min(max_start, start + visible_count)
+    st.session_state[state_key] = start
+
+    with card_col:
+        visible_cards = cards[start : start + visible_count]
+        cols = st.columns(visible_count)
+        for col, card_html in zip(cols, visible_cards):
+            col.markdown(card_html, unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-bottom:16px'></div>", unsafe_allow_html=True)
+
 st.markdown("<div class='project-title-badge'>Insider Threat Detection</div>", unsafe_allow_html=True)
 
 # ── Mobile sidebar toggle (injected once into parent document) ──
@@ -2510,37 +2520,19 @@ if active_page == "Overview":
     avg_anomaly        = _kpis["avg_anomaly"]
     detection_rate     = _kpis["detection_rate"]
 
-    st.markdown(
-        "<div class='kpi-scroll-wrapper'>"
-        "<div class='kpi-scroll-arrow' id='kpi-arrow-left'>&#8592;</div>"
-        f"<div class='kpi-scroll-row' id='kpi-row'>"
-        f"<div class='kpi-card' style='border-color:#ffffff'><h3>Users Monitored</h3><h1 style='color:#ffffff'>{total_users:,}</h1><p>Active in period</p></div>"
-        f"<div class='kpi-card' style='border-color:#ff1744'><h3>Critical Risk</h3><h1 style='color:#ff1744'>{critical_risk_users}</h1><p>&ge; 95th percentile</p></div>"
-        f"<div class='kpi-card' style='border-color:#e84545'><h3>High Risk</h3><h1 style='color:#e84545'>{high_risk_users}</h1><p>&ge; 90th percentile</p></div>"
-        f"<div class='kpi-card' style='border-color:#d4a017'><h3>Medium Risk</h3><h1 style='color:#d4a017'>{medium_risk_users}</h1><p>&ge; 80th percentile</p></div>"
-        f"<div class='kpi-card' style='border-color:#666666'><h3>Total Records</h3><h1 style='color:#cccccc'>{total_records:,}</h1><p>User-day observations</p></div>"
-        f"<div class='kpi-card' style='border-color:#666666'><h3>Avg Anomaly Score</h3><h1 style='color:#cccccc'>{avg_anomaly:.4f}</h1><p>Across all records</p></div>"
-        f"<div class='kpi-card' style='border-color:#666666'><h3>Detection Rate</h3><h1 style='color:#cccccc'>{detection_rate:.1f}%</h1><p>Medium + High + Critical alerts</p></div>"
-        "</div>"
-        "<div class='kpi-scroll-arrow' id='kpi-arrow-right'>&#8594;</div>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-    st.html(
-        "<script>"
-        "(function(){"
-        "  var p = document;"
-        "  function wire(){"
-        "    var row = p.getElementById('kpi-row');"
-        "    var lft = p.getElementById('kpi-arrow-left');"
-        "    var rgt = p.getElementById('kpi-arrow-right');"
-        "    if(!row||!lft||!rgt){setTimeout(wire,100);return;}"
-        "    lft.addEventListener('click',function(){row.scrollBy({left:-200,behavior:'smooth'});});"
-        "    rgt.addEventListener('click',function(){row.scrollBy({left:200,behavior:'smooth'});});"
-        "  }"
-        "  wire();"
-        "})();"
-        "</script>"
+    _overview_kpi_cards = [
+        f"<div class='kpi-card' style='border-color:#ffffff'><h3>Users Monitored</h3><h1 style='color:#ffffff'>{total_users:,}</h1><p>Active in period</p></div>",
+        f"<div class='kpi-card' style='border-color:#ff1744'><h3>Critical Risk</h3><h1 style='color:#ff1744'>{critical_risk_users}</h1><p>&ge; 95th percentile</p></div>",
+        f"<div class='kpi-card' style='border-color:#e84545'><h3>High Risk</h3><h1 style='color:#e84545'>{high_risk_users}</h1><p>&ge; 90th percentile</p></div>",
+        f"<div class='kpi-card' style='border-color:#d4a017'><h3>Medium Risk</h3><h1 style='color:#d4a017'>{medium_risk_users}</h1><p>&ge; 80th percentile</p></div>",
+        f"<div class='kpi-card' style='border-color:#666666'><h3>Total Records</h3><h1 style='color:#cccccc'>{total_records:,}</h1><p>User-day observations</p></div>",
+        f"<div class='kpi-card' style='border-color:#666666'><h3>Avg Anomaly Score</h3><h1 style='color:#cccccc'>{avg_anomaly:.4f}</h1><p>Across all records</p></div>",
+        f"<div class='kpi-card' style='border-color:#666666'><h3>Detection Rate</h3><h1 style='color:#cccccc'>{detection_rate:.1f}%</h1><p>Medium + High + Critical alerts</p></div>",
+    ]
+    _render_card_carousel(
+        _overview_kpi_cards,
+        "overview_kpi_card_start",
+        visible_count=4,
     )
 
     st.markdown("")
@@ -2683,42 +2675,22 @@ if active_page == "Overview":
             ("non_primary_pc_risk_flag",    "Non-Primary PC",        "#7f8c8d"),
         ]
         _flag_counts_cache = _ov_flag_counts(*_ov_args(), flags=tuple(CROSS_FLAGS))
-        _cards_inner = ""
+        _flag_cards = []
         for flag, label, color in _flag_info:
             if flag in CROSS_FLAGS and flag in _flag_counts_cache:
                 count, pct = _flag_counts_cache[flag]
-                _cards_inner += (
+                _flag_cards.append(
                     f"<div class='kpi-card' style='border-color:{color}'>"
                     f"<h3>{label}</h3>"
                     f"<h1 style='color:{color}'>{count:,}</h1>"
                     f"<p>{pct:.1f}% of records</p>"
                     f"</div>"
                 )
-        st.markdown(
-            "<div class='kpi-scroll-wrapper'>"
-            "<div class='kpi-scroll-arrow' id='cf-arrow-left'>&#8592;</div>"
-            f"<div class='kpi-scroll-row' id='cf-row'>{_cards_inner}</div>"
-            "<div class='kpi-scroll-arrow' id='cf-arrow-right'>&#8594;</div>"
-            "</div>",
-            unsafe_allow_html=True,
+        _render_card_carousel(
+            _flag_cards,
+            "overview_cross_flag_card_start",
+            visible_count=4,
         )
-        st.html(
-            "<script>"
-            "(function(){"
-            "  var p = document;"
-            "  function wire(){"
-            "    var row = p.getElementById('cf-row');"
-            "    var lft = p.getElementById('cf-arrow-left');"
-            "    var rgt = p.getElementById('cf-arrow-right');"
-            "    if(!row||!lft||!rgt){setTimeout(wire,100);return;}"
-            "    lft.addEventListener('click',function(){row.scrollBy({left:-200,behavior:'smooth'});});"
-            "    rgt.addEventListener('click',function(){row.scrollBy({left:200,behavior:'smooth'});});"
-            "  }"
-            "  wire();"
-            "})();"
-            "</script>"
-        )
-        st.markdown("<div style='margin-bottom:16px'></div>", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -3658,7 +3630,7 @@ if active_page == "Alerts":
                 tier: int((live_df["ui_risk_band"] == tier).sum()) for tier in RISK_TIERS
             }
 
-            section_header("Filter by severity", "sh_live_sev")
+            section_header("Filter by Risk Level", "sh_live_risk")
             _live_sev_cols = st.columns([1, 1, 1, 1, 4])
             _live_tier_checked = {}
             for _idx, _tier in enumerate(RISK_TIERS):
@@ -3687,7 +3659,7 @@ if active_page == "Alerts":
             live_total_alerts = len(live_alert_data)
 
             if live_total_alerts == 0:
-                st.info("No live alerts match the current severity filter.")
+                st.info("No live alerts match the current risk-level filter.")
             else:
                 st.caption(f"Showing {live_total_alerts:,} matching alert{'s' if live_total_alerts != 1 else ''}.")
 
@@ -3935,13 +3907,12 @@ if active_page == "Alerts":
         # ── Alert Filters (unified) ──
         # Pull all alert filter state from session (set via Filters modal)
         _disp_filter        = st.session_state.get("flt_disp_filter", "Show New Only")
-        alert_risk          = st.session_state.get("flt_alert_sev", ["CRITICAL", "HIGH"])
         show_suppressed_alerts = st.session_state.get("flt_view_suppressed", False)
         min_pctl            = st.session_state.get("flt_min_pctl", 0.0)
         sort_choice         = st.session_state.get("flt_sort_choice", "Highest score first")
-        max_results         = st.session_state.get("flt_max_results", 500)
+        max_results         = st.session_state.get("flt_max_rows", 500)
 
-        # Centralized severity mapping — extend here when new bands are added
+        # Centralized risk-band mapping — extend here when new bands are added
         _RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 
         # Build triage disposition lookup from SQLite: {(user, day_str): status}
@@ -3971,9 +3942,8 @@ if active_page == "Alerts":
                 alert_data = alert_data[alert_data["if_percentile_rank"] >= min_pctl]
                 alert_data = alert_data.sort_values("if_percentile_rank", ascending=False)
         else:
-            # Normal mode: filter by selected severities, exclude suppressed alerts
+            # Normal mode: use the shared risk-level filter and exclude suppressed alerts
             alert_data = filtered_df[
-                (filtered_df["ae_risk_band"].isin(alert_risk)) &
                 (filtered_df["ae_percentile_rank"] >= min_pctl) &
                 (
                     ~(filtered_df["status"].astype(str).str.upper() == "SUPPRESSED")
