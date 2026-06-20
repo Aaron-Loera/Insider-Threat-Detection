@@ -91,7 +91,7 @@ Every stage validates inputs through a fail-fast manifest (`ueba.pipeline.manife
 - **`ueba.risk` is the single source of truth** for band assignment and percentile ranking — used identically by the offline `AlertObjectBuilder` and the live scorer (scalar + vectorized forms; a percentile equal to a threshold belongs to the higher band)
 - Anomaly score → percentile rank against the clean calibration baseline (insider-free held-out slice, not the training distribution); when `calibration_thresholds.json` exists (produced by `ueba.pipeline calibrate`), banding uses calibrated **absolute** thresholds targeting a clean-day alert budget (~5% LOW / 1% MEDIUM / 0.5% HIGH ceilings) instead of percentile cutoffs
 - Four risk bands (percentile fallback semantics):
-  - CRITICAL: ≥ 95th percentile → `#ff1744` (bright red)
+  - CRITICAL: ≥ 95th percentile → `#bb44f0` (purple)
   - HIGH: ≥ 90th percentile → `#e84545` (red)
   - MEDIUM: ≥ 80th percentile → `#d4a017` (gold)
   - LOW: below 80th percentile → `#3a86a8` (steel blue)

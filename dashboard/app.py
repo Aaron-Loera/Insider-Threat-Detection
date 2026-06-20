@@ -1420,8 +1420,15 @@ PLOTLY_LAYOUT = dict(
     yaxis=dict(gridcolor="#1a1a1a", zerolinecolor="#1a1a1a"),
 )
 
-RISK_TIERS = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
-RISK_COLORS = {"CRITICAL": "#bb44f0", "HIGH": "#e84545", "MEDIUM": "#d4a017", "LOW": "#3a86a8"}
+# Risk palette / order come from ueba.risk — the single source of truth shared
+# with the offline pipeline. RISK_TIERS is CRITICAL→LOW (reverse of BAND_ORDER's
+# LOW→CRITICAL) because the dashboard renders highest severity first.
+from ueba.risk import BAND_COLORS as _BAND_COLORS
+from ueba.risk import BAND_ORDER as _BAND_ORDER
+from ueba.risk import assign_band_from_percentile
+
+RISK_TIERS = list(reversed(_BAND_ORDER))
+RISK_COLORS = dict(_BAND_COLORS)
 
 # ──────────────────────────────────────────────────────────────
 # Alert context helpers
@@ -2509,7 +2516,7 @@ if active_page == "Overview":
 
     _overview_kpi_cards = [
         f"<div class='kpi-card' style='border-color:#ffffff'><h3>Users Monitored</h3><h1 style='color:#ffffff'>{total_users:,}</h1><p>Active in period</p></div>",
-        f"<div class='kpi-card' style='border-color:#ff1744'><h3>Critical Risk</h3><h1 style='color:#ff1744'>{critical_risk_users}</h1><p>&ge; 95th percentile</p></div>",
+        f"<div class='kpi-card' style='border-color:{RISK_COLORS['CRITICAL']}'><h3>Critical Risk</h3><h1 style='color:{RISK_COLORS['CRITICAL']}'>{critical_risk_users}</h1><p>&ge; 95th percentile</p></div>",
         f"<div class='kpi-card' style='border-color:#e84545'><h3>High Risk</h3><h1 style='color:#e84545'>{high_risk_users}</h1><p>&ge; 90th percentile</p></div>",
         f"<div class='kpi-card' style='border-color:#d4a017'><h3>Medium Risk</h3><h1 style='color:#d4a017'>{medium_risk_users}</h1><p>&ge; 80th percentile</p></div>",
         f"<div class='kpi-card' style='border-color:#666666'><h3>Total Records</h3><h1 style='color:#cccccc'>{total_records:,}</h1><p>User-day observations</p></div>",
@@ -2540,7 +2547,7 @@ if active_page == "Overview":
 
     _dc1, _dc2, _dc3, _dc4, _dc5 = st.columns(5)
     _dc1.markdown(f"<div class='kpi-card' style='border-color:#666666'><h3>Total Alerts</h3><h1 style='color:#cccccc'>{_disp_total:,}</h1><p>User-day records</p></div>", unsafe_allow_html=True)
-    _dc2.markdown(f"<div class='kpi-card' style='border-color:#ff1744'><h3>New</h3><h1 style='color:#ff1744'>{_disp_new:,}</h1><p>Awaiting triage</p></div>", unsafe_allow_html=True)
+    _dc2.markdown(f"<div class='kpi-card' style='border-color:{RISK_COLORS['CRITICAL']}'><h3>New</h3><h1 style='color:{RISK_COLORS['CRITICAL']}'>{_disp_new:,}</h1><p>Awaiting triage</p></div>", unsafe_allow_html=True)
     _dc3.markdown(f"<div class='kpi-card' style='border-color:#d4a017'><h3>Investigating</h3><h1 style='color:#d4a017'>{_disp_invest:,}</h1><p>In progress</p></div>", unsafe_allow_html=True)
     _dc4.markdown(f"<div class='kpi-card' style='border-color:#22c55e'><h3>Resolved</h3><h1 style='color:#22c55e'>{_disp_resolved:,}</h1><p>Closed — confirmed</p></div>", unsafe_allow_html=True)
     _dc5.markdown(f"<div class='kpi-card' style='border-color:#555555'><h3>Dismissed</h3><h1 style='color:#888888'>{_disp_dismissed:,}</h1><p>Closed — false positive</p></div>", unsafe_allow_html=True)
@@ -2595,19 +2602,9 @@ if active_page == "Overview":
             uid = row.user
             score = row.max_percentile
             days = row.critical_count + row.high_count
-            # Color badge based on score
-            if score >= 95:
-                badge_color = "#bb44f0"
-                badge_label = "CRITICAL"
-            elif score >= 90:
-                badge_color = "#e84545"
-                badge_label = "HIGH"
-            elif score >= 80:
-                badge_color = "#d4a017"
-                badge_label = "MEDIUM"
-            else:
-                badge_color = "#3a86a8"
-                badge_label = "LOW"
+            # Color badge based on percentile → shared band assignment / palette.
+            badge_label = assign_band_from_percentile(score)
+            badge_color = RISK_COLORS[badge_label]
 
             col_rank, col_info, col_btn = st.columns([1, 5, 3])
             with col_rank:
@@ -2806,13 +2803,13 @@ def _render_investigation_content() -> None:
 
     if _rs is not None:
         if _rs >= 0.85:
-            _rs_color, _rs_label = "#ff1744", f"{_rs:.2f} · Critical"
+            _rs_color, _rs_label = RISK_COLORS["CRITICAL"], f"{_rs:.2f} · Critical"
         elif _rs >= 0.70:
-            _rs_color, _rs_label = "#e84545", f"{_rs:.2f} · High"
+            _rs_color, _rs_label = RISK_COLORS["HIGH"], f"{_rs:.2f} · High"
         elif _rs >= 0.50:
-            _rs_color, _rs_label = "#d4a017", f"{_rs:.2f} · Medium"
+            _rs_color, _rs_label = RISK_COLORS["MEDIUM"], f"{_rs:.2f} · Medium"
         else:
-            _rs_color, _rs_label = "#3a86a8", f"{_rs:.2f} · Low"
+            _rs_color, _rs_label = RISK_COLORS["LOW"], f"{_rs:.2f} · Low"
     else:
         _rs_color, _rs_label = "#555", "—"
 
@@ -2986,15 +2983,8 @@ def _render_investigation_content() -> None:
     u_med_days = (user_data["ae_risk_band"] == "MEDIUM").sum()
     u_total_days = len(user_data)
 
-    # Determine overall user risk label
-    if u_max_pctl >= 95:
-        u_risk_label = "CRITICAL"
-    elif u_max_pctl >= 90:
-        u_risk_label = "HIGH"
-    elif u_max_pctl >= 80:
-        u_risk_label = "MEDIUM"
-    else:
-        u_risk_label = "LOW"
+    # Determine overall user risk label (shared band assignment)
+    u_risk_label = assign_band_from_percentile(u_max_pctl)
 
     u1.metric("Overall Risk", u_risk_label)
     u2.metric("Peak Percentile", f"{u_max_pctl:.1f}")
@@ -3599,18 +3589,12 @@ if active_page == "Alerts":
             else:
                 live_df["ui_composite_score"] = np.nan
 
-            # Assign risk bands from numeric composite score
+            # Assign risk bands from numeric composite score (shared assignment;
+            # NaN scores fall back to LOW).
             def assign_live_risk_band(score):
                 if pd.isna(score):
                     return "LOW"
-                score = float(score)
-                if score >= 95:
-                    return "CRITICAL"
-                elif score >= 90:
-                    return "HIGH"
-                elif score >= 80:
-                    return "MEDIUM"
-                return "LOW"
+                return assign_band_from_percentile(float(score))
 
             live_df["ui_risk_band"] = live_df["ui_composite_score"].apply(assign_live_risk_band)
             _live_risk_counts = {
@@ -3844,18 +3828,8 @@ if active_page == "Alerts":
                 uid = row.user
                 score = row.max_percentile
                 days = int(row.critical_count + row.high_count)
-                if score >= 95:
-                    badge_color = "#bb44f0"
-                    badge_label = "CRITICAL"
-                elif score >= 90:
-                    badge_color = "#e84545"
-                    badge_label = "HIGH"
-                elif score >= 80:
-                    badge_color = "#d4a017"
-                    badge_label = "MEDIUM"
-                else:
-                    badge_color = "#3a86a8"
-                    badge_label = "LOW"
+                badge_label = assign_band_from_percentile(score)
+                badge_color = RISK_COLORS[badge_label]
 
                 col_rank, col_info, col_btn = st.columns([1, 5, 3])
                 with col_rank:
