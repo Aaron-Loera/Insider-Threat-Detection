@@ -1,13 +1,17 @@
 ﻿import os
 import sys
 
-# Ensure the dashboard directory is importable so `from db import …` resolves the
-# same way whether the app is launched by `streamlit run dashboard/app.py` (which
-# puts this dir on sys.path[0]) or headlessly via streamlit.testing.v1.AppTest
-# (which does not). Idempotent: a no-op once the path is present.
+# Make both the dashboard dir and the project root importable BEFORE any local
+# import. The dashboard dir lets `from db import …` / `from lib.… import …`
+# resolve; the project root lets the `config` shim resolve. This must run first:
+# lib.data (imported below) does `from config import …` at its module top, so the
+# root has to be on sys.path before that import — `streamlit run` only adds the
+# entrypoint's dir, and AppTest adds neither. Idempotent.
 _DASHBOARD_DIR = os.path.dirname(os.path.abspath(__file__))
-if _DASHBOARD_DIR not in sys.path:
-    sys.path.insert(0, _DASHBOARD_DIR)
+_PROJECT_ROOT = os.path.dirname(_DASHBOARD_DIR)
+for _p in (_DASHBOARD_DIR, _PROJECT_ROOT):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 sys.stderr.write("[APP] module-level execution started\n")
 sys.stderr.flush()
@@ -63,10 +67,9 @@ _auth_log.getLogger("ueba.startup").warning(
     f"[STARTUP] authenticated — reached data-load section at {_dt.datetime.now(_dt.timezone.utc).isoformat()}"
 )
 
-# Resolve the project root so config.py (at the root) is importable.
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
+# Project root (== _PROJECT_ROOT, already on sys.path from the top guard). Kept as
+# a named constant because the live-simulation control below references it.
+BASE_DIR = _PROJECT_ROOT
 
 # All path configuration is centralized in config.py.  Per-contributor
 # overrides live in paths.local.py (gitignored). See paths.local.example.py.
