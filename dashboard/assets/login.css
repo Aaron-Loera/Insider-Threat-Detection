@@ -1,0 +1,184 @@
+
+    <style>
+    /* ── Hide sidebar entirely on the login page ── */
+    [data-testid="stSidebar"],
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stExpandSidebarButton"] { display: none !important; }
+
+    /* ── Full-bleed black background ── */
+    html, body, [data-testid="stAppViewContainer"],
+    [data-testid="stMain"], .main {
+        background-color: #000000 !important;
+    }
+    /* Vertically + horizontally centre the login card */
+    [data-testid="stMain"] {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        min-height: 100vh !important;
+    }
+    .block-container {
+        padding: 24px 40px 36px 40px !important;
+        max-width: 460px !important;
+        width: 100% !important;
+        margin: 0 auto !important;
+        flex: none !important;
+        background: #0a0a0a;
+        border: 1px solid #1a1a1a;
+        border-top: 2px solid #e84545;
+    }
+
+    /* ── Input labels ── */
+    .block-container [data-testid="stTextInput"] label p {
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 10px !important;
+        font-weight: 600 !important;
+        letter-spacing: 2px !important;
+        text-transform: uppercase !important;
+        color: #555 !important;
+    }
+
+    /* ── Input fields ── */
+    .block-container [data-testid="stTextInput"] input {
+        background-color: #000000 !important;
+        border: 1px solid #2a2a2a !important;
+        border-radius: 0 !important;
+        color: #ffffff !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 13px !important;
+        padding: 10px 14px !important;
+        caret-color: #e84545 !important;
+        transition: border-color 0.15s ease !important;
+    }
+    .block-container [data-testid="stTextInput"] input:focus {
+        border-color: #e84545 !important;
+        box-shadow: none !important;
+        outline: none !important;
+    }
+    .block-container [data-testid="stTextInput"] input::placeholder {
+        color: #333 !important;
+    }
+    /* Hide "Press Enter to apply" helper on login inputs */
+    .block-container [data-testid="InputInstructions"] {
+        display: none !important;
+    }
+
+    /* ── Sign-in button (first column = red) ── */
+    div[data-testid="stColumn"]:nth-child(1) [data-testid="stButton"] button {
+        background-color: #e84545 !important;
+        border: none !important;
+        border-radius: 0 !important;
+        color: #ffffff !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 11px !important;
+        font-weight: 700 !important;
+        letter-spacing: 3px !important;
+        padding: 12px 0 !important;
+        width: 100% !important;
+        transition: background-color 0.15s ease !important;
+    }
+    div[data-testid="stColumn"]:nth-child(1) [data-testid="stButton"] button:hover {
+        background-color: #c73333 !important;
+    }
+    /* ── Demo Access button (second column = ghost/outline) ── */
+    div[data-testid="stColumn"]:nth-child(2) [data-testid="stButton"] button {
+        background-color: transparent !important;
+        border: 1px solid #333 !important;
+        border-radius: 0 !important;
+        color: #666 !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 10px !important;
+        font-weight: 600 !important;
+        letter-spacing: 2px !important;
+        padding: 12px 0 !important;
+        width: 100% !important;
+        transition: border-color 0.15s ease, color 0.15s ease !important;
+    }
+    div[data-testid="stColumn"]:nth-child(2) [data-testid="stButton"] button:hover {
+        border-color: #666 !important;
+        color: #aaa !important;
+    }
+
+    /* ── Error alert ── */
+    .block-container [data-testid="stNotificationContentError"],
+    .block-container .stAlert {
+        background-color: #1a0000 !important;
+        border: 1px solid #e84545 !important;
+        border-radius: 0 !important;
+        color: #ee8888 !important;
+        font-size: 12px !important;
+    }
+
+    /* ── Logo heading ── */
+    .login-logo-row {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 22px;
+    }
+    .login-logo-dsk {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: 2px;
+        color: #ffffff;
+        display: block;
+        line-height: 1;
+        white-space: nowrap;
+    }
+    .login-logo-sub {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 8px;
+        letter-spacing: 2px;
+        color: #444;
+        text-transform: uppercase;
+        margin-top: 5px;
+        display: block;
+    }
+    .login-divider {
+        border: none;
+        border-top: 1px solid #1a1a1a;
+        margin: 0 0 22px 0;
+    }
+    .login-heading {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        color: #444;
+        margin: 0 0 20px 0;
+    }
+    .login-footer {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 8px;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        color: #2a2a2a;
+        text-align: center;
+        margin-top: 24px;
+    }
+
+    /* ── Responsive: phones / small screens ── */
+    @media (max-width: 640px) {
+        .block-container {
+            max-width: 100% !important;
+            padding: 24px 18px 22px 18px !important;
+        }
+        .login-logo-row svg { width: 36px; height: 36px; }
+        .login-logo-dsk { font-size: 15px; letter-spacing: 1px; }
+        .login-logo-sub { font-size: 7px; letter-spacing: 1.5px; }
+        .login-heading  { font-size: 8px; letter-spacing: 2px; margin-bottom: 14px; }
+        .login-divider  { margin: 16px 0 18px 0; }
+        .login-footer   { font-size: 7px; margin-top: 18px; }
+        .block-container [data-testid="stTextInput"] input {
+            font-size: 12px !important;
+            padding: 9px 12px !important;
+        }
+        .block-container [data-testid="stButton"] button {
+            font-size: 10px !important;
+            padding: 10px 0 !important;
+        }
+    }
+    </style>
+    
