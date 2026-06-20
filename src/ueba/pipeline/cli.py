@@ -25,15 +25,15 @@ import sys
 def _build_parser() -> argparse.ArgumentParser:
     """
     Construct the CLI argument parser for the UEBA pipeline.
-    
+
     Sets up a command structure with one global "--version" flag, a required stage
     subcommand ("preprocess", "train-ae", "train-if", etc.) and stage-specific
     options (e.g., "--epochs" for "train-ae", "--split" for "explain"). Returns the
     fully wired parser, ready for `parse_args()` in `main()`.
-    
+
     Args:
         None:
-        
+
     Returns:
         argparse.ArgumentParser: Configured parser for the pipeline CLI.
     """
@@ -83,14 +83,14 @@ def _build_parser() -> argparse.ArgumentParser:
 def _stage_modules() -> dict:
     """
     Load and index all pipeline stage modules by their CLI command name.
-    
+
     Imports are performed lazily (inside the function) so the `UEBA_MODEL_VERSION` can
     be set in the environment before `ueba.config` loads its defaults. Returns a
     dictionary for quick lookup.
-    
+
     Args:
         None:
-        
+
     Returns:
         dict: Dictionary mapping stage names to stage module objects.
     """

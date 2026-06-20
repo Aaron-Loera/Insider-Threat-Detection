@@ -1,13 +1,20 @@
-﻿import sys
+﻿import os
+import sys
+
+# Ensure the dashboard directory is importable so `from db import …` resolves the
+# same way whether the app is launched by `streamlit run dashboard/app.py` (which
+# puts this dir on sys.path[0]) or headlessly via streamlit.testing.v1.AppTest
+# (which does not). Idempotent: a no-op once the path is present.
+_DASHBOARD_DIR = os.path.dirname(os.path.abspath(__file__))
+if _DASHBOARD_DIR not in sys.path:
+    sys.path.insert(0, _DASHBOARD_DIR)
 
 sys.stderr.write("[APP] module-level execution started\n")
 sys.stderr.flush()
-import ast as _ast
 import hashlib
 import hmac
 import html as _html_mod
 import json
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -1187,7 +1194,6 @@ def load_data():
     _log = _logging.getLogger("ueba.load_data")
     _log.warning("[load_data] started")
 
-    _BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     _MV = MODEL_VERSION
 
     # ── Serving layer ────────────────────────────────────────────────────────
@@ -1199,10 +1205,12 @@ def load_data():
     # Streamlit Community Cloud's 1 GB tier. The slim file peaks at ~0.65 GB.
     # Rebuild it with scripts/build_dashboard_dataset.py whenever v6b / the alert
     # table changes, then re-upload to the HF dataset repo.
-    _DASH_LOCAL_PATH = os.path.join(
-        _BASE, "processed_datasets", f"ueba_dataset_{_MV}",
-        f"ueba_dataset_{_MV}_dashboard.parquet",
-    )
+    #
+    # The local path comes from config.DASHBOARD_PARQUET (not __file__) so it
+    # honours UEBA_BASE_DIR — identical resolution under normal operation, but it
+    # lets the AppTest smoke harness point the app at a synthetic dataset tree.
+    import config as _config
+    _DASH_LOCAL_PATH = _config.DASHBOARD_PARQUET
     from ueba.serving.hf_io import get_dataset_file
     if not os.path.exists(_DASH_LOCAL_PATH):
         _log.warning("[load_data] downloading dashboard parquet from HuggingFace…")
@@ -1384,285 +1392,26 @@ CHANNELS = {k: [f for f in v if f in merged_df.columns] for k, v in CHANNELS.ite
 # Drop empty channels (dataset may not have all features)
 CHANNELS = {k: v for k, v in CHANNELS.items() if v}
 
-# Explicit channel→color mapping so each channel keeps its color regardless of which are present in filtered data
-CHANNEL_COLOR_MAP = {
-    "Authentication":  "#00b4d8",
-    "File Access":     "#e84545",
-    "Removable Media": "#d4a017",
-    "Email":           "#3a86a8",
-    "HTTP Activity":   "#9b59b6",
-    "PC Activity":     "#e67e22",
-}
-
 # user_risk is now pre-computed inside load_data() and cached
 
-
-# ──────────────────────────────────────────────────────────────
-# Plotly theme defaults
-# ──────────────────────────────────────────────────────────────
-
-PLOTLY_LAYOUT = dict(
-    template="plotly_dark",
-    paper_bgcolor="#000000",
-    plot_bgcolor="#0a0a0a",
-    font=dict(family="Inter, sans-serif", color="#999999", size=11),
-    margin=dict(l=40, r=20, t=40, b=40),
-    xaxis=dict(gridcolor="#1a1a1a", zerolinecolor="#1a1a1a"),
-    yaxis=dict(gridcolor="#1a1a1a", zerolinecolor="#1a1a1a"),
+# Theme constants (palette, Plotly defaults, plot caps) and the analyst-facing
+# label/summary helpers live in lib.* — imported here so the rest of app.py uses
+# the names unchanged. assign_band_from_percentile still comes from ueba.risk.
+from lib.labels import (
+    build_alert_summary,
+    parse_top_contributors,
+    parse_top_contributors_with_values,
+    prettify_feature_name,
+)
+from lib.theme import (
+    CHANNEL_COLOR_MAP,
+    MAX_PLOT_POINTS,
+    PLOTLY_LAYOUT,
+    RISK_COLORS,
+    RISK_TIERS,
 )
 
-RISK_TIERS = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
-RISK_COLORS = {"CRITICAL": "#bb44f0", "HIGH": "#e84545", "MEDIUM": "#d4a017", "LOW": "#3a86a8"}
-
-# ──────────────────────────────────────────────────────────────
-# Alert context helpers
-# ──────────────────────────────────────────────────────────────
-
-
-_FEATURE_LABELS: dict[str, str] = {
-    # ── Authentication ──
-    "off_hours_logon":                          "after-hours logon activity",
-    "off_hours_logon_count":                    "after-hours logon activity",
-    "logon_count":                              "elevated logon frequency",
-    # ── File activity ──
-    "file_open_count":                          "high file open activity",
-    "file_write_count":                         "file write activity",
-    "file_copy_count":                          "file copy activity",
-    "file_delete_count":                        "file deletion activity",
-    "unique_files_accessed":                    "access to many unique files",
-    "off_hours_files_accessed":                 "after-hours file access",
-    # ── USB ──
-    "usb_insert_count":                         "USB device insertion",
-    "usb_remove_count":                         "USB device removals",
-    "off_hours_usb_usage":                      "after-hours USB usage",
-    "usb_file_activity_flag":                   "USB-related file activity",
-    "jobsite_usb_activity_flag":                "job-site browsing combined with USB activity",
-    # ── Email ──
-    "emails_sent":                              "high email volume",
-    "unique_recipients":                        "many unique email recipients",
-    "external_emails":                          "external email activity",
-    "external_email_count":                     "external email activity",
-    "attachements_sent":                        "email attachment activity",
-    "attachments_sent":                         "email attachment activity",
-    "off_hours_emails":                         "after-hours email activity",
-    # ── Cross-channel flags ──
-    "off_hours_activity_flag":                  "off-hours behavioral anomalies",
-    "external_comm_activity_flag":              "external communication anomalies",
-    # ── HTTP / Web activity (raw counts) ──
-    "http_total_requests":                      "total web requests",
-    "http_visit_count":                         "web page visits",
-    "http_download_count":                      "web downloads",
-    "http_upload_count":                        "web uploads",
-    "http_jobsite_visits":                      "job-site website visits",
-    "http_cloud_storage_visits":                "cloud storage website visits",
-    "http_suspicious_site_visits":              "suspicious website visits",
-    "off_hours_http_requests":                  "after-hours HTTP activity",
-    "http_long_url_count":                      "long-URL HTTP activity",
-    "unique_domains_visited":                   "unique websites visited",
-    # ── HTTP cross-channel flags ──
-    "suspicious_upload_flag":                   "suspicious web upload activity",
-    "cloud_upload_flag":                        "cloud storage upload activity",
-    # ── Known z-score variants ──
-    "file_delete_count_zscore":                 "unusually high file deletion activity",
-    "file_write_count_zscore":                  "unusually high file write activity",
-    "file_copy_count_zscore":                   "unusually high file copy activity",
-    "file_open_count_zscore":                   "unusually high file open activity",
-    "unique_files_accessed_zscore":             "unusually high unique file access",
-    "off_hours_files_accessed_zscore":          "unusually high after-hours file access",
-    "off_hours_logon_zscore":                   "unusually high after-hours logon activity",
-    "http_long_url_count_zscore":               "unusually high long-URL HTTP activity",
-    "off_hours_http_requests_zscore":           "unusually high after-hours HTTP activity",
-    "attachments_sent_zscore":                  "unusually high attachment-sending activity",
-    "attachements_sent_zscore":                 "unusually high attachment-sending activity",
-    "external_emails_sent_zscore":              "unusually high external email activity",
-    "external_email_count_zscore":              "unusually high external email activity",
-    "emails_sent_zscore":                       "unusually high email volume",
-    "unique_recipients_zscore":                 "unusually high number of unique email recipients",
-    "usb_insert_count_zscore":                  "unusually high USB insertion activity",
-    "http_total_requests_zscore":               "unusually high web request volume",
-    "http_visit_count_zscore":                  "unusually high web browsing activity",
-    "http_download_count_zscore":               "unusually high web download activity",
-    "http_upload_count_zscore":                 "unusually high web upload activity",
-    "http_jobsite_visits_zscore":               "unusually high job-site browsing activity",
-    "http_cloud_storage_visits_zscore":         "unusually high cloud storage activity",
-    "http_suspicious_site_visits_zscore":       "unusually high suspicious site visits",
-    "unique_domains_visited_zscore":            "unusually high number of unique websites visited",
-    # ── Known rolling-delta variants ──
-    "file_delete_count_rolling_delta":          "sudden spike in file deletions",
-    "file_write_count_rolling_delta":           "sudden spike in file write activity",
-    "file_copy_count_rolling_delta":            "sudden spike in file copy activity",
-    "file_open_count_rolling_delta":            "sudden spike in file open activity",
-    "unique_files_accessed_rolling_delta":      "sudden increase in unique file access",
-    "off_hours_files_accessed_rolling_delta":   "sudden increase in after-hours file access",
-    "off_hours_logon_rolling_delta":            "sudden increase in after-hours logons",
-    "emails_sent_rolling_delta":                "sudden spike in email volume",
-    "external_emails_rolling_delta":            "sudden spike in external email activity",
-    "attachments_sent_rolling_delta":           "sudden spike in attachment-sending",
-    "attachements_sent_rolling_delta":          "sudden spike in attachment-sending",
-    "usb_insert_count_rolling_delta":           "sudden spike in USB device activity",
-    "http_requests_rolling_delta":              "sudden spike in HTTP requests",
-    "off_hours_http_requests_rolling_delta":    "sudden increase in after-hours HTTP activity",
-    "http_total_requests_rolling_delta":        "sudden spike in web requests",
-    "http_visit_count_rolling_delta":           "sudden spike in web browsing",
-    "http_download_count_rolling_delta":        "sudden spike in web downloads",
-    "http_upload_count_rolling_delta":          "sudden spike in web uploads",
-    "http_jobsite_visits_rolling_delta":        "sudden increase in job-site browsing",
-    "http_cloud_storage_visits_rolling_delta":  "sudden increase in cloud storage website visits",
-    "http_suspicious_site_visits_rolling_delta": "sudden increase in suspicious site visits",
-    "http_long_url_count_rolling_delta":        "sudden spike in long-URL HTTP activity",
-    "unique_domains_visited_rolling_delta":     "sudden increase in unique websites visited",
-}
-
-# Base-name phrases used by the pattern-matching fallback in prettify_feature_name()
-_BASE_LABELS: dict[str, str] = {
-    "file_delete_count":        "file deletions",
-    "file_write_count":         "file write activity",
-    "file_copy_count":          "file copy activity",
-    "file_open_count":          "file open activity",
-    "unique_files_accessed":    "unique file access",
-    "off_hours_files_accessed": "after-hours file access",
-    "off_hours_logon":          "after-hours logons",
-
-    "logon_count":              "logon frequency",
-    "logoff_count":             "logoff activity",
-    "external_emails":          "external email activity",
-    "external_email_count":     "external email activity",
-    "external_emails_sent":     "external email activity",
-    "http_long_url":            "long-URL HTTP activity",
-    "off_hours_http":           "after-hours HTTP activity",
-    "attachments_sent":         "attachment-sending activity",
-    "attachements_sent":        "attachment-sending",
-    "emails_sent":              "email volume",
-    "unique_recipients":        "unique email recipients",
-    "off_hours_emails":         "after-hours email activity",
-    "usb_insert_count":         "USB device activity",
-    "usb_remove_count":         "USB device removals",
-    "off_hours_usb_usage":      "after-hours USB usage",
-    "http_requests":            "HTTP requests",
-    "http_total_requests":          "web requests",
-    "http_visit_count":             "web page visits",
-    "http_download_count":          "web downloads",
-    "http_upload_count":            "web uploads",
-    "http_jobsite_visits":          "job-site browsing",
-    "http_cloud_storage_visits":    "cloud storage website visits",
-    "http_suspicious_site_visits":  "suspicious site visits",
-    "unique_domains_visited":       "unique websites visited",
-}
-
-
-def _humanize_base(base: str) -> str:
-    """Map a bare feature base name to a readable phrase for pattern-generated sentences."""
-    return _BASE_LABELS.get(base, base.replace("_", " "))
-
-
-def parse_top_contributors(raw) -> list[str]:
-    """Return a list of feature name strings from top_contributors, however it is stored."""
-    if raw is None:
-        return []
-    if isinstance(raw, float):
-        return []  # NaN from a left-join miss
-    if isinstance(raw, list):
-        names = []
-        for item in raw:
-            if isinstance(item, (list, tuple)) and len(item) >= 1:
-                names.append(str(item[0]))
-            elif isinstance(item, str):
-                names.append(item)
-        return names
-    if isinstance(raw, str):
-        raw = raw.strip()
-        if not raw:
-            return []
-        try:
-            parsed = _ast.literal_eval(raw)
-            if isinstance(parsed, list):
-                return parse_top_contributors(parsed)
-        except Exception:
-            pass
-    return []
-
-
-def parse_top_contributors_with_values(raw) -> list[tuple]:
-    """Return list of (feature_name, contribution_value) tuples from top_contributors."""
-    if raw is None:
-        return []
-    if isinstance(raw, float):
-        return []  # NaN from a left-join miss
-    if isinstance(raw, list):
-        pairs = []
-        for item in raw:
-            if isinstance(item, (list, tuple)) and len(item) >= 2:
-                pairs.append((str(item[0]), item[1]))
-            elif isinstance(item, (list, tuple)) and len(item) == 1:
-                pairs.append((str(item[0]), None))
-            elif isinstance(item, str):
-                pairs.append((item, None))
-        return pairs
-    if isinstance(raw, str):
-        raw = raw.strip()
-        if not raw:
-            return []
-        try:
-            parsed = _ast.literal_eval(raw)
-            if isinstance(parsed, list):
-                return parse_top_contributors_with_values(parsed)
-        except Exception:
-            pass
-    return []
-
-
-def prettify_feature_name(name: str) -> str:
-    """Convert a raw feature name to an analyst-readable investigation phrase."""
-    cleaned = name.strip().replace("contribution_", "")
-    # 1. Exact dictionary hit — covers flags, known features, and common variants
-    if cleaned in _FEATURE_LABELS:
-        return _FEATURE_LABELS[cleaned]
-    # 2. Pattern: z-score suffix → "unusually high <base>"
-    if cleaned.endswith("_zscore"):
-        base = cleaned[: -len("_zscore")]
-        return f"unusually high {_humanize_base(base)}"
-    # 3. Pattern: rolling-delta suffix → "sudden spike/increase in <base>"
-    if cleaned.endswith("_rolling_delta"):
-        base = cleaned[: -len("_rolling_delta")]
-        human = _humanize_base(base)
-        if base.endswith(("_count", "_sent")):
-            return f"sudden spike in {human}"
-        return f"sudden increase in {human}"
-    # 4. Last resort: replace underscores with spaces
-    return cleaned.replace("_", " ")
-
-
-def build_alert_summary(top_contributors_raw) -> str:
-    """
-    Return a short, analyst-friendly sentence describing the top contributing
-    behaviors for an alert. Shows up to 3 contributors; appends 'and additional
-    signals' when the full list contains more than 3 unique contributors.
-    """
-    features = parse_top_contributors(top_contributors_raw)
-    if not features:
-        return "No contributor detail available for this alert."
-
-    labels: list[str] = []
-    seen: set[str] = set()
-    for f in features:
-        lbl = prettify_feature_name(f)
-        if lbl not in seen:
-            seen.add(lbl)
-            labels.append(lbl)
-
-    has_more = len(labels) > 3
-    display = labels[:3]
-
-    if len(display) == 1:
-        return f"This alert is primarily driven by {display[0]}."
-
-    if len(display) == 2:
-        return f"This alert is mainly driven by {display[0]} and {display[1]}."
-
-    # Exactly 3 shown
-    body = f"{display[0]}, {display[1]}, and {display[2]}"
-    suffix = ", and additional signals" if has_more else ""
-    return f"This alert is mainly driven by {body}{suffix}."
+from ueba.risk import assign_band_from_percentile
 
 
 @st.cache_data(ttl=1, show_spinner=False)
@@ -1891,8 +1640,7 @@ with st.sidebar:
 
 # all_users, _DS_MIN, _DS_MAX are returned from load_data() — no per-rerun scan needed
 
-# Cap data points sent to Plotly — browser rendering is the main bottleneck
-MAX_PLOT_POINTS = 50_000
+# MAX_PLOT_POINTS (the Plotly downsample cap) is imported from lib.theme above.
 
 # ──────────────────────────────────────────────────────────────
 # Global filter state (persists across page navigations)
@@ -2500,7 +2248,7 @@ if active_page == "Overview":
 
     _overview_kpi_cards = [
         f"<div class='kpi-card' style='border-color:#ffffff'><h3>Users Monitored</h3><h1 style='color:#ffffff'>{total_users:,}</h1><p>Active in period</p></div>",
-        f"<div class='kpi-card' style='border-color:#ff1744'><h3>Critical Risk</h3><h1 style='color:#ff1744'>{critical_risk_users}</h1><p>&ge; 95th percentile</p></div>",
+        f"<div class='kpi-card' style='border-color:{RISK_COLORS['CRITICAL']}'><h3>Critical Risk</h3><h1 style='color:{RISK_COLORS['CRITICAL']}'>{critical_risk_users}</h1><p>&ge; 95th percentile</p></div>",
         f"<div class='kpi-card' style='border-color:#e84545'><h3>High Risk</h3><h1 style='color:#e84545'>{high_risk_users}</h1><p>&ge; 90th percentile</p></div>",
         f"<div class='kpi-card' style='border-color:#d4a017'><h3>Medium Risk</h3><h1 style='color:#d4a017'>{medium_risk_users}</h1><p>&ge; 80th percentile</p></div>",
         f"<div class='kpi-card' style='border-color:#666666'><h3>Total Records</h3><h1 style='color:#cccccc'>{total_records:,}</h1><p>User-day observations</p></div>",
@@ -2531,7 +2279,7 @@ if active_page == "Overview":
 
     _dc1, _dc2, _dc3, _dc4, _dc5 = st.columns(5)
     _dc1.markdown(f"<div class='kpi-card' style='border-color:#666666'><h3>Total Alerts</h3><h1 style='color:#cccccc'>{_disp_total:,}</h1><p>User-day records</p></div>", unsafe_allow_html=True)
-    _dc2.markdown(f"<div class='kpi-card' style='border-color:#ff1744'><h3>New</h3><h1 style='color:#ff1744'>{_disp_new:,}</h1><p>Awaiting triage</p></div>", unsafe_allow_html=True)
+    _dc2.markdown(f"<div class='kpi-card' style='border-color:{RISK_COLORS['CRITICAL']}'><h3>New</h3><h1 style='color:{RISK_COLORS['CRITICAL']}'>{_disp_new:,}</h1><p>Awaiting triage</p></div>", unsafe_allow_html=True)
     _dc3.markdown(f"<div class='kpi-card' style='border-color:#d4a017'><h3>Investigating</h3><h1 style='color:#d4a017'>{_disp_invest:,}</h1><p>In progress</p></div>", unsafe_allow_html=True)
     _dc4.markdown(f"<div class='kpi-card' style='border-color:#22c55e'><h3>Resolved</h3><h1 style='color:#22c55e'>{_disp_resolved:,}</h1><p>Closed — confirmed</p></div>", unsafe_allow_html=True)
     _dc5.markdown(f"<div class='kpi-card' style='border-color:#555555'><h3>Dismissed</h3><h1 style='color:#888888'>{_disp_dismissed:,}</h1><p>Closed — false positive</p></div>", unsafe_allow_html=True)
@@ -2586,19 +2334,9 @@ if active_page == "Overview":
             uid = row.user
             score = row.max_percentile
             days = row.critical_count + row.high_count
-            # Color badge based on score
-            if score >= 95:
-                badge_color = "#bb44f0"
-                badge_label = "CRITICAL"
-            elif score >= 90:
-                badge_color = "#e84545"
-                badge_label = "HIGH"
-            elif score >= 80:
-                badge_color = "#d4a017"
-                badge_label = "MEDIUM"
-            else:
-                badge_color = "#3a86a8"
-                badge_label = "LOW"
+            # Color badge based on percentile → shared band assignment / palette.
+            badge_label = assign_band_from_percentile(score)
+            badge_color = RISK_COLORS[badge_label]
 
             col_rank, col_info, col_btn = st.columns([1, 5, 3])
             with col_rank:
@@ -2798,13 +2536,13 @@ def _render_investigation_content() -> None:
 
     if _rs is not None:
         if _rs >= 0.85:
-            _rs_color, _rs_label = "#ff1744", f"{_rs:.2f} · Critical"
+            _rs_color, _rs_label = RISK_COLORS["CRITICAL"], f"{_rs:.2f} · Critical"
         elif _rs >= 0.70:
-            _rs_color, _rs_label = "#e84545", f"{_rs:.2f} · High"
+            _rs_color, _rs_label = RISK_COLORS["HIGH"], f"{_rs:.2f} · High"
         elif _rs >= 0.50:
-            _rs_color, _rs_label = "#d4a017", f"{_rs:.2f} · Medium"
+            _rs_color, _rs_label = RISK_COLORS["MEDIUM"], f"{_rs:.2f} · Medium"
         else:
-            _rs_color, _rs_label = "#3a86a8", f"{_rs:.2f} · Low"
+            _rs_color, _rs_label = RISK_COLORS["LOW"], f"{_rs:.2f} · Low"
     else:
         _rs_color, _rs_label = "#555", "—"
 
@@ -3595,18 +3333,12 @@ if active_page == "Alerts":
             else:
                 live_df["ui_composite_score"] = np.nan
 
-            # Assign risk bands from numeric composite score
+            # Assign risk bands from numeric composite score (shared assignment;
+            # NaN scores fall back to LOW).
             def assign_live_risk_band(score):
                 if pd.isna(score):
                     return "LOW"
-                score = float(score)
-                if score >= 95:
-                    return "CRITICAL"
-                elif score >= 90:
-                    return "HIGH"
-                elif score >= 80:
-                    return "MEDIUM"
-                return "LOW"
+                return assign_band_from_percentile(float(score))
 
             live_df["ui_risk_band"] = live_df["ui_composite_score"].apply(assign_live_risk_band)
             _live_risk_counts = {
@@ -3841,18 +3573,8 @@ if active_page == "Alerts":
                 uid = row.user
                 score = row.max_percentile
                 days = int(row.critical_count + row.high_count)
-                if score >= 95:
-                    badge_color = "#bb44f0"
-                    badge_label = "CRITICAL"
-                elif score >= 90:
-                    badge_color = "#e84545"
-                    badge_label = "HIGH"
-                elif score >= 80:
-                    badge_color = "#d4a017"
-                    badge_label = "MEDIUM"
-                else:
-                    badge_color = "#3a86a8"
-                    badge_label = "LOW"
+                badge_label = assign_band_from_percentile(score)
+                badge_color = RISK_COLORS[badge_label]
 
                 col_rank, col_info, col_btn = st.columns([1, 5, 3])
                 with col_rank:

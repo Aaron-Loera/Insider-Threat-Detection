@@ -19,9 +19,11 @@ import numpy as np
 # Lowest → highest severity. Index position is used for vectorized banding.
 BAND_ORDER: tuple[str, ...] = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
 
-# Canonical dashboard palette (see CLAUDE.md "Risk Scoring").
+# Canonical dashboard palette (see CLAUDE.md "Risk Scoring"). CRITICAL is purple
+# (#bb44f0), matching the dashboard's alert badges — the single source of truth
+# every component imports from.
 BAND_COLORS: dict[str, str] = {
-    "CRITICAL": "#ff1744",
+    "CRITICAL": "#bb44f0",
     "HIGH": "#e84545",
     "MEDIUM": "#d4a017",
     "LOW": "#3a86a8",

@@ -131,3 +131,15 @@ def test_percentile_rank_ties_count_strictly_below():
 def test_band_order_and_colors_cover_all_bands():
     assert risk_bands.BAND_ORDER == ("LOW", "MEDIUM", "HIGH", "CRITICAL")
     assert set(risk_bands.BAND_COLORS) == set(risk_bands.BAND_ORDER)
+
+
+def test_band_colors_are_canonical():
+    # Pins the unified palette (Phase 7.1b): CRITICAL is purple, not the old red.
+    # The dashboard imports these verbatim, so a regression here would silently
+    # change every band color in the UI.
+    assert risk_bands.BAND_COLORS == {
+        "CRITICAL": "#bb44f0",
+        "HIGH": "#e84545",
+        "MEDIUM": "#d4a017",
+        "LOW": "#3a86a8",
+    }
