@@ -12,13 +12,13 @@ import subprocess
 import time
 from pathlib import Path
 
-from PIL import Image
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from db import get_all_dispositions, init_db, upsert_disposition
+from PIL import Image
 
 ALERT_STATUS_OPTIONS = ["NEW", "INVESTIGATING", "RESOLVED", "DISMISSED"]
 
@@ -1050,8 +1050,6 @@ if BASE_DIR not in sys.path:
 # overrides live in paths.local.py (gitignored). See paths.local.example.py.
 from config import (
     ANALYST_TABLE_PARQUET,
-    HF_DATASET_BASE_URL,
-    HF_DATASET_REPO,
     LIVE_OUTPUT,
     LIVE_PAUSE_FLAG,
     LIVE_SIM_SCRIPT,
@@ -1098,8 +1096,6 @@ def _load_user_detail_df(user: str) -> "pd.DataFrame":
             The full 193 MB analyst parquet is NEVER loaded on cloud — each
             user file is independently tiny, making the download cost negligible.
     """
-    _HF_REPO = HF_DATASET_REPO
-    _hf_token = _secrets_section("huggingface").get("token", None)
     _DETAIL_COLS = ["user", "day", "top_contributors", "explanation"]
     safe = str(user).replace("/", "_").replace("\\", "_")
 
@@ -1114,8 +1110,9 @@ def _load_user_detail_df(user: str) -> "pd.DataFrame":
             return tbl.to_pandas()
         else:
             # Per-user file: ~46 KB download regardless of total dataset size
-            url = f"hf://datasets/{_HF_REPO}/details/{safe}.parquet"
-            return pd.read_parquet(url, storage_options={"token": _hf_token})
+            from ueba.serving.hf_io import get_dataset_file
+            path = get_dataset_file(f"details/{safe}.parquet")
+            return pd.read_parquet(path)
     except Exception as _e:
         import logging as _logging
         _logging.getLogger(__name__).warning("_load_user_detail_df(%s) failed: %s", user, _e)
@@ -1202,37 +1199,18 @@ def load_data():
     # Streamlit Community Cloud's 1 GB tier. The slim file peaks at ~0.65 GB.
     # Rebuild it with scripts/build_dashboard_dataset.py whenever v6b / the alert
     # table changes, then re-upload to the HF dataset repo.
-    _DASH_PATH = os.path.join(
+    _DASH_LOCAL_PATH = os.path.join(
         _BASE, "processed_datasets", f"ueba_dataset_{_MV}",
         f"ueba_dataset_{_MV}_dashboard.parquet",
     )
-    _DASH_URL = f"{HF_DATASET_BASE_URL}/ueba_dataset_{_MV}_dashboard.parquet"
-
-    def _fetch(local_path, url, token=None):
-        import urllib.request
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        _log.warning(f"[load_data] downloading {os.path.basename(local_path)} from HuggingFace…")
-        req = urllib.request.Request(url)
-        if token:
-            req.add_header("Authorization", f"Bearer {token}")
-        _tmp = local_path + ".part"
-        try:
-            with urllib.request.urlopen(req) as resp, open(_tmp, "wb") as fh:
-                while True:
-                    chunk = resp.read(1 << 20)
-                    if not chunk:
-                        break
-                    fh.write(chunk)
-            os.replace(_tmp, local_path)
-        except Exception:
-            if os.path.exists(_tmp):
-                os.remove(_tmp)
-            raise
-        _log.warning(f"[load_data] saved {local_path}")
-
-    if not os.path.exists(_DASH_PATH):
-        _hf_token_dl = _secrets_section("huggingface").get("token", None)
-        _fetch(_DASH_PATH, _DASH_URL, token=_hf_token_dl)
+    from ueba.serving.hf_io import get_dataset_file
+    if not os.path.exists(_DASH_LOCAL_PATH):
+        _log.warning("[load_data] downloading dashboard parquet from HuggingFace…")
+    _DASH_PATH = get_dataset_file(
+        f"ueba_dataset_{_MV}_dashboard.parquet",
+        version=_MV,
+        local_path=_DASH_LOCAL_PATH,
+    )
 
     def _downcast(df):
         for col in df.select_dtypes(include=["float64"]).columns:

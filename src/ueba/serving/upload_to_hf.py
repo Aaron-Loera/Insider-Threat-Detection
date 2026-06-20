@@ -9,7 +9,8 @@ Usage:
 
 Both repos must already exist on HuggingFace before running.
 Repo defaults are derived from --version so no edits are needed for future versions.
-After a successful upload, update dashboard/app.py _HF_BASE to point at the dataset repo.
+No code changes are needed after upload — ueba.serving.hf_io derives the
+dataset/model repo IDs from config.MODEL_VERSION at read time.
 """
 import argparse
 import glob as _glob
@@ -92,13 +93,12 @@ def _build_manifest(V: str) -> list[tuple[str, str, bool, str]]:
 
     return [
         # ── Dataset repo ────────────────────────────────────────────────────
-        # Dashboard data — required for app.py fallback download
+        # Dashboard serving layer — required, this is the only file load_data() reads
+        (os.path.join(ds_dir, f"ueba_dataset_{V}_dashboard.parquet"),
+         f"ueba_dataset_{V}_dashboard.parquet",         True,  _DATASET),
+        # Full alert table — required for app.py / live_replay.py fallback download
         (config.ANALYST_TABLE_PARQUET,
          f"alert_table_{V}.parquet",                    True,  _DATASET),
-        (config.CALIB_ALERT_TABLE_PARQUET,
-         f"alert_table_{V}_calib.parquet",              False, _DATASET),
-        (os.path.join(ds_dir, f"ueba_dataset_{V}b.parquet"),
-         f"ueba_dataset_{V}b.parquet",                  True,  _DATASET),
 
         # Dataset splits
         (config.UEBA_PATH,
@@ -268,13 +268,12 @@ def _run(args: argparse.Namespace) -> None:
     print(f"\nUploaded {uploaded_ds} file(s) to dataset repo  : {dataset_repo}")
     if not args.skip_model_repo:
         print(f"Uploaded {uploaded_model} file(s) to model repo    : {model_repo}")
-    print(
-        f"\nNext steps:"
-        f"\n  1. Update dashboard/app.py _HF_BASE to:"
-        f"\n       https://huggingface.co/datasets/{dataset_repo}/resolve/main"
-        f"\n  2. Update live_simulation.py / config.py HF model base to:"
-        f"\n       https://huggingface.co/{model_repo}/resolve/main"
-    )
+    if dataset_repo != f"{_HF_ORG}/ueba-v{V}" or model_repo != f"{_HF_ORG}/ueba-models-v{V}":
+        print(
+            "\nNote: you uploaded to a non-default repo. ueba.serving.hf_io derives repo IDs "
+            "from HF_ORG/MODEL_VERSION — set HF_DATASET_REPO / HF_MODEL_REPO in paths.local.py "
+            "to point reads at these repos."
+        )
 
 
 def main() -> None:

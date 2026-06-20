@@ -28,7 +28,8 @@ Usage
     python scripts/build_dashboard_dataset.py            # version from config
     python scripts/build_dashboard_dataset.py --version 6
 
-After building, upload it with ``scripts/upload_dashboard_dataset.py`` and redeploy.
+After building, upload it (along with the rest of the v6 manifest) with
+``scripts/upload_to_hf.py`` and redeploy.
 """
 from __future__ import annotations
 
@@ -155,7 +156,7 @@ def main() -> None:
     pq.write_table(pa.Table.from_pandas(merged, preserve_index=False), tmp, compression="zstd")
     os.replace(tmp, out)
     print(f"Wrote {out}  ({os.path.getsize(out)/1e6:.1f} MB, {len(merged.columns)} cols)")
-    print("Next: python scripts/upload_dashboard_dataset.py --version", mv)
+    print("Next: python scripts/upload_to_hf.py --version", mv)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
-"""python -m ueba.pipeline — headless, reproducible ML pipeline.
+"""
+python -m ueba.pipeline — headless, reproducible ML pipeline.
 
 Stages (in dependency order):
 
@@ -16,21 +17,39 @@ Every stage validates its inputs through the manifest: a missing artifact is
 a hard error naming the producing stage, never a silent skip. `--version N`
 re-points every derived path (sets UEBA_MODEL_VERSION before config loads).
 """
-
 import argparse
 import os
 import sys
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """
+    Construct the CLI argument parser for the UEBA pipeline.
+    
+    Sets up a command structure with one global "--version" flag, a required stage
+    subcommand ("preprocess", "train-ae", "train-if", etc.) and stage-specific
+    options (e.g., "--epochs" for "train-ae", "--split" for "explain"). Returns the
+    fully wired parser, ready for `parse_args()` in `main()`.
+    
+    Args:
+        None:
+        
+    Returns:
+        argparse.ArgumentParser: Configured parser for the pipeline CLI.
+    """
+    # Create root parser
     parser = argparse.ArgumentParser(
         prog="python -m ueba.pipeline",
         description="UEBA insider-threat detection pipeline",
     )
+
+    # Register global "--version" flag
     parser.add_argument("--version", default=None, help="model/dataset version (default: config.MODEL_VERSION)")
+
+    # Create subparsers
     sub = parser.add_subparsers(dest="stage", required=True)
 
-    sub.add_parser("preprocess", help="raw CERT logs -> feature datasets + splits")
+    sub.add_parser("preprocess", help="raw CERT logs -> feature datasets and splits")
 
     p = sub.add_parser("train-ae", help="train the autoencoder")
     p.add_argument("--epochs", type=int, default=100)
@@ -40,17 +59,19 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("explain", help="build a reconstruction-error table")
     p.add_argument("--split", choices=["train", "test_stream"], default="train")
 
-    p = sub.add_parser("calibrate", help="clean baselines + absolute band thresholds")
+    p = sub.add_parser("calibrate", help="clean baselines and absolute band thresholds")
     p.add_argument(
-        "--thresholds-only", action="store_true",
-        help="derive thresholds from the existing baseline .npy files without rescoring",
+        "--thresholds-only",
+        action="store_true",
+        help="derive thresholds from the existing baseline .npy files without re-scoring"
     )
 
-    p = sub.add_parser("build-alerts", help="build alert tables + cases")
+    p = sub.add_parser("build-alerts", help="build alert tables and cases")
     p.add_argument("--split", choices=["main", "calib", "test"], default="main")
     p.add_argument(
-        "--allow-missing", action="store_true",
-        help="escape hatch: proceed despite missing inputs (the historical silent-skip behavior, made explicit)",
+        "--allow-missing",
+        action="store_true",
+        help="escape hatch: proceed despite missing inputs (the historical silent-skip behavior, made explicit)"
     )
 
     sub.add_parser("build-dashboard", help="build the slim dashboard serving parquet")
@@ -59,8 +80,21 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _stage_modules():
-    # Imported lazily so UEBA_MODEL_VERSION is set before ueba.config loads.
+def _stage_modules() -> dict:
+    """
+    Load and index all pipeline stage modules by their CLI command name.
+    
+    Imports are performed lazily (inside the function) so the `UEBA_MODEL_VERSION` can
+    be set in the environment before `ueba.config` loads its defaults. Returns a
+    dictionary for quick lookup.
+    
+    Args:
+        None:
+        
+    Returns:
+        dict: Dictionary mapping stage names to stage module objects.
+    """
+    # Lazily import so "UEBA_MODEL_VERSION" is set before ueba.config loads
     from ueba.pipeline.stages import (
         build_alerts,
         build_dashboard,
@@ -83,12 +117,14 @@ def _stage_modules():
 
 
 def _run_status() -> int:
+    # Import manifest validation and stage modules
     from ueba import config
     from ueba.pipeline import manifest
 
     modules = _stage_modules()
     print(f"Pipeline status — model version {config.MODEL_VERSION}  (root: {config.BASE_DIR})\n")
 
+    # Build a list of file paths each stage should produce
     checks: list[tuple[str, list[str]]] = [
         ("preprocess", modules["preprocess"].produces()),
         ("train-ae", modules["train-ae"].produces()),
