@@ -1,0 +1,119 @@
+{
+  "contamination": "auto",
+  "baseline_percentile_thresholds": {
+    "80": 0.4080686928296841,
+    "90": 0.4942601434291216,
+    "95": 0.56870250928891
+  },
+  "resubstitution_diagnostics": {
+    "separation_ratio": 1.6612664027951822,
+    "roc_auc": 0.9581608331946514,
+    "avg_precision": 0.056840688023821404,
+    "recall_at_percentile": {
+      "80": 1.0,
+      "90": 0.9444444444444444,
+      "95": 0.5555555555555556
+    }
+  },
+  "calibration": {
+    "separation_ratio": 1.0924190982066073,
+    "roc_auc": 0.559429419266676,
+    "avg_precision": 0.0005376497705791454,
+    "recall_at_percentile": {
+      "80": 0.3695652173913043,
+      "90": 0.1956521739130435,
+      "95": 0.08695652173913043
+    },
+    "confusion_matrix": {
+      "80": {
+        "TN": 108291,
+        "FP": 27121,
+        "FN": 29,
+        "TP": 17,
+        "precision": 0.0006264278870955855,
+        "recall": 0.3695652173913043,
+        "fpr": 0.2002850559773137
+      },
+      "90": {
+        "TN": 121864,
+        "FP": 13548,
+        "FN": 37,
+        "TP": 9,
+        "precision": 0.0006638636866563399,
+        "recall": 0.1956521739130435,
+        "fpr": 0.10005021711517444
+      },
+      "95": {
+        "TN": 128641,
+        "FP": 6771,
+        "FN": 42,
+        "TP": 4,
+        "precision": 0.0005904059040590406,
+        "recall": 0.08695652173913043,
+        "fpr": 0.050002953947951435
+      }
+    },
+    "precision_at_recall": {
+      "0.22": 0.0009326493904470055,
+      "0.5": 0.0005444342072200352,
+      "0.8": 0.00034374194354819807
+    },
+    "user_detection_rate": {
+      "80": {
+        "detected": 2,
+        "total_insiders": 2,
+        "rate": 1.0
+      },
+      "90": {
+        "detected": 2,
+        "total_insiders": 2,
+        "rate": 1.0
+      },
+      "95": {
+        "detected": 2,
+        "total_insiders": 2,
+        "rate": 1.0
+      }
+    },
+    "alert_volume": {
+      "80": {
+        "total_flagged": 27138,
+        "alerts_per_day": 532.1176470588235,
+        "true_positives": 17,
+        "alert_precision": 0.0006264278870955855
+      },
+      "90": {
+        "total_flagged": 13557,
+        "alerts_per_day": 265.8235294117647,
+        "true_positives": 9,
+        "alert_precision": 0.0006638636866563399
+      },
+      "95": {
+        "total_flagged": 6775,
+        "alerts_per_day": 132.84313725490196,
+        "true_positives": 4,
+        "alert_precision": 0.0005904059040590406
+      }
+    },
+    "time_to_first_alert": {
+      "cmp2946": {
+        "first_alert_day": "2011-03-01 00:00:00",
+        "threat_start": "2011-02-07 00:00:00",
+        "days_delta": 22,
+        "in_window": true,
+        "peak_score": 0.5733952924367813
+      },
+      "cde1846": {
+        "first_alert_day": "2011-02-21 00:00:00",
+        "threat_start": "2011-02-21 00:00:00",
+        "days_delta": 0,
+        "in_window": true,
+        "peak_score": 0.6767675615108241
+      }
+    },
+    "score_distribution_shift": {
+      "ks_statistic": 0.0003766254715447115,
+      "p_value": 1.0
+    }
+  }
+}

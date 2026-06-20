@@ -12,13 +12,13 @@ import subprocess
 import time
 from pathlib import Path
 
-from PIL import Image
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from db import get_all_dispositions, init_db, upsert_disposition
+from PIL import Image
 
 ALERT_STATUS_OPTIONS = ["NEW", "INVESTIGATING", "RESOLVED", "DISMISSED"]
 
