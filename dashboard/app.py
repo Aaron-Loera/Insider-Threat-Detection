@@ -2624,6 +2624,7 @@ if active_page == "Overview":
             with col_btn:
                 if st.button("Investigate →", key=f"inv_btn_{uid}", use_container_width=True):
                     st.session_state["inv_user_select"] = uid
+                    st.session_state.pop("inv_alert_context", None)
                     st.session_state["_nav_request"] = "Investigation"
                     st.rerun()
             st.markdown("<div style='border-bottom:1px solid #111;margin:0;'></div>", unsafe_allow_html=True)
@@ -2837,166 +2838,10 @@ def _render_investigation_content() -> None:
         unsafe_allow_html=True,
     )
 
-    # ── Alert History ──
-    _ah_disps = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
-
-    _FEAT_CHANNEL: dict[str, str] = {}
-    for _ch, _ch_feats in CHANNELS.items():
-        for _f in _ch_feats:
-            _FEAT_CHANNEL[_f] = _ch
-
-    _DISP_COLORS = {
-        "NEW":           "#3a86a8",
-        "INVESTIGATING": "#d4a017",
-        "RESOLVED":      "#2ec27e",
-        "DISMISSED":     "#555555",
-    }
-
-    def _threat_cats(tc_raw) -> list[str]:
-        feats = parse_top_contributors(tc_raw)
-        seen: set[str] = set()
-        cats: list[str] = []
-        for f in feats:
-            base = f.replace("_zscore", "").replace("_rolling_delta", "")
-            ch = _FEAT_CHANNEL.get(f) or _FEAT_CHANNEL.get(base)
-            if ch is None and (f in CROSS_FLAGS or base in CROSS_FLAGS):
-                ch = "Cross-Channel"
-            if ch and ch not in seen:
-                seen.add(ch)
-                cats.append(ch)
-        return cats
-
-    _ah_rows_df = _all_u_rows.sort_values("day", ascending=False).reset_index(drop=True)
-    section_header("Alert History", "sh_alert_history")
-
-    _AH_PAGE_SIZE = 10
-    _ah_total = len(_ah_rows_df)
-    _ah_total_pages = max(1, (_ah_total + _AH_PAGE_SIZE - 1) // _AH_PAGE_SIZE)
-
-    _ah_page_key = f"ah_page_{_user}"
-    if _ah_page_key not in st.session_state or st.session_state.get("_ah_last_user") != _user:
-        st.session_state[_ah_page_key] = 0
-    st.session_state["_ah_last_user"] = _user
-
-    _ah_page = st.session_state[_ah_page_key]
-    _ah_slice = _ah_rows_df.iloc[_ah_page * _AH_PAGE_SIZE : (_ah_page + 1) * _AH_PAGE_SIZE]
-
-    def _cat_badge(cat: str) -> str:
-        c = CHANNEL_COLOR_MAP.get(cat, "#bb44f0")
-        return (
-            f"<span style='background:{c}22;color:{c};font-size:9px;"
-            f"font-family:JetBrains Mono,monospace;letter-spacing:0.8px;"
-            f"padding:1px 5px;border:1px solid {c}55;margin-right:3px;"
-            f"white-space:nowrap;display:inline-block;'>{cat}</span>"
-        )
-
-    _ah_tbody_parts: list[str] = []
-    for _, _ahr in _ah_slice.iterrows():
-        _ahr_day = _ahr["day"]
-        _ahr_day_str = _ahr_day.strftime("%Y-%m-%d") if hasattr(_ahr_day, "strftime") else str(_ahr_day)
-        _ahr_risk = str(_ahr.get("ae_risk_band", "")).upper()
-        _ahr_pctl = float(_ahr.get("ae_percentile_rank", 0.0))
-        _ahr_rc = RISK_COLORS.get(_ahr_risk, "#666666")
-        _ahr_cats = _threat_cats(_ahr.get("top_contributors"))
-        _ahr_disp = _ah_disps.get((_ahr["user"], _ahr_day_str), "NEW")
-        _ahr_dc = _DISP_COLORS.get(_ahr_disp, "#555555")
-
-        _ahr_cat_html = (
-            "".join(_cat_badge(c) for c in _ahr_cats)
-            if _ahr_cats
-            else "<span style='color:#444;font-family:JetBrains Mono,monospace;font-size:11px;'>—</span>"
-        )
-
-        _ah_tbody_parts.append(
-            "<tr>"
-            f"<td style='font-family:JetBrains Mono,monospace;font-size:11px;color:#aaa;"
-            f"padding:8px 16px 8px 0;border-bottom:1px solid #0f0f0f;white-space:nowrap;"
-            f"vertical-align:middle;'>{_ahr_day_str}</td>"
-            f"<td style='padding:8px 16px 8px 0;border-bottom:1px solid #0f0f0f;"
-            f"white-space:nowrap;vertical-align:middle;'>"
-            f"<span style='background:{_ahr_rc}22;color:{_ahr_rc};font-size:9px;"
-            f"font-family:JetBrains Mono,monospace;letter-spacing:1px;"
-            f"padding:2px 6px;border:1px solid {_ahr_rc}55;'>{_ahr_risk}</span></td>"
-            f"<td style='font-family:JetBrains Mono,monospace;font-size:11px;color:{_ahr_rc};"
-            f"padding:8px 16px 8px 0;border-bottom:1px solid #0f0f0f;white-space:nowrap;"
-            f"vertical-align:middle;'>P{_ahr_pctl:.1f}</td>"
-            f"<td style='padding:8px 16px 8px 0;border-bottom:1px solid #0f0f0f;"
-            f"min-width:200px;vertical-align:middle;'>{_ahr_cat_html}</td>"
-            f"<td style='padding:8px 0 8px 0;border-bottom:1px solid #0f0f0f;"
-            f"white-space:nowrap;vertical-align:middle;'>"
-            f"<span style='background:{_ahr_dc}22;color:{_ahr_dc};font-size:9px;"
-            f"font-family:JetBrains Mono,monospace;letter-spacing:1px;"
-            f"padding:2px 6px;border:1px solid {_ahr_dc}55;'>{_ahr_disp}</span></td>"
-            "</tr>"
-        )
-
-    _ah_th = (
-        "font-family:JetBrains Mono,monospace;font-size:10px;font-weight:600;"
-        "color:#555;text-transform:uppercase;letter-spacing:1.2px;"
-        "padding-bottom:10px;padding-right:16px;border-bottom:1px solid #1a1a1a;"
-    )
-    st.markdown(
-        "<div style='background:#0a0a0a;border:1px solid #1c1c1c;padding:14px 18px 10px 18px;"
-        "margin:0 0 4px 0;overflow-x:auto;-webkit-overflow-scrolling:touch;'>"
-        "<table style='width:100%;border-collapse:collapse;min-width:600px;'>"
-        "<thead><tr>"
-        f"<th style='{_ah_th}'>Day</th>"
-        f"<th style='{_ah_th}'>Risk</th>"
-        f"<th style='{_ah_th}'>AE Pctl</th>"
-        f"<th style='{_ah_th}'>Threat Categories</th>"
-        f"<th style='{_ah_th.replace('padding-right:16px;', 'padding-right:0;')}'>Disposition</th>"
-        "</tr></thead>"
-        f"<tbody>{''.join(_ah_tbody_parts)}</tbody>"
-        "</table></div>",
-        unsafe_allow_html=True,
-    )
-
-    _ah_pg_left, _ah_pg_mid, _ah_pg_right = st.columns([1, 4, 1])
-    _ah_start = _ah_page * _AH_PAGE_SIZE + 1
-    _ah_end = min(_ah_start + _AH_PAGE_SIZE - 1, _ah_total)
-    with _ah_pg_left:
-        if st.button("← Previous", key="ah_prev", disabled=(_ah_page == 0), use_container_width=True):
-            st.session_state[_ah_page_key] -= 1
-            st.rerun()
-    with _ah_pg_mid:
-        st.markdown(
-            f"<div style='text-align:center;font-family:JetBrains Mono,monospace;font-size:11px;"
-            f"color:#555;padding-top:6px;'>{_ah_start}–{_ah_end} of {_ah_total}</div>",
-            unsafe_allow_html=True,
-        )
-    with _ah_pg_right:
-        if st.button("Next →", key="ah_next", disabled=(_ah_page >= _ah_total_pages - 1), use_container_width=True):
-            st.session_state[_ah_page_key] += 1
-            st.rerun()
-
-    # ── User KPI Row ──
-    u1, u2, u3, u4, u5, u6 = st.columns(6)
-    u_max_pctl = user_data["ae_percentile_rank"].max()
-    u_crit_days = (user_data["ae_risk_band"] == "CRITICAL").sum()
-    u_high_days = (user_data["ae_risk_band"] == "HIGH").sum()
-    u_med_days = (user_data["ae_risk_band"] == "MEDIUM").sum()
-    u_total_days = len(user_data)
-
-    # Determine overall user risk label
-    if u_max_pctl >= 95:
-        u_risk_label = "CRITICAL"
-    elif u_max_pctl >= 90:
-        u_risk_label = "HIGH"
-    elif u_max_pctl >= 80:
-        u_risk_label = "MEDIUM"
-    else:
-        u_risk_label = "LOW"
-
-    u1.metric("Overall Risk", u_risk_label)
-    u2.metric("Peak Percentile", f"{u_max_pctl:.1f}")
-    u3.metric("Critical-Risk Days", u_crit_days)
-    u4.metric("High-Risk Days", u_high_days)
-    u5.metric("Medium-Risk Days", u_med_days)
-    u6.metric("Days Observed", u_total_days)
-
-    # ── Alert Context Summary (shown when navigating from Alerts tab) ──
+    # ── Alert Under Investigation (navigated from Alerts tab) ──
     _alert_ctx = st.session_state.get("inv_alert_context")
     if _alert_ctx and _alert_ctx.get("user") == _user:
+        section_header("Alert Under Investigation", "sh_alert_investigated")
         _ctx_risk = _alert_ctx.get("risk", "")
         _ctx_risk_color = RISK_COLORS.get(_ctx_risk, "#666666")
         _ctx_day = _alert_ctx.get("day", "")
@@ -3027,9 +2872,9 @@ def _render_investigation_content() -> None:
         _ALERT_RECORD_FIELDS = [
             ("user",               "User"),
             ("day",                "Day"),
-            ("risk_levels",        "AE Risk Band"),
-            ("ae_percentile_rank",    "AE Percentile"),
-            ("anomaly_scores",     "IF Score"),
+            ("ae_risk_band",       "AE Risk Band"),
+            ("ae_percentile_rank", "AE Percentile"),
+            ("if_anomaly_score",   "IF Score"),
             ("if_percentile_rank", "IF Percentile"),
             ("if_risk_band",       "IF Risk Band"),
         ]
@@ -3045,7 +2890,7 @@ def _render_investigation_content() -> None:
             except (TypeError, ValueError, OverflowError):
                 return str(val)
 
-        _BADGE_COLS = {"risk_levels", "if_risk_band"}
+        _BADGE_COLS = {"ae_risk_band", "if_risk_band"}
         _kv_parts = []
         if not _raw_row.empty:
             _rec0 = _raw_row.iloc[0]
@@ -3204,6 +3049,163 @@ def _render_investigation_content() -> None:
                     unsafe_allow_html=True,
                 )
 
+    # ── Alert History ──
+    _ah_disps = {(r["user"], r["day"]): r["status"] for r in get_all_dispositions()}
+
+    _FEAT_CHANNEL: dict[str, str] = {}
+    for _ch, _ch_feats in CHANNELS.items():
+        for _f in _ch_feats:
+            _FEAT_CHANNEL[_f] = _ch
+
+    _DISP_COLORS = {
+        "NEW":           "#3a86a8",
+        "INVESTIGATING": "#d4a017",
+        "RESOLVED":      "#2ec27e",
+        "DISMISSED":     "#555555",
+    }
+
+    def _threat_cats(tc_raw) -> list[str]:
+        feats = parse_top_contributors(tc_raw)
+        seen: set[str] = set()
+        cats: list[str] = []
+        for f in feats:
+            base = f.replace("_zscore", "").replace("_rolling_delta", "")
+            ch = _FEAT_CHANNEL.get(f) or _FEAT_CHANNEL.get(base)
+            if ch is None and (f in CROSS_FLAGS or base in CROSS_FLAGS):
+                ch = "Cross-Channel"
+            if ch and ch not in seen:
+                seen.add(ch)
+                cats.append(ch)
+        return cats
+
+    _ah_rows_df = _all_u_rows.sort_values("day", ascending=False).reset_index(drop=True)
+    section_header("Alert History", "sh_alert_history")
+
+    _AH_PAGE_SIZE = 10
+    _ah_total = len(_ah_rows_df)
+    _ah_total_pages = max(1, (_ah_total + _AH_PAGE_SIZE - 1) // _AH_PAGE_SIZE)
+
+    _ah_page_key = f"ah_page_{_user}"
+    if _ah_page_key not in st.session_state or st.session_state.get("_ah_last_user") != _user:
+        st.session_state[_ah_page_key] = 0
+    st.session_state["_ah_last_user"] = _user
+
+    _ah_page = st.session_state[_ah_page_key]
+    _ah_slice = _ah_rows_df.iloc[_ah_page * _AH_PAGE_SIZE : (_ah_page + 1) * _AH_PAGE_SIZE]
+
+    def _cat_badge(cat: str) -> str:
+        c = CHANNEL_COLOR_MAP.get(cat, "#bb44f0")
+        return (
+            f"<span style='background:{c}22;color:{c};font-size:9px;"
+            f"font-family:JetBrains Mono,monospace;letter-spacing:0.8px;"
+            f"padding:1px 5px;border:1px solid {c}55;margin-right:3px;"
+            f"white-space:nowrap;display:inline-block;'>{cat}</span>"
+        )
+
+    _ah_tbody_parts: list[str] = []
+    for _, _ahr in _ah_slice.iterrows():
+        _ahr_day = _ahr["day"]
+        _ahr_day_str = _ahr_day.strftime("%Y-%m-%d") if hasattr(_ahr_day, "strftime") else str(_ahr_day)
+        _ahr_risk = str(_ahr.get("ae_risk_band", "")).upper()
+        _ahr_pctl = float(_ahr.get("ae_percentile_rank", 0.0))
+        _ahr_rc = RISK_COLORS.get(_ahr_risk, "#666666")
+        _ahr_cats = _threat_cats(_ahr.get("top_contributors"))
+        _ahr_disp = _ah_disps.get((_ahr["user"], _ahr_day_str), "NEW")
+        _ahr_dc = _DISP_COLORS.get(_ahr_disp, "#555555")
+
+        _ahr_cat_html = (
+            "".join(_cat_badge(c) for c in _ahr_cats)
+            if _ahr_cats
+            else "<span style='color:#444;font-family:JetBrains Mono,monospace;font-size:11px;'>—</span>"
+        )
+
+        _ah_tbody_parts.append(
+            "<tr>"
+            f"<td style='font-family:JetBrains Mono,monospace;font-size:11px;color:#aaa;"
+            f"padding:8px 16px 8px 0;border-bottom:1px solid #0f0f0f;white-space:nowrap;"
+            f"vertical-align:middle;'>{_ahr_day_str}</td>"
+            f"<td style='padding:8px 16px 8px 0;border-bottom:1px solid #0f0f0f;"
+            f"white-space:nowrap;vertical-align:middle;'>"
+            f"<span style='background:{_ahr_rc}22;color:{_ahr_rc};font-size:9px;"
+            f"font-family:JetBrains Mono,monospace;letter-spacing:1px;"
+            f"padding:2px 6px;border:1px solid {_ahr_rc}55;'>{_ahr_risk}</span></td>"
+            f"<td style='font-family:JetBrains Mono,monospace;font-size:11px;color:{_ahr_rc};"
+            f"padding:8px 16px 8px 0;border-bottom:1px solid #0f0f0f;white-space:nowrap;"
+            f"vertical-align:middle;'>P{_ahr_pctl:.1f}</td>"
+            f"<td style='padding:8px 16px 8px 0;border-bottom:1px solid #0f0f0f;"
+            f"min-width:200px;vertical-align:middle;'>{_ahr_cat_html}</td>"
+            f"<td style='padding:8px 0 8px 0;border-bottom:1px solid #0f0f0f;"
+            f"white-space:nowrap;vertical-align:middle;'>"
+            f"<span style='background:{_ahr_dc}22;color:{_ahr_dc};font-size:9px;"
+            f"font-family:JetBrains Mono,monospace;letter-spacing:1px;"
+            f"padding:2px 6px;border:1px solid {_ahr_dc}55;'>{_ahr_disp}</span></td>"
+            "</tr>"
+        )
+
+    _ah_th = (
+        "font-family:JetBrains Mono,monospace;font-size:10px;font-weight:600;"
+        "color:#555;text-transform:uppercase;letter-spacing:1.2px;"
+        "padding-bottom:10px;padding-right:16px;border-bottom:1px solid #1a1a1a;"
+    )
+    st.markdown(
+        "<div style='background:#0a0a0a;border:1px solid #1c1c1c;padding:14px 18px 10px 18px;"
+        "margin:0 0 4px 0;overflow-x:auto;-webkit-overflow-scrolling:touch;'>"
+        "<table style='width:100%;border-collapse:collapse;min-width:600px;'>"
+        "<thead><tr>"
+        f"<th style='{_ah_th}'>Day</th>"
+        f"<th style='{_ah_th}'>Risk</th>"
+        f"<th style='{_ah_th}'>AE Pctl</th>"
+        f"<th style='{_ah_th}'>Threat Categories</th>"
+        f"<th style='{_ah_th.replace('padding-right:16px;', 'padding-right:0;')}'>Disposition</th>"
+        "</tr></thead>"
+        f"<tbody>{''.join(_ah_tbody_parts)}</tbody>"
+        "</table></div>",
+        unsafe_allow_html=True,
+    )
+
+    _ah_pg_left, _ah_pg_mid, _ah_pg_right = st.columns([1, 4, 1])
+    _ah_start = _ah_page * _AH_PAGE_SIZE + 1
+    _ah_end = min(_ah_start + _AH_PAGE_SIZE - 1, _ah_total)
+    with _ah_pg_left:
+        if st.button("← Previous", key="ah_prev", disabled=(_ah_page == 0), use_container_width=True):
+            st.session_state[_ah_page_key] -= 1
+            st.rerun()
+    with _ah_pg_mid:
+        st.markdown(
+            f"<div style='text-align:center;font-family:JetBrains Mono,monospace;font-size:11px;"
+            f"color:#555;padding-top:6px;'>{_ah_start}–{_ah_end} of {_ah_total}</div>",
+            unsafe_allow_html=True,
+        )
+    with _ah_pg_right:
+        if st.button("Next →", key="ah_next", disabled=(_ah_page >= _ah_total_pages - 1), use_container_width=True):
+            st.session_state[_ah_page_key] += 1
+            st.rerun()
+
+    # ── User KPI Row ──
+    u1, u2, u3, u4, u5, u6 = st.columns(6)
+    u_max_pctl = user_data["ae_percentile_rank"].max()
+    u_crit_days = (user_data["ae_risk_band"] == "CRITICAL").sum()
+    u_high_days = (user_data["ae_risk_band"] == "HIGH").sum()
+    u_med_days = (user_data["ae_risk_band"] == "MEDIUM").sum()
+    u_total_days = len(user_data)
+
+    # Determine overall user risk label
+    if u_max_pctl >= 95:
+        u_risk_label = "CRITICAL"
+    elif u_max_pctl >= 90:
+        u_risk_label = "HIGH"
+    elif u_max_pctl >= 80:
+        u_risk_label = "MEDIUM"
+    else:
+        u_risk_label = "LOW"
+
+    u1.metric("Overall Risk", u_risk_label)
+    u2.metric("Peak Percentile", f"{u_max_pctl:.1f}")
+    u3.metric("Critical-Risk Days", u_crit_days)
+    u4.metric("High-Risk Days", u_high_days)
+    u5.metric("Medium-Risk Days", u_med_days)
+    u6.metric("Days Observed", u_total_days)
+
     # ── Anomaly Timeline ──
     section_header("Anomaly Score Timeline", "sh_score_timeline")
     fig_timeline = go.Figure()
@@ -3229,8 +3231,6 @@ def _render_investigation_content() -> None:
     col_radar, col_heat = st.columns(2)
 
     with col_radar:
-        section_header("Behavioral Profile (Avg Activity)", "sh_beh_profile")
-
         # Compute per-channel averages: user vs dept peer group vs global population
         radar_categories = []
         user_vals = []
@@ -3241,6 +3241,11 @@ def _render_investigation_content() -> None:
             user_data["department"].iloc[0]
             if "department" in user_data.columns and len(user_data) > 0
             else None
+        )
+
+        section_header(
+            f"Behavioral Profile — {user_dept}" if user_dept else "Behavioral Profile (Avg Activity)",
+            "sh_beh_profile",
         )
 
         day_min = user_data["day"].min() if "day" in user_data.columns else None
@@ -3283,9 +3288,9 @@ def _render_investigation_content() -> None:
             theta=radar_categories,
             fill="toself",
             name="Population Avg",
-            line=dict(color="#3a86a8", width=1),
-            opacity=0.6,
-            fillcolor="rgba(58,134,168,0.1)",
+            line=dict(color="#00b4d8", width=1.5),
+            opacity=0.8,
+            fillcolor="rgba(0,180,216,0.1)",
         ))
 
         fig_radar.update_layout(
@@ -3732,6 +3737,7 @@ if active_page == "Alerts":
                     with _inv_cols[1]:
                         if st.button("Investigate →", key="live_inv_btn", use_container_width=True):
                             st.session_state["inv_user_select"] = _sel_user
+                            st.session_state.pop("inv_alert_context", None)
                             st.session_state["_nav_request"] = "Investigation"
                             st.rerun()
 
@@ -3872,6 +3878,7 @@ if active_page == "Alerts":
                 with col_btn:
                     if st.button("Investigate →", key=f"al_top_inv_{uid}", use_container_width=True):
                         st.session_state["inv_user_select"] = uid
+                        st.session_state.pop("inv_alert_context", None)
                         st.session_state["_nav_request"] = "Investigation"
                         st.rerun()
                 st.markdown("<div style='border-bottom:1px solid #111;margin:0;'></div>", unsafe_allow_html=True)
