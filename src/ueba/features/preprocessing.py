@@ -286,7 +286,7 @@ def normalize_shared_columns(df: pd.DataFrame, remove_cols: list=["id"], sort: b
     # Dropping unusable columns
     remove_cols = [col.lower().strip() for col in remove_cols]
     cols_to_drop = [col for col in remove_cols if col in df.columns]
-    df.drop(axis=1, columns=cols_to_drop, inplace=True)
+    df.drop(columns=cols_to_drop, inplace=True)
 
     # Sorting rows if specified
     if sort:
