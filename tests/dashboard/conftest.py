@@ -160,3 +160,38 @@ def app_test(monkeypatch, dashboard_data_tree):
     st.cache_data.clear()
     st.cache_resource.clear()
     _purge_config_modules()
+
+
+@pytest.fixture
+def agg_env(monkeypatch, dashboard_data_tree):
+    """Point the lib loaders/aggregations at the synthetic tree for direct calls.
+
+    Like app_test but without booting the Streamlit app — for unit-testing the
+    lib.aggregations functions directly. Redirects config via UEBA_BASE_DIR, forces
+    HF offline, ensures the dashboard dir is importable (so `from config import …`
+    and `from db import …` inside the lib modules resolve), and clears Streamlit's
+    caches before and after so cached frames don't leak across tests.
+    """
+    import os
+
+    import streamlit as st
+
+    monkeypatch.setenv("UEBA_BASE_DIR", str(dashboard_data_tree))
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+
+    dashboard_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "dashboard")
+    if dashboard_dir not in sys.path:
+        sys.path.insert(0, dashboard_dir)
+
+    def _purge():
+        for mod in [m for m in sys.modules if m in ("config", "ueba.config")
+                    or m == "lib" or m.startswith("lib.")]:
+            del sys.modules[mod]
+
+    _purge()
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    yield dashboard_data_tree
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    _purge()

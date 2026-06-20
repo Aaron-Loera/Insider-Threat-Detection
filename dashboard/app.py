@@ -12,7 +12,6 @@ if _DASHBOARD_DIR not in sys.path:
 sys.stderr.write("[APP] module-level execution started\n")
 sys.stderr.flush()
 import html as _html_mod
-import json
 import subprocess
 import time
 from pathlib import Path
@@ -22,15 +21,11 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from db import get_all_dispositions, init_db, upsert_disposition
+from db import get_all_dispositions, init_db
 from lib.auth import require_auth
+from lib.data import ALERT_STATUS_OPTIONS, _on_status_change
 from lib.theme import inject_base_css
 from PIL import Image
-
-ALERT_STATUS_OPTIONS = ["NEW", "INVESTIGATING", "RESOLVED", "DISMISSED"]
-
-def _on_status_change(user, day, key):
-    upsert_disposition(user, day, st.session_state[key])
 
 # ──────────────────────────────────────────────────────────────
 # Page Config & Custom CSS
@@ -75,250 +70,28 @@ if BASE_DIR not in sys.path:
 
 # All path configuration is centralized in config.py.  Per-contributor
 # overrides live in paths.local.py (gitignored). See paths.local.example.py.
+# Only the live-simulation paths are still referenced inline here; the dataset /
+# model paths moved into lib.data along with the loaders.
+import logging as _startup_log
+
+# Cached loaders live in lib.data; import them so the module-level bootstrap below
+# (which populates the page-facing globals) and the page bodies see the same names.
+from lib.data import (
+    get_alert_detail as _get_alert_detail,
+)
+from lib.data import (
+    get_feature_groups,
+    load_data,
+    load_peer_baselines,
+    load_ueba_a,
+    load_user_profiles,
+)
+
 from config import (
-    ANALYST_TABLE_PARQUET,
     LIVE_OUTPUT,
     LIVE_PAUSE_FLAG,
     LIVE_SIM_SCRIPT,
-    MODEL_VERSION,
-    PEER_BASELINES_PATH,
-    UEBA_A_CSV,
-    UEBA_A_PARQUET,
 )
-
-# Only load columns the dashboard actually uses
-UEBA_COLS = [
-    "user", "pc", "day", "department",
-    # Auth
-    "logon_count", "logoff_count", "off_hours_logon",
-    # File
-    "file_open_count", "file_write_count", "file_copy_count",
-    "file_delete_count", "unique_files_accessed", "off_hours_files_accessed",
-    # Removable media
-    "usb_insert_count", "usb_remove_count", "off_hours_usb_usage",
-    # Email
-    "emails_sent", "unique_recipients", "external_emails_sent",
-    "attachments_sent", "off_hours_emails",
-    # HTTP
-    "http_total_requests", "http_visit_count", "http_download_count", "http_upload_count",
-    "http_jobsite_visits", "http_cloud_storage_visits", "http_suspicious_site_visits",
-    "off_hours_http_requests", "http_long_url_count", "unique_domains_visited",
-    # PC / endpoint
-    "pcs_used_count", "non_primary_pc_used_flag", "non_primary_pc_http_requests_flag",
-    "non_primary_pc_usb_flag", "non_primary_pc_file_copy_flag",
-    # Cross-channel flags
-    "usb_file_activity_flag", "off_hours_activity_flag", "external_comm_activity_flag",
-    "jobsite_usb_activity_flag", "suspicious_upload_flag", "cloud_upload_flag",
-    "non_primary_pc_risk_flag",
-]
-
-
-@st.cache_data(show_spinner=False)
-def _load_user_detail_df(user: str) -> "pd.DataFrame":
-    """Download ALL detail rows for one user and cache the result.
-
-    Local:  reads from the main analyst parquet with a user-level DNF filter
-            (1268 sorted row groups → only the user's ~1270 rows are read).
-    Cloud:  downloads a tiny per-user parquet from HF details/ folder (~46 KB).
-            The full 193 MB analyst parquet is NEVER loaded on cloud — each
-            user file is independently tiny, making the download cost negligible.
-    """
-    _DETAIL_COLS = ["user", "day", "top_contributors", "explanation"]
-    safe = str(user).replace("/", "_").replace("\\", "_")
-
-    try:
-        if os.path.exists(ANALYST_TABLE_PARQUET):
-            import pyarrow.parquet as pq
-            tbl = pq.read_table(
-                ANALYST_TABLE_PARQUET,
-                columns=_DETAIL_COLS,
-                filters=[[("user", "=", user)]],
-            )
-            return tbl.to_pandas()
-        else:
-            # Per-user file: ~46 KB download regardless of total dataset size
-            from ueba.serving.hf_io import get_dataset_file
-            path = get_dataset_file(f"details/{safe}.parquet")
-            return pd.read_parquet(path)
-    except Exception as _e:
-        import logging as _logging
-        _logging.getLogger(__name__).warning("_load_user_detail_df(%s) failed: %s", user, _e)
-        return pd.DataFrame(columns=_DETAIL_COLS)
-
-
-@st.cache_data(show_spinner=False)
-def fetch_alert_detail(user: str, day_str: str) -> dict:
-    """Return top_contributors and explanation for one (user, day) record.
-
-    Delegates the expensive I/O to _load_user_detail_df (cached per-user),
-    then filters to the requested day. On cloud this costs ~46 KB per unique
-    user, cached after the first lookup — compared to 193 MB per call before.
-    """
-    try:
-        df = _load_user_detail_df(user)
-        if df.empty:
-            return {}
-        day_ts = pd.Timestamp(day_str)
-        if "day" in df.columns:
-            df["day"] = pd.to_datetime(df["day"], errors="coerce")
-            match = df[df["day"] == day_ts]
-        else:
-            return {}
-        if match.empty:
-            return {}
-        r = match.iloc[0]
-        return {
-            "top_contributors": r.get("top_contributors", None),
-            "explanation": r.get("explanation", "") or "",
-        }
-    except Exception as _e:
-        import logging as _logging
-        _logging.getLogger(__name__).warning("fetch_alert_detail(%s, %s) failed: %s", user, day_str, _e)
-        return {}
-
-
-@st.cache_resource(show_spinner=False)
-def load_ueba_a():
-    """Load UEBA Table A — (user, pc, day) granular rows used for PC-level drill-down."""
-    if os.path.exists(UEBA_A_PARQUET):
-        df = pd.read_parquet(UEBA_A_PARQUET)
-    elif os.path.exists(UEBA_A_CSV):
-        df = pd.read_csv(UEBA_A_CSV)
-        if "Unnamed: 0" in df.columns:
-            df = df.drop(columns=["Unnamed: 0"])
-    else:
-        return None
-    df["day"] = pd.to_datetime(df["day"], errors="coerce")
-    return df
-
-@st.cache_data(show_spinner=False)
-def load_peer_baselines():
-    """Load peer baseline parquet. Returns None if file not yet generated."""
-    if not os.path.exists(PEER_BASELINES_PATH):
-        return None
-    df = pd.read_parquet(PEER_BASELINES_PATH)
-    df["day"] = pd.to_datetime(df["day"], errors="coerce")
-    return df
-
-@st.cache_resource(show_spinner="Loading dataset...")
-def load_data():
-    """Merge alert_table_6 and ueba_dataset_6b, then pre-compute user_risk.
-
-    Uses @st.cache_resource so the DataFrame is stored by reference — no pickle
-    serialisation overhead on repeated Streamlit reruns.
-    """
-    import gc
-    import logging as _logging
-
-    import pyarrow.parquet as _pq
-    _log = _logging.getLogger("ueba.load_data")
-    _log.warning("[load_data] started")
-
-    _MV = MODEL_VERSION
-
-    # ── Serving layer ────────────────────────────────────────────────────────
-    # Load ONE pre-merged "dashboard" parquet that contains only the columns the
-    # UI actually renders (~76 cols), dictionary-encoded for low-cardinality
-    # strings and stored as float32. This replaces the previous runtime path of
-    # downloading the full 414-column v6b (432 MB) plus the alert table and
-    # merging them in-process, which peaked at several GB and was OOM-killed on
-    # Streamlit Community Cloud's 1 GB tier. The slim file peaks at ~0.65 GB.
-    # Rebuild it with scripts/build_dashboard_dataset.py whenever v6b / the alert
-    # table changes, then re-upload to the HF dataset repo.
-    #
-    # The local path comes from config.DASHBOARD_PARQUET (not __file__) so it
-    # honours UEBA_BASE_DIR — identical resolution under normal operation, but it
-    # lets the AppTest smoke harness point the app at a synthetic dataset tree.
-    import config as _config
-    _DASH_LOCAL_PATH = _config.DASHBOARD_PARQUET
-    from ueba.serving.hf_io import get_dataset_file
-    if not os.path.exists(_DASH_LOCAL_PATH):
-        _log.warning("[load_data] downloading dashboard parquet from HuggingFace…")
-    _DASH_PATH = get_dataset_file(
-        f"ueba_dataset_{_MV}_dashboard.parquet",
-        version=_MV,
-        local_path=_DASH_LOCAL_PATH,
-    )
-
-    def _downcast(df):
-        for col in df.select_dtypes(include=["float64"]).columns:
-            df[col] = df[col].astype("float32")
-        for col in df.select_dtypes(include=["int64"]).columns:
-            df[col] = df[col].astype("int32")
-        return df
-
-    # Memory-frugal Arrow→pandas conversion: split_blocks + self_destruct frees
-    # each Arrow column as soon as it is converted, roughly halving peak RSS.
-    _log.warning("[load_data] loading slim dashboard dataset")
-    _tbl = _pq.read_table(_DASH_PATH)
-    merged = _tbl.to_pandas(split_blocks=True, self_destruct=True)
-    del _tbl
-    gc.collect()
-    merged["day"] = pd.to_datetime(merged["day"], errors="coerce")
-    _downcast(merged)  # no-op if file already float32; protective if rebuilt otherwise
-    for _col in ("user", "ae_risk_band", "if_risk_band"):
-        if _col in merged.columns:
-            merged[_col] = merged[_col].astype("category")
-    gc.collect()
-    _log.warning(f"[load_data] loaded: {merged.shape}, {merged.memory_usage(deep=True).sum()/1e6:.1f} MB")
-
-    # Cast risk bands to ordered categorical
-    _risk_cat = pd.CategoricalDtype(categories=["LOW", "MEDIUM", "HIGH", "CRITICAL"], ordered=True)
-    for _col in ("ae_risk_band", "if_risk_band"):
-        if _col in merged.columns:
-            merged[_col] = merged[_col].astype(_risk_cat)
-
-    # Defense in depth: enforce the v6 baseline_complete gate at read time.
-    # Upstream Alert_Object_Builder already filters baseline_complete=False rows before
-    # risk banding, but re-applying here protects against alert_table regenerations that
-    # skipped the filter (cold-start users would otherwise surface as false CRITICAL).
-    if "baseline_complete" in merged.columns:
-        _ungated = ~merged["baseline_complete"].fillna(False).astype(bool)
-        for _band_col in ("ae_risk_band", "if_risk_band", "composite_risk_band"):
-            if _band_col in merged.columns:
-                _crit_mask = _ungated & (merged[_band_col] == "CRITICAL")
-                if _crit_mask.any():
-                    merged.loc[_crit_mask, _band_col] = "HIGH"
-                    _log.warning(
-                        f"[load_data] baseline_complete gate demoted "
-                        f"{int(_crit_mask.sum())} CRITICAL→HIGH in {_band_col}"
-                    )
-
-    # ── Pre-compute per-user risk summary ──
-    user_risk = (
-        merged.groupby("user", observed=True)
-        .agg(
-            max_score=("if_anomaly_score", "max"),
-            mean_score=("if_anomaly_score", "mean"),
-            max_percentile=("ae_percentile_rank", "max"),
-            alert_days=("day", "nunique"),
-            critical_count=("ae_risk_band", lambda x: (x == "CRITICAL").sum()),
-            high_count=("ae_risk_band", lambda x: (x == "HIGH").sum()),
-            medium_count=("ae_risk_band", lambda x: (x == "MEDIUM").sum()),
-        )
-        .reset_index()
-        .sort_values("max_percentile", ascending=False)
-    )
-
-    _all_users = sorted(merged["user"].unique().tolist())
-    _ds_min = merged["day"].min().date()
-    _ds_max = merged["day"].max().date()
-
-    _log.warning("[load_data] complete")
-    return merged, user_risk, _all_users, _ds_min, _ds_max
-
-
-_USER_PROFILES_PATH = os.path.join(os.path.dirname(__file__), "user_profiles.parquet")
-
-@st.cache_data(show_spinner=False)
-def load_user_profiles() -> pd.DataFrame:
-    """Load pre-built user profile table (department, role, supervisor, role_sensitivity)."""
-    if os.path.exists(_USER_PROFILES_PATH):
-        return pd.read_parquet(_USER_PROFILES_PATH)
-    return pd.DataFrame(columns=["user", "department", "role", "supervisor", "role_sensitivity"])
-
-
-import logging as _startup_log
 
 _slog = _startup_log.getLogger("ueba.startup")
 try:
@@ -340,11 +113,6 @@ except Exception as _load_err:
 else:
     _LOAD_ERROR = None
 
-def _get_alert_detail(user, day, key):
-    """Fetch explanation or top_contributors for a single (user, day) record."""
-    day_str = str(day.date()) if hasattr(day, "date") else str(day)
-    return fetch_alert_detail(str(user), day_str).get(key, None)
-
 
 # ──────────────────────────────────────────────────────────────
 # If data hasn't been generated yet, show instructions
@@ -362,55 +130,10 @@ if not DATA_LOADED:
 # Pre-compute derived data used across tabs
 # ──────────────────────────────────────────────────────────────
 
-# Base behavioral feature columns (raw counts)
-RAW_FEATURES = [
-    # Auth
-    "logon_count", "logoff_count", "off_hours_logon",
-    # File
-    "file_open_count", "file_write_count", "file_copy_count",
-    "file_delete_count", "unique_files_accessed", "off_hours_files_accessed",
-    # Removable media
-    "usb_insert_count", "usb_remove_count", "off_hours_usb_usage",
-    # Email
-    "emails_sent", "unique_recipients", "external_emails_sent",
-    "attachments_sent", "off_hours_emails",
-    # HTTP
-    "http_total_requests", "http_visit_count", "http_download_count", "http_upload_count",
-    "http_jobsite_visits", "http_cloud_storage_visits", "http_suspicious_site_visits",
-    "off_hours_http_requests", "http_long_url_count", "unique_domains_visited",
-    # PC / endpoint
-    "pcs_used_count", "non_primary_pc_used_flag", "non_primary_pc_http_requests_flag",
-    "non_primary_pc_usb_flag", "non_primary_pc_file_copy_flag",
-]
-RAW_FEATURES = [f for f in RAW_FEATURES if f in merged_df.columns]
-
-CROSS_FLAGS = [
-    "usb_file_activity_flag", "off_hours_activity_flag", "external_comm_activity_flag",
-    "jobsite_usb_activity_flag", "suspicious_upload_flag", "cloud_upload_flag",
-    "non_primary_pc_risk_flag",
-]
-CROSS_FLAGS = [f for f in CROSS_FLAGS if f in merged_df.columns]
-
-# Channel groupings for radar / breakdown charts
-CHANNELS = {
-    "Authentication": ["logon_count", "logoff_count", "off_hours_logon"],
-    "File Access":    ["file_open_count", "file_write_count", "file_copy_count",
-                       "file_delete_count", "unique_files_accessed", "off_hours_files_accessed"],
-    "Removable Media":["usb_insert_count", "usb_remove_count", "off_hours_usb_usage"],
-    "Email":          ["emails_sent", "unique_recipients", "external_emails_sent",
-                       "attachments_sent", "off_hours_emails"],
-    "HTTP Activity":  ["http_total_requests", "http_visit_count", "http_download_count",
-                       "http_upload_count", "http_jobsite_visits", "http_cloud_storage_visits",
-                       "http_suspicious_site_visits", "off_hours_http_requests",
-                       "http_long_url_count", "unique_domains_visited"],
-    "PC Activity":    ["pcs_used_count", "non_primary_pc_used_flag",
-                       "non_primary_pc_http_requests_flag", "non_primary_pc_usb_flag",
-                       "non_primary_pc_file_copy_flag"],
-}
-# Filter to features actually present; drop channels with no data
-CHANNELS = {k: [f for f in v if f in merged_df.columns] for k, v in CHANNELS.items()}
-# Drop empty channels (dataset may not have all features)
-CHANNELS = {k: v for k, v in CHANNELS.items() if v}
+# Feature groups (raw counts, cross-channel flags, channel map) are derived from
+# the loaded columns by lib.data.get_feature_groups(). The page bodies reference
+# the RAW_FEATURES / CROSS_FLAGS / CHANNELS names as before.
+RAW_FEATURES, CROSS_FLAGS, CHANNELS = get_feature_groups()
 
 # user_risk is now pre-computed inside load_data() and cached
 
@@ -423,125 +146,22 @@ from lib.labels import (
     parse_top_contributors_with_values,
     prettify_feature_name,
 )
+
+# Live-simulation output readers (the polling half of live mode) live in lib.live;
+# the simulation subprocess control stays inline below until Phase 7.4.
+from lib.live import (
+    _cached_live_file_stats,
+    _cached_live_rows,
+    _get_live_user_data,
+)
 from lib.theme import (
     CHANNEL_COLOR_MAP,
-    MAX_PLOT_POINTS,
     PLOTLY_LAYOUT,
     RISK_COLORS,
     RISK_TIERS,
 )
 
 from ueba.risk import assign_band_from_percentile
-
-
-@st.cache_data(ttl=1, show_spinner=False)
-def _get_live_user_data(user: str) -> pd.DataFrame:
-    """Load live-scored rows for *user* from LIVE_OUTPUT, normalized to match user_data columns.
-
-    Delegates to _cached_live_rows to avoid a redundant full-file scan; the shared
-    1-second TTL (below the fragment's 2s run_every) ensures every fragment rerun
-    reads genuinely fresh data from the live output file.
-    """
-    rows, _ = _cached_live_rows()
-    if not rows:
-        return pd.DataFrame()
-    user_rows = [r for r in rows if r.get("user") == user]
-    if not user_rows:
-        return pd.DataFrame()
-    df = pd.DataFrame(user_rows)
-    if "cert_timestamp" not in df.columns:
-        return pd.DataFrame()
-    df["day"] = pd.to_datetime(df["cert_timestamp"], errors="coerce").dt.normalize()
-    df = df.dropna(subset=["day"])
-    if df.empty:
-        return pd.DataFrame()
-    for _col in ("if_anomaly_score", "if_percentile_rank"):
-        if _col in df.columns:
-            df[_col] = pd.to_numeric(df[_col], errors="coerce")
-    # Keep one row per day: worst-of-day (highest percentile rank)
-    df = (
-        df.sort_values("if_percentile_rank", ascending=False)
-        .drop_duplicates(subset=["day"])
-        .copy()
-    )
-    # Map to column names the Investigation page expects
-    df["ae_risk_band"] = (
-        df["if_risk_band"].astype(str).str.upper()
-        if "if_risk_band" in df.columns
-        else "LOW"
-    )
-    df["ae_percentile_rank"] = df.get("if_percentile_rank", np.nan)
-    df["_live_row"] = True
-    return df.reset_index(drop=True)
-
-
-@st.cache_data(ttl=1, show_spinner=False)
-def _cached_live_file_stats():
-    """Return (row_count, stream_done) for the live output file.
-
-    Delegates to _cached_live_rows so at most one file scan occurs per TTL window
-    regardless of how many callers need live-file metadata.
-    """
-    rows, stream_done = _cached_live_rows()
-    return len(rows), stream_done
-
-
-# Maximum rows to load from the live output file.  Reading the full file when
-# it contains tens-of-thousands of rows causes a multi-second parse on every
-# 2-second cache expiry, making the dashboard unusable.  Only the most recent
-# MAX_LIVE_ROWS rows are kept; older simulation history is discarded.
-_MAX_LIVE_ROWS = 5_000
-
-@st.cache_data(ttl=1, show_spinner=False)
-def _cached_live_rows():
-    """Read the most recent _MAX_LIVE_ROWS scored rows from the live output file.
-
-    Reads only the tail of the file to avoid re-parsing hundreds of thousands of
-    rows on every 2-second cache expiry.  Returns (rows_list, stream_done).
-    Clear via _cached_live_rows.clear() when starting a new simulation.
-    """
-    if not os.path.exists(LIVE_OUTPUT):
-        return [], False
-    # Quick size check — skip expensive read if file is empty
-    if os.path.getsize(LIVE_OUTPUT) == 0:
-        return [], False
-    rows: list[dict] = []
-    stream_done = False
-    try:
-        with open(LIVE_OUTPUT, "r", encoding="utf-8") as fh:
-            lines = fh.readlines()
-        # Process only the tail to cap memory and parse time
-        for line in lines[-_MAX_LIVE_ROWS:]:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if obj.get("_eos"):
-                stream_done = True
-            else:
-                rows.append(obj)
-        # Check for _eos marker anywhere in the full tail scan
-        if not stream_done:
-            for line in lines[-100:]:
-                try:
-                    if json.loads(line.strip()).get("_eos"):
-                        stream_done = True
-                        break
-                except (json.JSONDecodeError, AttributeError):
-                    # Partial line still being written, or a non-object record.
-                    continue
-    except Exception as _e:
-        # Deliberate swallow: the simulator writes this file concurrently, so a
-        # mid-write read can fail in several ways (truncation, partial UTF-8
-        # sequence). Surface on the next refresh instead of crashing the
-        # dashboard — but log it, so failures are no longer invisible.
-        import logging as _logging
-        _logging.getLogger("ueba.live").warning("live results read failed: %s", _e)
-    return rows, stream_done
-
 
 # ──────────────────────────────────────────────────────────────
 # Sidebar — Global Filters
@@ -659,365 +279,42 @@ with st.sidebar:
     )
 
 # all_users, _DS_MIN, _DS_MAX are returned from load_data() — no per-rerun scan needed
-
 # MAX_PLOT_POINTS (the Plotly downsample cap) is imported from lib.theme above.
 
 # ──────────────────────────────────────────────────────────────
 # Global filter state (persists across page navigations)
 # ──────────────────────────────────────────────────────────────
+# Live records can extend past the static dataset maximum once a simulation has
+# run; _cached_live_max_date (lib.live) tracks that effective ceiling. The filter
+# dialog + flt_* session-state defaults live in lib.filters.
+from lib.filters import _filter_bar, _get_filtered_df, _ov_args, init_filter_state, show_filters
+from lib.live import _cached_live_max_date
+
 _DS_MIN = merged_df["day"].min().date()
 _DS_MAX = merged_df["day"].max().date()
-# When live simulation has run, live records extend beyond _DS_MAX. Track the
-# effective maximum so the date slider and filter can reach those dates.
-@st.cache_data(ttl=60, show_spinner=False)
-def _cached_live_max_date():
-    """Scan the live output file at most once per minute to find the latest date in
-    live records.  Returns _DS_MAX immediately when the file is absent or empty to
-    avoid an unnecessary file read on every page render when live mode is off.
-    Clear via _cached_live_max_date.clear() when starting a new simulation.
-    """
-    try:
-        if not os.path.exists(LIVE_OUTPUT) or os.path.getsize(LIVE_OUTPUT) == 0:
-            return _DS_MAX
-        rows, _ = _cached_live_rows()
-        live_max = _DS_MAX
-        for _o in rows:
-            _ts = _o.get("cert_timestamp")
-            if not _ts:
-                continue
-            _d = pd.to_datetime(_ts, errors="coerce")
-            if pd.notna(_d) and _d.date() > live_max:
-                live_max = _d.date()
-        return live_max
-    except Exception:
-        return _DS_MAX
-
-_ds_live_max = _cached_live_max_date()
-if "flt_date_start" not in st.session_state:
-    st.session_state.flt_date_start = _DS_MIN
-if "flt_date_end" not in st.session_state:
-    st.session_state.flt_date_end = _DS_MAX
-if "flt_risk" not in st.session_state:
-    st.session_state.flt_risk = list(RISK_TIERS)
-if "flt_min_pctl" not in st.session_state:
-    st.session_state.flt_min_pctl = 0.0
-if "flt_max_rows" not in st.session_state:
-    st.session_state.flt_max_rows = 500
-if "flt_sort_choice" not in st.session_state:
-    st.session_state.flt_sort_choice = "Highest score first"
+_ds_live_max = _cached_live_max_date(_DS_MAX)
+init_filter_state(_DS_MIN, _DS_MAX, _ds_live_max)
 
 
-@st.dialog("Filters")
-def show_filters():
-    st.markdown("**Date Range**")
-    dr = st.date_input(
-        "Date Range",
-        value=(st.session_state.flt_date_start, st.session_state.flt_date_end),
-        min_value=_DS_MIN,
-        max_value=_ds_live_max,
-        label_visibility="collapsed",
-        key="dlg_date",
-    )
-    st.markdown("**Risk Levels**")
-    rl = st.multiselect(
-        "Risk Levels",
-        RISK_TIERS,
-        default=st.session_state.flt_risk,
-        label_visibility="collapsed",
-        key="dlg_risk",
-    )
-
-    # ── Alerts-specific controls (only shown on the Alerts page) ──
-    _on_alerts = (active_page == "Alerts" and not st.session_state.get("live_mode", False))
-    if _on_alerts:
-        st.markdown("---")
-        st.markdown("**Triage Status**")
-        dlg_disp_filter = st.radio(
-            "Triage Status",
-            options=["Show New Only", "Show All", "Show Investigating", "Show Resolved", "Show Dismissed"],
-            index=["Show New Only", "Show All", "Show Investigating", "Show Resolved", "Show Dismissed"].index(
-                st.session_state.get("flt_disp_filter", "Show New Only")
-            ),
-            horizontal=False,
-            label_visibility="collapsed",
-            key="dlg_disp_filter",
-        )
-        dlg_view_suppressed = st.checkbox(
-            "View Suppressed Alerts",
-            value=st.session_state.get("flt_view_suppressed", False),
-            key="dlg_view_suppressed",
-        )
-        st.markdown("---")
-        st.markdown("**Sort Alerts By**")
-        _sort_opts = [
-            "Highest score first",
-            "Lowest score first",
-            "Highest severity first",
-            "Lowest severity first",
-            "Most recent first",
-            "Oldest first",
-            "User A\u2013Z",
-            "User Z\u2013A",
-        ]
-        dlg_sort = st.selectbox(
-            "Sort Alerts By",
-            _sort_opts,
-            index=_sort_opts.index(st.session_state.flt_sort_choice)
-            if st.session_state.flt_sort_choice in _sort_opts else 0,
-            label_visibility="collapsed",
-            key="dlg_sort",
-        )
-        _pctl_col, _rows_col = st.columns(2)
-        with _pctl_col:
-            st.markdown("**Min Percentile**")
-            dlg_min_pctl = st.slider(
-                "Min Percentile",
-                0.0, 100.0,
-                st.session_state.flt_min_pctl,
-                label_visibility="collapsed",
-                key="dlg_min_pctl",
-            )
-        with _rows_col:
-            st.markdown("**Max Rows**")
-            dlg_max_rows = st.number_input(
-                "Max Rows",
-                min_value=10, max_value=10000,
-                value=st.session_state.flt_max_rows,
-                step=50,
-                label_visibility="collapsed",
-                key="dlg_max_rows",
-            )
-
-    st.markdown("")
-    apply_col, reset_col = st.columns(2)
-    with apply_col:
-        if st.button("Apply", use_container_width=True, type="primary"):
-            if isinstance(dr, tuple) and len(dr) == 2:
-                st.session_state.flt_date_start = dr[0]
-                st.session_state.flt_date_end = dr[1]
-            st.session_state.flt_risk = rl if rl else list(RISK_TIERS)
-            if _on_alerts:
-                st.session_state.flt_disp_filter = dlg_disp_filter
-                st.session_state.flt_view_suppressed = dlg_view_suppressed
-                st.session_state.flt_sort_choice = dlg_sort
-                st.session_state.flt_min_pctl = float(dlg_min_pctl)
-                st.session_state.flt_max_rows = int(dlg_max_rows)
-            st.rerun()
-    with reset_col:
-        if st.button("Reset", use_container_width=True):
-            st.session_state.flt_date_start = _DS_MIN
-            st.session_state.flt_date_end = _DS_MAX
-            st.session_state.flt_risk = list(RISK_TIERS)
-            if _on_alerts:
-                st.session_state.flt_disp_filter = "Show New Only"
-                st.session_state.flt_view_suppressed = False
-                st.session_state.flt_sort_choice = "Highest score first"
-                st.session_state.flt_min_pctl = 0.0
-                st.session_state.flt_max_rows = 500
-            st.rerun()
-
-
-@st.cache_data(show_spinner=False)
-def _cached_filtered_df(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
-    """Return a cached slice of merged_df. Only recomputes when filters change."""
-    mask = (
-        merged_df["ae_risk_band"].isin(risk_levels)
-        & (merged_df["day"].dt.date >= date_start)
-        & (merged_df["day"].dt.date <= date_end)
-    )
-    return merged_df[mask].copy()
-
-
-def _get_filtered_df() -> pd.DataFrame:
-    """Return merged_df sliced by current session_state filter values."""
-    return _cached_filtered_df(
-        st.session_state.flt_date_start,
-        st.session_state.flt_date_end,
-        tuple(sorted(st.session_state.flt_risk)),
-    )
+# Cached aggregations over the filtered frame live in lib.aggregations; page bodies
+# call these names directly. _get_filtered_df / _ov_args / _filter_bar are imported
+# from lib.filters above.
+from lib.aggregations import (
+    _al_top_users,
+    _ch_box_sample,
+    _ch_totals,
+    _channel_time_series,
+    _corr_matrix,
+    _ov_daily_alerts,
+    _ov_flag_counts,
+    _ov_histogram_sample,
+    _ov_kpis,
+    _ov_risk_counts,
+    _peer_channel_avgs,
+    _pop_channel_avgs,
+)
 
 filtered_df = _get_filtered_df()
-
-@st.cache_data(show_spinner=False)
-def _pop_channel_avgs() -> dict[str, float]:
-    """Pre-compute population channel averages from the full dataset (run once)."""
-    result: dict[str, float] = {}
-    for channel, feats in CHANNELS.items():
-        valid = [f for f in feats if f in merged_df.columns]
-        if valid:
-            result[channel] = float(merged_df[valid].mean().sum())
-    return result
-
-def _peer_channel_avgs(department: str, day_min=None, day_max=None) -> dict[str, float]:
-    """Return per-channel peer averages for selected department and time window."""
-    if peer_baselines_df is None or department is None:
-        return {}
-
-    df = peer_baselines_df.copy()
-
-    # safer department match
-    dept_mask = (
-        df["department"].astype(str).str.upper()
-        == str(department).upper()
-    )
-    df = df[dept_mask]
-
-    # align to selected user's time window
-    if day_min is not None:
-        df = df[df["day"] >= pd.to_datetime(day_min)]
-
-    if day_max is not None:
-        df = df[df["day"] <= pd.to_datetime(day_max)]
-
-    if df.empty:
-        return {}
-
-    result = {}
-    for channel, feats in CHANNELS.items():
-        valid = [f for f in feats if f in df.columns]
-        if valid:
-            result[channel] = float(df[valid].mean().sum())
-
-    return result
-
-
-@st.cache_data(show_spinner=False)
-def _channel_time_series(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
-    """Cached channel-volume-by-day aggregation for the Channels tab."""
-    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
-    parts = []
-    for channel, feats in CHANNELS.items():
-        valid = [f for f in feats if f in fdf.columns]
-        if valid:
-            daily = fdf.groupby(fdf["day"].dt.date)[valid].sum().sum(axis=1).reset_index()
-            daily.columns = ["Date", "Volume"]
-            daily["Channel"] = channel
-            parts.append(daily)
-    return pd.concat(parts) if parts else pd.DataFrame()
-
-
-@st.cache_data(show_spinner=False)
-def _corr_matrix(date_start, date_end, risk_levels: tuple, corr_feats: tuple) -> pd.DataFrame:
-    """Cached Pearson correlation matrix for the Channels tab."""
-    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
-    sample = fdf if len(fdf) <= MAX_PLOT_POINTS else fdf.sample(MAX_PLOT_POINTS, random_state=42)
-    return sample[list(corr_feats)].corr()
-
-
-# ── Cached Overview aggregations ──────────────────────────────────────────────
-# These run on 1.2M rows so must be memoised; they recompute only when filters
-# change, not on every Streamlit rerun.
-
-@st.cache_data(show_spinner=False)
-def _ov_kpis(date_start, date_end, risk_levels: tuple) -> dict:
-    """All 7 Overview KPI values in one pass over the filtered frame."""
-    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
-    risk_str = fdf["ae_risk_band"].astype(str)
-    n = max(len(fdf), 1)
-    return {
-        "total_users":    int(fdf["user"].nunique()),
-        "total_records":  len(fdf),
-        "critical_users": int(fdf.loc[risk_str == "CRITICAL", "user"].nunique()),
-        "high_users":     int(fdf.loc[risk_str == "HIGH",     "user"].nunique()),
-        "medium_users":   int(fdf.loc[risk_str == "MEDIUM",   "user"].nunique()),
-        "avg_anomaly":    float(fdf["if_anomaly_score"].mean()),
-        "detection_rate": float(risk_str.isin(["CRITICAL", "HIGH", "MEDIUM"]).sum() / n * 100),
-    }
-
-
-@st.cache_data(show_spinner=False)
-def _ov_risk_counts(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
-    """Risk-band value counts for the donut chart."""
-    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
-    rc = fdf["ae_risk_band"].astype(str).value_counts().reset_index()
-    rc.columns = ["Risk Level", "Count"]
-    return rc
-
-
-@st.cache_data(show_spinner=False)
-def _ov_daily_alerts(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
-    """Daily alert counts by risk band for the trend bar chart."""
-    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
-    daily = (
-        fdf.groupby([fdf["day"].dt.date, fdf["ae_risk_band"].astype(str)])
-        .size()
-        .reset_index(name="Count")
-    )
-    daily.columns = ["Date", "Risk Level", "Count"]
-    return daily
-
-
-@st.cache_data(show_spinner=False)
-def _ov_histogram_sample(date_start, date_end, risk_levels: tuple, n: int = 50_000) -> pd.DataFrame:
-    """Sampled (score, risk_band) pairs for the anomaly score histogram."""
-    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
-    sub = fdf[["if_anomaly_score", "ae_risk_band"]].copy()
-    sub["ae_risk_band"] = sub["ae_risk_band"].astype(str)
-    return sub if len(sub) <= n else sub.sample(n, random_state=42)
-
-
-@st.cache_data(show_spinner=False)
-def _ov_flag_counts(date_start, date_end, risk_levels: tuple, flags: tuple) -> dict[str, tuple[int, float]]:
-    """Cross-channel flag sums: {flag: (count, pct)}."""
-    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
-    n = max(len(fdf), 1)
-    return {
-        f: (int(fdf[f].sum()), float(fdf[f].sum() / n * 100))
-        for f in flags if f in fdf.columns
-    }
-
-
-def _ov_args() -> tuple:
-    """Shorthand for the three filter keys used by all cached functions."""
-    return (
-        st.session_state.flt_date_start,
-        st.session_state.flt_date_end,
-        tuple(sorted(st.session_state.flt_risk)),
-    )
-
-
-# ── Cached Alerts aggregations ────────────────────────────────────────────────
-
-@st.cache_data(show_spinner=False)
-def _al_top_users(date_start, date_end, risk_levels: tuple) -> pd.DataFrame:
-    """Top 10 users by max percentile for the Alerts tab."""
-    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
-    return (
-        fdf.groupby("user", observed=True)
-        .agg(
-            max_percentile=("ae_percentile_rank", "max"),
-            critical_count=("ae_risk_band", lambda x: (x == "CRITICAL").sum()),
-            high_count=("ae_risk_band", lambda x: (x == "HIGH").sum()),
-        )
-        .reset_index()
-        .sort_values("max_percentile", ascending=False)
-        .head(10)
-    )
-
-
-# ── Cached Channels aggregations ──────────────────────────────────────────────
-
-@st.cache_data(show_spinner=False)
-def _ch_totals(date_start, date_end, risk_levels: tuple) -> dict[str, float]:
-    """Channel volume totals for the Channels tab donut chart."""
-    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
-    result: dict[str, float] = {}
-    for channel, feats in CHANNELS.items():
-        valid = [f for f in feats if f in fdf.columns]
-        if valid:
-            result[channel] = float(fdf[valid].sum().sum())
-    return result
-
-
-@st.cache_data(show_spinner=False)
-def _ch_box_sample(date_start, date_end, risk_levels: tuple, feature: str) -> pd.DataFrame:
-    """Down-sampled (ae_risk_band, feature) frame for the Channels box plot."""
-    fdf = _cached_filtered_df(date_start, date_end, risk_levels)
-    if feature not in fdf.columns:
-        return pd.DataFrame()
-    subset = fdf[["ae_risk_band", feature]]
-    return subset if len(subset) <= MAX_PLOT_POINTS else subset.sample(MAX_PLOT_POINTS, random_state=42)
-
 
 _SECTION_INFO = {
     "Risk Distribution": (
@@ -1159,17 +456,7 @@ def section_header(title: str, key: str) -> None:
         st.markdown(f"<div class='section-header'>{title}</div>", unsafe_allow_html=True)
 
 
-def _filter_bar(key: str):
-    """Render filter button + active-filter summary. Opens modal on click."""
-    _fb_left, _fb_right = st.columns([7, 1])
-    with _fb_right:
-        if st.button("Filter", key=key, use_container_width=True):
-            show_filters()
-    active_risks = ", ".join(st.session_state.flt_risk) if len(st.session_state.flt_risk) < 3 else "All risk levels"
-    _fb_left.caption(
-        f"Date: {st.session_state.flt_date_start} to {st.session_state.flt_date_end}   |   "
-        f"Risk: {active_risks}"
-    )
+# _filter_bar is imported from lib.filters above.
 
 
 def _render_card_carousel(cards: list[str], state_key: str, visible_count: int = 4) -> None:
