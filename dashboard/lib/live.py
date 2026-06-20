@@ -1,23 +1,27 @@
-"""Live-simulation output readers (the polling half of the live feature).
+"""Live-simulation output readers and subprocess control.
 
-These functions read processed_datasets/live_results.jsonl (config.LIVE_OUTPUT),
-which the live_simulation subprocess appends to while running. They are cached with
-a 1-second TTL (below the Investigation fragment's 2s run_every) so each refresh
+The readers parse processed_datasets/live_results.jsonl (config.LIVE_OUTPUT), which
+the live_simulation/live_replay subprocess appends to while running. They are cached
+with a 1-second TTL (below the Investigation fragment's 2s run_every) so each refresh
 sees fresh rows without re-scanning the whole file every rerun. Only the most recent
 _MAX_LIVE_ROWS rows are kept so a long simulation history doesn't blow up parse time.
 
-The simulation *subprocess control* (start/stop/pause/resume) stays inline in app.py
-until Phase 7.4 — this module is read-only.
+This module also owns the shared live session-state defaults (init_live_state),
+the cache-clearing used when (re)starting a run (clear_live_caches), and the
+start/stop/pause/resume subprocess control (start_simulation / stop_simulation /
+pause_simulation / resume_simulation). The Alerts page wires the buttons to these.
 """
 
 import json
 import os
+import subprocess
+import sys
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-from config import LIVE_OUTPUT
+from config import BASE_DIR, LIVE_OUTPUT, LIVE_PAUSE_FLAG, LIVE_SIM_SCRIPT
 
 # Maximum rows to load from the live output file. Reading the full file when it
 # contains tens-of-thousands of rows causes a multi-second parse on every cache
@@ -154,3 +158,85 @@ def _cached_live_max_date(ds_max):
         return live_max
     except Exception:
         return ds_max
+
+
+# ── Shared live session state + subprocess control ───────────────────────────
+
+def init_live_state() -> None:
+    """Seed the live-simulation session-state keys shared across all pages."""
+    if "live_mode" not in st.session_state:
+        st.session_state.live_mode = False
+    if "live_proc" not in st.session_state:
+        st.session_state.live_proc = None  # subprocess.Popen or None
+    if "live_paused" not in st.session_state:
+        st.session_state.live_paused = False
+    if "live_page" not in st.session_state:
+        st.session_state.live_page = 0
+
+
+def clear_live_caches() -> None:
+    """Invalidate every live-output cache (call when (re)starting a simulation)."""
+    _cached_live_max_date.clear()
+    _cached_live_file_stats.clear()
+    _cached_live_rows.clear()
+    _get_live_user_data.clear()
+
+
+def _live_script_path() -> str:
+    """live_replay.py on Streamlit Cloud (no ML deps), live_simulation.py locally.
+
+    Streamlit Cloud mounts the repo at /mount/src, so its presence is the cloud
+    signal. live_replay replays pre-scored rows; live_simulation runs the full
+    encoder + isolation-forest pipeline.
+    """
+    on_cloud = os.path.exists("/mount/src")
+    return os.path.join(BASE_DIR, "live_replay.py") if on_cloud else LIVE_SIM_SCRIPT
+
+
+def start_simulation() -> None:
+    """Clear prior output/caches and launch the scoring subprocess."""
+    if os.path.exists(LIVE_OUTPUT):
+        os.remove(LIVE_OUTPUT)
+    if os.path.exists(LIVE_PAUSE_FLAG):
+        os.remove(LIVE_PAUSE_FLAG)
+    clear_live_caches()
+    st.session_state.live_page = 0
+    proc = subprocess.Popen(
+        [sys.executable, _live_script_path(), "--interval", "0.5"],
+        cwd=BASE_DIR,
+    )
+    st.session_state.live_proc = proc
+    st.session_state.live_mode = True
+    st.session_state.live_paused = False
+
+
+def stop_simulation() -> None:
+    """Terminate the scoring subprocess and reset live session state."""
+    proc = st.session_state.live_proc
+    if proc is not None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    # Remove pause flag so the process isn't blocked on next start
+    if os.path.exists(LIVE_PAUSE_FLAG):
+        os.remove(LIVE_PAUSE_FLAG)
+    st.session_state.live_proc = None
+    st.session_state.live_mode = False
+    st.session_state.live_paused = False
+    st.session_state.live_page = 0
+
+
+def pause_simulation() -> None:
+    """Signal the subprocess to pause (the flag file's existence is the signal)."""
+    with open(LIVE_PAUSE_FLAG, "w", encoding="utf-8"):
+        pass
+    st.session_state.live_paused = True
+
+
+def resume_simulation() -> None:
+    """Clear the pause flag so the subprocess resumes."""
+    if os.path.exists(LIVE_PAUSE_FLAG):
+        os.remove(LIVE_PAUSE_FLAG)
+    st.session_state.live_paused = False
