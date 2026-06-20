@@ -1,4 +1,13 @@
-﻿import sys
+﻿import os
+import sys
+
+# Ensure the dashboard directory is importable so `from db import …` resolves the
+# same way whether the app is launched by `streamlit run dashboard/app.py` (which
+# puts this dir on sys.path[0]) or headlessly via streamlit.testing.v1.AppTest
+# (which does not). Idempotent: a no-op once the path is present.
+_DASHBOARD_DIR = os.path.dirname(os.path.abspath(__file__))
+if _DASHBOARD_DIR not in sys.path:
+    sys.path.insert(0, _DASHBOARD_DIR)
 
 sys.stderr.write("[APP] module-level execution started\n")
 sys.stderr.flush()
@@ -7,7 +16,6 @@ import hashlib
 import hmac
 import html as _html_mod
 import json
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -1187,7 +1195,6 @@ def load_data():
     _log = _logging.getLogger("ueba.load_data")
     _log.warning("[load_data] started")
 
-    _BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     _MV = MODEL_VERSION
 
     # ── Serving layer ────────────────────────────────────────────────────────
@@ -1199,10 +1206,12 @@ def load_data():
     # Streamlit Community Cloud's 1 GB tier. The slim file peaks at ~0.65 GB.
     # Rebuild it with scripts/build_dashboard_dataset.py whenever v6b / the alert
     # table changes, then re-upload to the HF dataset repo.
-    _DASH_LOCAL_PATH = os.path.join(
-        _BASE, "processed_datasets", f"ueba_dataset_{_MV}",
-        f"ueba_dataset_{_MV}_dashboard.parquet",
-    )
+    #
+    # The local path comes from config.DASHBOARD_PARQUET (not __file__) so it
+    # honours UEBA_BASE_DIR — identical resolution under normal operation, but it
+    # lets the AppTest smoke harness point the app at a synthetic dataset tree.
+    import config as _config
+    _DASH_LOCAL_PATH = _config.DASHBOARD_PARQUET
     from ueba.serving.hf_io import get_dataset_file
     if not os.path.exists(_DASH_LOCAL_PATH):
         _log.warning("[load_data] downloading dashboard parquet from HuggingFace…")
